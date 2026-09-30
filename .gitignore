@@ -48,3 +48,6 @@ example
 # generated native folders
 /ios
 /android
+/modules/*/android/build/
+/modules/*/android/.gradle/
+/build-issue6.log

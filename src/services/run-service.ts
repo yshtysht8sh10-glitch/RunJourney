@@ -5,6 +5,7 @@ import * as TaskManager from 'expo-task-manager';
 import { RunRepository } from '@/repositories/run-repository';
 import { LOCATION_TASK_NAME } from '@/tasks/location-task';
 import { ActiveRun, RunRecord } from '@/types/run';
+import { VoiceAnnouncement } from '@/services/voice-announcement';
 
 const trackingOptions: Location.LocationTaskOptions = {
   accuracy: Location.Accuracy.High,
@@ -59,6 +60,7 @@ export const RunService = {
     const existing = await RunRepository.getActiveRun();
     if (existing) {
       await startLocationTask();
+      await VoiceAnnouncement.restore(existing);
       return existing;
     }
 
@@ -74,6 +76,7 @@ export const RunService = {
     await RunRepository.saveActiveRun(active);
     try {
       await startLocationTask();
+      await VoiceAnnouncement.restore(active);
       return active;
     } catch (error) {
       await RunRepository.clearActiveRun();
@@ -84,6 +87,7 @@ export const RunService = {
   async restoreActiveRun(): Promise<ActiveRun | null> {
     const active = await RunRepository.getActiveRun();
     if (!active) return null;
+    await VoiceAnnouncement.restore(active);
 
     const foreground = await Location.getForegroundPermissionsAsync();
     const background = await Location.getBackgroundPermissionsAsync();
@@ -109,6 +113,7 @@ export const RunService = {
   },
 
   async stopRun(): Promise<RunRecord | null> {
+    VoiceAnnouncement.stop();
     if (await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME)) {
       await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
     }

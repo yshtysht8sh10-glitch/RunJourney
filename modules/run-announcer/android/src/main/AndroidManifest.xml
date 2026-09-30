@@ -1,0 +1,6 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+  <application>
+    <service android:name="app.runjourney.announcer.RunAnnouncerService" android:exported="false" android:foregroundServiceType="mediaPlayback" />
+  </application>
+</manifest>
