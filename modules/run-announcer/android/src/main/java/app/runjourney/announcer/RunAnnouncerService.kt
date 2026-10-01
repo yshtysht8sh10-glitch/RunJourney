@@ -23,6 +23,7 @@ import kotlin.math.roundToInt
 class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   companion object {
     const val ACTION_START = "app.runjourney.announcer.START"
+    const val ACTION_TEST = "app.runjourney.announcer.TEST"
     const val PREFS = "runjourney-announcer"
     private const val CHANNEL = "runjourney-voice"
     private const val TAG = "RunAnnouncer"
@@ -42,15 +43,18 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       val started = preferences.getLong("startedAtMs", 0)
       val interval = preferences.getLong("intervalMs", 300_000).coerceAtLeast(1_000)
       val now = System.currentTimeMillis()
-      val due = ((now - started).coerceAtLeast(0) / interval).toInt()
+      // Allow the background location task a short window to publish the lap.
+      val due = ((now - started - 10_000).coerceAtLeast(0) / interval).toInt()
       val last = preferences.getInt("lastAnnouncement", 0)
       if (due > last && ready) {
         preferences.edit().putInt("lastAnnouncement", due).apply()
         val minutes = ((now - started).coerceAtLeast(0) / 60_000).toInt()
         val km = (preferences.getFloat("distanceMeters", 0f) / 100f).roundToInt() / 10.0
-        speak("${minutes}分経過。${km}キロメートルです")
+        val message = if (preferences.getInt("messageInterval", -1) == due)
+          preferences.getString("message", null) else null
+        speak(message ?: "${minutes}分です。総走行距離${km}キロメートル。")
       }
-      val next = started + (due.toLong() + 1) * interval
+      val next = started + (due.toLong() + 1) * interval + 10_000
       handler.postDelayed(this, (next - now).coerceIn(1_000, 10_000))
     }
   }
@@ -63,15 +67,17 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    val testing = intent?.action == ACTION_TEST
     if (intent?.action == ACTION_START) {
       val started = intent.getLongExtra("startedAtMs", System.currentTimeMillis())
       val previous = preferences.getLong("startedAtMs", 0)
       preferences.edit().putBoolean("running", true).putLong("startedAtMs", started)
         .putLong("intervalMs", intent.getLongExtra("intervalMs", 300_000))
         .putInt("lastAnnouncement", if (previous == started) preferences.getInt("lastAnnouncement", 0) else 0)
+        .putInt("messageInterval", if (previous == started) preferences.getInt("messageInterval", -1) else -1)
         .apply()
     }
-    if (!preferences.getBoolean("running", false)) {
+    if (!preferences.getBoolean("running", false) && !testing) {
       stopSelf()
       return START_NOT_STICKY
     }
@@ -81,6 +87,11 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       .setContentText("走行中、5分ごとに時間と距離を読み上げます")
       .setOngoing(true).build()
     startForeground(607, notification)
+    if (testing) {
+      val message = intent?.getStringExtra("message") ?: ""
+      if (ready) speak(message) else pendingTest = message
+      return START_NOT_STICKY
+    }
     if (wakeLock?.isHeld != true) {
       wakeLock = (getSystemService(Context.POWER_SERVICE) as PowerManager)
         .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "RunJourney:VoiceAnnouncements")
@@ -93,7 +104,11 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
 
   override fun onInit(status: Int) {
     ready = status == TextToSpeech.SUCCESS
-    if (ready) tts?.language = Locale.JAPANESE
+    if (ready) {
+      tts?.language = Locale.JAPANESE
+      pendingTest?.let { speak(it) }
+      pendingTest = null
+    }
     else Log.e(TAG, "Japanese TTS initialization failed: $status")
   }
 
@@ -107,8 +122,8 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     tts?.setAudioAttributes(attributes)
     tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
       override fun onStart(utteranceId: String?) { Log.i(TAG, "Speaking: $message") }
-      override fun onDone(utteranceId: String?) { releaseFocus() }
-      override fun onError(utteranceId: String?) { releaseFocus() }
+      override fun onDone(utteranceId: String?) { releaseFocus(); finishTest() }
+      override fun onError(utteranceId: String?) { releaseFocus(); finishTest() }
     })
     if (tts?.speak(message, TextToSpeech.QUEUE_FLUSH, null, "runjourney-update") != TextToSpeech.SUCCESS) releaseFocus()
   }
@@ -116,6 +131,12 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   private fun releaseFocus() {
     focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
     focusRequest = null
+  }
+
+  private var pendingTest: String? = null
+
+  private fun finishTest() {
+    if (!preferences.getBoolean("running", false)) handler.post { stopSelf() }
   }
 
   override fun onDestroy() {

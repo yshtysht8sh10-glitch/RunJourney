@@ -25,6 +25,9 @@ if (!TaskManager.isTaskDefined(LOCATION_TASK_NAME)) {
   TaskManager.defineTask<LocationTaskData>(LOCATION_TASK_NAME, async ({ data, error }) => {
     if (error || !data?.locations?.length) return;
     const updated = await RunRepository.appendActivePoints(data.locations.map(toPoint));
-    if (updated) VoiceAnnouncement.updateDistance(updated.distanceMeters);
+    if (updated) {
+      VoiceAnnouncement.updateDistance(updated.distanceMeters);
+      await VoiceAnnouncement.updateRun(updated);
+    }
   });
 }

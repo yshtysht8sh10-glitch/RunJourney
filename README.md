@@ -4,6 +4,18 @@ Android実機で、画面OFF中もGPS軌跡・距離・日時を記録する最�
 
 React Native / Expo SDK 57 / TypeScriptで実装しています。画面遷移にはExpo Routerを使用しています。
 
+## Standalone Test APK（Android）
+
+Metroなしで動作する屋外実機テスト用APKです。本番版・Development Buildとは別アプリとしてインストールされ、アプリデータも分離されます。
+
+- applicationId: `app.runjourney.mobile.test`
+- アプリ名: `RunJourney Test`
+- APK: `android/app/build/outputs/apk/standaloneTest/app-standaloneTest.apk`
+- ビルド: `npm run android:test:build`
+- インストール/更新: `npm run android:test:install`
+
+ローカルAndroid Gradleのみを使う非debuggableなrelease相当variantのため、JavaScript bundleとassetsはAPKへ埋め込まれます。端末への直接導入用としてローカルdebug keystoreで署名し、ストア配布には使用しません。
+
 ## Android端末への導入
 
 バックグラウンド位置情報は **Expo Goでは動作しません**。RunJourney専用の開発ビルド、または直接インストールできるAPKを使用してください。

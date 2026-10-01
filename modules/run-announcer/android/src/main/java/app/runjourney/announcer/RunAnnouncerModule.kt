@@ -25,6 +25,21 @@ class RunAnnouncerModule : Module() {
         .putFloat("distanceMeters", distanceMeters.toFloat()).apply()
     }
 
+    Function("updateAnnouncement") { intervalIndex: Int, message: String ->
+      val context = requireNotNull(appContext.reactContext)
+      context.getSharedPreferences(RunAnnouncerService.PREFS, 0).edit()
+        .putInt("messageInterval", intervalIndex).putString("message", message).apply()
+    }
+
+    Function("test") { message: String ->
+      val context = requireNotNull(appContext.reactContext)
+      val intent = Intent(context, RunAnnouncerService::class.java).apply {
+        action = RunAnnouncerService.ACTION_TEST
+        putExtra("message", message)
+      }
+      if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)
+    }
+
     Function("stop") {
       val context = requireNotNull(appContext.reactContext)
       context.getSharedPreferences(RunAnnouncerService.PREFS, 0).edit().putBoolean("running", false).apply()

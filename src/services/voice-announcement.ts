@@ -2,10 +2,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 
 import { ActiveRun } from '@/types/run';
+import { analyzePace, analyzePoints } from '@/utils/pace-analysis';
+import { DEFAULT_VOICE_ITEMS, formatAnnouncement, VoiceItems } from '@/utils/voice-format';
 
 const SETTING_KEY = '@runjourney/voice-announcement/v1';
 // Keep the trigger separate from the UI so distance and other intervals can be added later.
 const FIVE_MINUTES_MS = 5 * 60 * 1000;
+const ITEMS_KEY = '@runjourney/voice-items/v1';
 
 function nativeAnnouncer() {
   if (Platform.OS !== 'android') return null;
@@ -15,6 +18,20 @@ function nativeAnnouncer() {
 }
 
 export const VoiceAnnouncement = {
+  async items(): Promise<VoiceItems> {
+    try {
+      const stored = await AsyncStorage.getItem(ITEMS_KEY);
+      return stored ? { ...DEFAULT_VOICE_ITEMS, ...JSON.parse(stored) } : DEFAULT_VOICE_ITEMS;
+    } catch { return DEFAULT_VOICE_ITEMS; }
+  },
+  async setItems(items: VoiceItems): Promise<void> {
+    await AsyncStorage.setItem(ITEMS_KEY, JSON.stringify(items));
+  },
+  async test(): Promise<void> {
+    const items = await this.items();
+    const lap = analyzePace(15 * 60_000, 20 * 60_000, 800);
+    nativeAnnouncer()?.test(formatAnnouncement(20 * 60_000, 3200, lap, items));
+  },
   async enabled(): Promise<boolean> {
     return (await AsyncStorage.getItem(SETTING_KEY)) === 'on';
   },
@@ -35,6 +52,18 @@ export const VoiceAnnouncement = {
     const native = nativeAnnouncer();
     native?.start(Date.parse(run.startedAt), FIVE_MINUTES_MS);
     native?.updateDistance(run.distanceMeters);
+    void this.updateRun(run);
+  },
+  async updateRun(run: ActiveRun): Promise<void> {
+    try {
+      const started = Date.parse(run.startedAt);
+      const due = Math.floor((Date.now() - started) / FIVE_MINUTES_MS);
+      if (due < 1) return;
+      const end = started + due * FIVE_MINUTES_MS;
+      const lap = analyzePoints(run.points, end - FIVE_MINUTES_MS, end);
+      const message = formatAnnouncement(due * FIVE_MINUTES_MS, run.distanceMeters, lap, await this.items());
+      nativeAnnouncer()?.updateAnnouncement(due, message);
+    } catch (error) { console.warn('Voice announcement update failed', error); }
   },
   updateDistance(distanceMeters: number): void {
     try {

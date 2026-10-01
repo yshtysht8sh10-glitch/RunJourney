@@ -44,8 +44,10 @@
   "scripts": {
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo run:android",
+    "android:test:build": "cd android && gradlew.bat app:assembleStandaloneTest",
+    "android:test:install": "adb install -r android/app/build/outputs/apk/standaloneTest/app-standaloneTest.apk",
+    "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",

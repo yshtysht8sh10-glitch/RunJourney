@@ -15,7 +15,7 @@ function getGitCommitHash() {
 
 module.exports = ({ config }) => ({
   ...config,
-  plugins: [...(config.plugins || []), './plugins/with-debug-application-id'],
+  plugins: [...(config.plugins || []), './plugins/with-android-build-variants'],
   extra: {
     ...config.extra,
     buildGitHash: getGitCommitHash(),
