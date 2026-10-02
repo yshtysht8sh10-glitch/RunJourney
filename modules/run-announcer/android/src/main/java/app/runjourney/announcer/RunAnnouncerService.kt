@@ -32,6 +32,8 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   private val handler = Handler(Looper.getMainLooper())
   private var tts: TextToSpeech? = null
   private var ready = false
+  private var speaking = false
+  private val messages = java.util.ArrayDeque<String>()
   private var wakeLock: PowerManager.WakeLock? = null
   private var focusRequest: AudioFocusRequest? = null
   private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
@@ -94,8 +96,8 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     startForeground(607, notification)
     if (testing) {
       val message = intent?.getStringExtra("message") ?: ""
-      if (ready) speak(message) else pendingTest = message
-      return START_NOT_STICKY
+      if (ready) speak(message) else pendingTests.add(message)
+      if (!preferences.getBoolean("running", false)) return START_NOT_STICKY
     }
     if (wakeLock?.isHeld != true) {
       wakeLock = (getSystemService(Context.POWER_SERVICE) as PowerManager)
@@ -111,26 +113,54 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     ready = status == TextToSpeech.SUCCESS
     if (ready) {
       tts?.language = Locale.JAPANESE
-      pendingTest?.let { speak(it) }
-      pendingTest = null
+      pendingTests.forEach { speak(it) }
+      pendingTests.clear()
     }
-    else Log.e(TAG, "Japanese TTS initialization failed: $status")
+    else {
+      Log.e(TAG, "Japanese TTS initialization failed: $status")
+      preferences.edit().putString("ttsStatus", "INIT_FAILED").apply()
+      finishTest()
+    }
   }
 
   private fun speak(message: String) {
+    if (message.isBlank()) return
+    messages.add(message)
+    speakNext()
+  }
+
+  private fun speakNext() {
+    if (speaking || !ready || messages.isEmpty()) return
+    val message = messages.removeFirst()
     val attributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
       .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
     val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
       .setAudioAttributes(attributes).setOnAudioFocusChangeListener { }.build()
-    if (audioManager.requestAudioFocus(request) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) return
+    if (audioManager.requestAudioFocus(request) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+      Log.w(TAG, "Audio focus denied")
+      preferences.edit().putString("ttsStatus", "AUDIO_FOCUS_DENIED").apply()
+      if (!messages.isEmpty()) handler.post { speakNext() } else finishTest()
+      return
+    }
     focusRequest = request
+    speaking = true
     tts?.setAudioAttributes(attributes)
     tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-      override fun onStart(utteranceId: String?) { Log.i(TAG, "Speaking: $message") }
-      override fun onDone(utteranceId: String?) { releaseFocus(); finishTest() }
-      override fun onError(utteranceId: String?) { releaseFocus(); finishTest() }
+      override fun onStart(utteranceId: String?) {
+        Log.i(TAG, "Speaking: $message")
+        preferences.edit().putString("ttsStatus", "SPEAKING").putLong("ttsStartedAt", System.currentTimeMillis()).apply()
+      }
+      override fun onDone(utteranceId: String?) { handler.post { finishUtterance("DONE") } }
+      override fun onError(utteranceId: String?) { handler.post { finishUtterance("ERROR") } }
     })
-    if (tts?.speak(message, TextToSpeech.QUEUE_FLUSH, null, "runjourney-update") != TextToSpeech.SUCCESS) releaseFocus()
+    if (tts?.speak(message, TextToSpeech.QUEUE_FLUSH, null, "runjourney-${System.nanoTime()}") != TextToSpeech.SUCCESS) finishUtterance("SPEAK_FAILED")
+  }
+
+  private fun finishUtterance(status: String) {
+    preferences.edit().putString("ttsStatus", status).apply()
+    releaseFocus()
+    speaking = false
+    if (messages.isEmpty()) finishTest() else speakNext()
   }
 
   private fun releaseFocus() {
@@ -138,7 +168,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     focusRequest = null
   }
 
-  private var pendingTest: String? = null
+  private val pendingTests = mutableListOf<String>()
 
   private fun finishTest() {
     if (!preferences.getBoolean("running", false)) handler.post { stopSelf() }

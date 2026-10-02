@@ -8,6 +8,7 @@ type RunAnnouncer = {
   updateAnnouncement(intervalIndex: number, message: string): void;
   test(message: string): void;
   stop(): void;
+  diagnostics(): { running: boolean; transitionRun: string; transitionIndex: number; ttsStatus: string; ttsStartedAt: number };
 };
 
 export default requireNativeModule<RunAnnouncer>('RunAnnouncer');

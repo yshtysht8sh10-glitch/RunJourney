@@ -2,8 +2,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 
 import { ActiveRun } from '@/types/run';
-import { announcementClock, effectiveTimeline } from '@/utils/run-model';
-import { analyzePace, analyzePoints } from '@/utils/pace-analysis';
+import { announcementClock, effectiveRun } from '@/utils/run-model';
+import { analyzePace } from '@/utils/pace-analysis';
 import { DEFAULT_VOICE_ITEMS, formatAnnouncement, VoiceItems } from '@/utils/voice-format';
 
 const SETTING_KEY = '@runjourney/voice-announcement/v1';
@@ -19,6 +19,7 @@ function nativeAnnouncer() {
 }
 
 export const VoiceAnnouncement = {
+  diagnostics() { return nativeAnnouncer()?.diagnostics?.() ?? null; },
   async items(): Promise<VoiceItems> {
     try {
       const stored = await AsyncStorage.getItem(ITEMS_KEY);
@@ -65,14 +66,21 @@ export const VoiceAnnouncement = {
       const native = nativeAnnouncer();
       native?.updateClock(clock.activeMs, clock.paused, clock.confirmedActiveMs);
       native?.updateDistance(run.distanceMeters);
-      const event = run.events?.at(-1);
-      if (event) native?.transition(`${run.id}:${event.timestamp}:${event.state}`, event.state === 'AUTO_STOP' ? '停止しました' : event.state === 'BREAK' ? '休憩します' : '走行を再開します');
+      // A background callback can confirm stop *and* resume. Deliver all unseen
+      // transitions; native persistence deduplicates monotonically by event index.
+      (run.events ?? []).forEach((event, index) => {
+        if (event.state === 'AUTO_STOP' && !run.features?.autoStop || event.state === 'BREAK' && !run.features?.break) return;
+        native?.transition(`${run.id}:${index}:${event.timestamp}:${event.state}`, event.state === 'AUTO_STOP' ? '停止しました' : event.state === 'BREAK' ? '休憩します' : '走行を再開します');
+      });
       const started = 0;
       const due = Math.floor(active / FIVE_MINUTES_MS);
       if (due < 1) return;
       const end = started + due * FIVE_MINUTES_MS;
-      const lap = analyzePoints(effectiveTimeline(run), end - FIVE_MINUTES_MS, end);
-      const message = formatAnnouncement(due * FIVE_MINUTES_MS, run.distanceMeters, lap, await this.items());
+      const effective = effectiveRun(run);
+      const lap = effective.lap(end - FIVE_MINUTES_MS, end);
+      // Total and lap describe the same interval endpoint, even if delivery is late.
+      const totalAtBoundary = effective.lap(0, end).distanceMeters;
+      const message = formatAnnouncement(due * FIVE_MINUTES_MS, totalAtBoundary, lap, await this.items());
       nativeAnnouncer()?.updateAnnouncement(due, message);
     } catch (error) { console.warn('Voice announcement update failed', error); }
   },

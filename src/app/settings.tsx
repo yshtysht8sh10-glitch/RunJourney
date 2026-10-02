@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { useFocusEffect } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -7,6 +7,7 @@ import { RunSettings, DEFAULT_RUN_FEATURES, RunFeatures } from '@/repositories/r
 import { RunService } from '@/services/run-service';
 import { VoiceAnnouncement } from '@/services/voice-announcement';
 import { DEFAULT_VOICE_ITEMS, VoiceItems } from '@/utils/voice-format';
+import { isStandaloneTest } from '@/utils/build';
 
 export default function SettingsScreen() {
   const [features, setFeatures] = useState(DEFAULT_RUN_FEATURES);
@@ -70,6 +71,7 @@ export default function SettingsScreen() {
     <Pressable accessibilityRole="button" onPress={() => VoiceAnnouncement.test().catch((error) => Alert.alert('音声テストに失敗しました', String(error)))} style={styles.testButton}>
       <Text style={styles.label}>音声通知をテスト</Text>
     </Pressable>
+    {isStandaloneTest() && <Pressable accessibilityRole="button" onPress={() => router.push('/diagnostics')} style={styles.testButton}><Text style={styles.label}>Auto Stop Diagnostics（Test）</Text></Pressable>}
   </ScrollView></SafeAreaView></View>;
 }
 

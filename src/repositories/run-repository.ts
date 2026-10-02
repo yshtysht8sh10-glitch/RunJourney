@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { ActiveRun, LocationPoint, RunRecord, RunState } from '@/types/run';
-import { detectStop, effectiveDistance, transition } from '@/utils/run-model';
+import { detectStop, effectiveDistance, recordDiagnostic, stateOf, stopIntervals, transition } from '@/utils/run-model';
 
 
 const RUNS_KEY = '@runjourney/runs/v1';
@@ -30,6 +30,31 @@ export const RunRepository = {
     return serialized(async () => {
       const runs = parseArray<RunRecord>(await AsyncStorage.getItem(RUNS_KEY));
       return runs.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+    });
+  },
+
+  setStopInclusion(runId: string, intervalId: string, included: boolean): Promise<RunRecord> {
+    return serialized(async () => {
+      const runs = parseArray<RunRecord>(await AsyncStorage.getItem(RUNS_KEY));
+      const index = runs.findIndex(run => run.id === runId);
+      const original = runs[index];
+      if (!original || !stopIntervals(original).some(interval => interval.id === intervalId)) throw new Error('停止区間が見つかりません');
+      const updated = { ...original, stopOverrides: { ...original.stopOverrides, [intervalId]: { included, updatedAt: new Date().toISOString() } } };
+      // Original timestamps, events, points and original distance remain intact.
+      runs[index] = updated;
+      await AsyncStorage.setItem(RUNS_KEY, JSON.stringify(runs));
+      return updated;
+    });
+  },
+
+  diagnosticError(): Promise<void> {
+    return serialized(async () => {
+      const stored = await AsyncStorage.getItem(ACTIVE_RUN_KEY);
+      if (!stored) return;
+      const run: ActiveRun = JSON.parse(stored);
+      if (!run.diagnostics) return;
+      run.diagnostics.counts.TASK_ERROR = (run.diagnostics.counts.TASK_ERROR ?? 0) + 1;
+      await AsyncStorage.setItem(ACTIVE_RUN_KEY, JSON.stringify(run));
     });
   },
 
@@ -79,7 +104,9 @@ export const RunRepository = {
     return serialized(async () => {
       const stored = await AsyncStorage.getItem(ACTIVE_RUN_KEY);
       if (!stored) return null;
-      const run = transition(JSON.parse(stored), state, timestamp, 'user');
+      const original: ActiveRun = JSON.parse(stored);
+      let run = transition(original, state, timestamp, 'user');
+      if (stateOf(run) !== stateOf(original)) run = recordDiagnostic(run, { timestamp, state: stateOf(run), decision: 'RESET', reason: 'STATE_CHANGED' });
       await AsyncStorage.setItem(ACTIVE_RUN_KEY, JSON.stringify(run));
       return run;
     });

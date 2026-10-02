@@ -17,6 +17,8 @@ export default function TabLayout() {
         <Tabs.Screen name="index" options={{ title: 'ラン' }} />
         <Tabs.Screen name="history" options={{ title: '履歴' }} />
         <Tabs.Screen name="settings" options={{ title: '設定' }} />
+        <Tabs.Screen name="run-detail" options={{ href: null }} />
+        <Tabs.Screen name="diagnostics" options={{ href: null }} />
       </Tabs>
     </>
   );

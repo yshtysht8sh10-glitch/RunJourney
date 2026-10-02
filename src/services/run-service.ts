@@ -1,6 +1,7 @@
 import * as Crypto from 'expo-crypto';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
+import * as Application from 'expo-application';
 
 import { RunRepository } from '@/repositories/run-repository';
 import { LOCATION_TASK_NAME } from '@/tasks/location-task';
@@ -74,6 +75,7 @@ export const RunService = {
       points: [],
       features: await RunSettings.get(),
       events: [],
+      ...(Application.applicationId === 'app.runjourney.mobile.test' ? { diagnostics: { entries: [], counts: {}, processed: 0 } } : {}),
       createdAt: now,
       updatedAt: now,
     };

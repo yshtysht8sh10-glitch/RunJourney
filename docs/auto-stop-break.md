@@ -55,7 +55,7 @@ IDLEはactive draftなしで表現する。eventsの最後のstateが進行中�
 開いている区間は現在時刻、保存後はendedAtで閉じる。元イベントを上書きしない。
 10分走行→2分停止→10分走行ならwall22分/active20分。
 10分走行→3分休憩→10分走行ならwall23分/active20分。
-`run-model.ts` の timeModel / paceTime / effectiveTimeline を共通の算出入口にする。
+`run-model.ts` の timeModel / paceTime / effectiveRun を共通の算出入口にする。effectiveTimelineは既存互換の補助API。
 
 | Pace Mode（内部API、切替UIは未実装） | AUTO STOP | BREAK |
 |---|---|---|
@@ -66,7 +66,7 @@ IDLEはactive draftなしで表現する。eventsの最後のstateが進行中�
 平均ペース・5分ラップ音声はDEFAULTのactive時間。5分通知は停止・休憩中の時間を数えない。
 Android常駐RunAnnouncerへactiveMs/更新時刻/paused/confirmedActiveMsを渡す。Auto Stop ONでは、音声の判定時計を処理済みGPSが裏付ける時間までに制限し、未確定の停止候補による先走り通知を防ぐ。画面の時計は候補中には仮に進み、確定時に遡って補正される。
 既存のTTS・Audio Focusを再利用。音声設定ON時に停止/休憩/再開を短く通知。
-イベントキーをnative prefsで記憶し重複通知を抑える。音声OFFなら通知しない。
+Run IDとイベントindexをnative prefsで記憶し重複通知を抑える。バッチ内の全遷移を順番に渡し、初期化待ちを含めて発話キューに保持する。音声OFFなら通知しない。
 Auto Stop ONでは確定済み実走時間5分のラップpayloadが届いたら通知可能となり、従来の10秒を実走時間へ足して待つ方式は使用しない。GPS配信/JS/TTSによる実際の発話遅延はあり得る。Auto Stop OFFは既存の約10秒の通知猶予と連続時計を維持する。
 Android以外の音声は既存どおり未対応。
 
@@ -83,11 +83,12 @@ GPSの重複timestampは従来同様に統合し、遅延fixは保存するが�
 ## 停止推定（仮値・実走検証待ち）
 
 全定数は RUN_CONTROL（src/utils/run-model.ts）に集約。
-- 停止: speed（欠損時は点間速度）0.6m/s以下、固定anchorから8m以内が5秒継続。RUN_CONTROL.stopMs=5000。
+- 停止: speed（欠損時は点間速度）0.6m/s以下、固定anchorから8m以内が5秒継続。RUN_CONTROL.stopMs=5000。位置証拠による補完: 通常gapの連続点が8m内にあり、変位がaccuracyノイズ幅（min(8m, max(3m, 前後accuracy平均))）以下、speed欠損または1.2m/s未満ならjitterとして扱う。報告speedが高くても、点間変位3m未満かつ水平点間速度0.6m/s以下なら、その場足踏みの停止候補にできる。速度単独を絶対条件にしない。
 - 再開: 停止anchorから10m以上 AND speed 1.2m/s以上。両閾値は維持する。speed欠損時は点間速度を使用。さらに良好な移動fixを2回連続で確認する（RUN_CONTROL.resumeFixes）。各点間に3m以上の移動があり、候補originからも3m以上の変位が必要（movementStep）。
 - accuracy: 0〜20mの明示的な値を持つfixのみ。
-- 連続fixの許容gap: 15秒。超過/精度不良で候補をリセットし、勝手に停止/再開しない。
-- 点間/報告速度12.5m/s超のspikeは判定に使わない。
+- 通常gapは15秒。精度不良/spikeは保留。最後の良好fixから60秒を超えた候補は破棄し、新たに観測する。15〜60秒のgapでは、明示的speed<=0.6m/sの良好fixが同じ8m停止originに戻った場合だけ停止候補を裏付けられる。speed欠損gapは保留。端点からの推定であり、その間の連続静止の証明ではない。
+- Resumeは15秒超gapで移動候補を破棄し、新しいfixから観測し直す。未観測の走り始めは復元しない。
+- 点間/報告速度12.5m/s超のspikeは判定に使わない。Rawとしては保持する。
 - 停止0.6/再開1.2m/sと8/10mのhysteresis。
 - Android位置要求は5秒。Auto Stop ONのRunのみdistanceInterval=0、OFFは既存の5m。静止fixが必要なためON時だけ5m条件を外す。
 
@@ -101,8 +102,8 @@ GPSの重複timestampは従来同様に統合し、遅延fixは保存するが�
 - 5秒成立するとAUTO_STOPイベントのtimestampをstillSince、confirmedAtを成立fix時刻として追記する。待機中の5秒とGPS jitterの辺を時間・距離・Pace・Lapから遡って除外する。
 - 4.9秒ではイベントを作らない。2秒の低速後に正常走行へ戻る等、成立しなければ候補を破棄し、時間も距離も通常RUNNINGのまま。
 - AUTO_STOP中の移動は `detector.movement: { startedAt, origin, fixes }` に仮保存する。10m AND 1.2m/sと連続移動条件の成立後、最初の移動候補fixのstartedAtまでRUNNINGを遡って追記し、確認中の走行時間・候補点からの距離を復元する。
-- 低速化、accuracy不良、GPS gap、spikeで移動候補を破棄する。未確定の候補から履歴イベントを作らない。
-- 候補を含むdetectorは既存draftへ保存され、JS再生成後も確認を継続できる。detector.version=2。旧20秒方式の未確定候補は破棄し、確定済みの旧イベントは変更しない。
+- 低速化/変位不足/GPS gapで移動候補を破棄する。accuracy不良/spikeは期限付き保留。未確定候補から履歴イベントを作らない。
+- 候補を含むdetectorは既存draftへ保存され、JS再生成後も確認を継続できる。detector.version=3。version=2の5秒候補を引き継ぎ、旧20秒方式の未確定候補だけ破棄する。確定済みイベントは変更しない。
 - 実際の停止/移動がGPS fix間で始まった場合、その正確な時刻・距離は捏造せず、最初に観測した候補fixまでを補正範囲とする。5秒はGPS cadenceによって5秒以上で確定することもある。
 - BREAKは操作時刻のみ。Auto Stop OFFでは候補や遡及補正を適用しない。
 
@@ -119,8 +120,65 @@ OSによるforce-stop等でGPSが届かなかった期間の状態を推測で�
 履歴保存→draft削除の順番とID重複排除を維持。
 
 Raw GPS / Original Record → Stop/Break Events → 将来のEdit Operations (#14) → Effective Run → 時間/距離/Pace/EXP/Journey。
-#14では元イベントを消さずに訂正操作から有効イベントを導出し、共通計算へ渡せる。
-今回未実装: 履歴編集UI/Undo、3モード設定UI、センサー融合/ML、EXP/Journey完全連携、Export/Import。
+#7では停止区間訂正という最初の実用ユースケースを実装する。#14では汎用Edit Operations、GPS異常編集、Run分割/結合、Activity/タイトル/メモ、Undo/Redoへ一般化する。
+今回未実装: 汎用編集/Undo、3モード設定UI、センサー融合/ML、EXP/Journey完全連携、Export/Import。
+
+## 2026-10-03実走調査・versionCode 5
+
+実走は約45分/6.18km、Auto Stop/Break/音声ON。3〜4回、確実に5秒以上、その場で弾んだ場面があり、画面変化・停止/再開音声を確認できなかった。
+
+**今回の実走の根本原因は、端末の保存GPSをまだ取得できていないため未確定。** 旧版には実診断ログがなく、ユーザー申告だけからaccuracy・速度・callback間隔を断定しない。コードと再現テストでは以下を確認した。
+
+- SettingsのAsyncStorage値はSTART時featuresへsnapshotされる。次STARTから適用し、復元はsnapshotを維持する。画面OFF/foreground共通のlocation task→appendActivePoints→detectStop→同じdraft保存経路。距離に届くRaw GPSが検出器にも届く。
+- 旧版で0/16/32秒の良好・静止fixを入力すると、15秒gapで候補が毎回失われ、一度も停止しない。位置要求5秒は配信保証ではない。インストール済みSDK57のAndroidコードは距離条件0を受け取り、背景でもdeferred interval/distance=0なら配送対象になる。端末の実配信間隔は診断で確認する。
+- accuracy不良即リセット、speed欠損時のjitter由来速度、位置は安定していても報告speedが高いケースも候補を失う。今回、観測不能と移動証拠を分離した。停止/再開0.6/1.2m/s、8/10m、accuracy20m、5秒は変更していない。
+- 音声は最後のイベントだけを渡していたため、まとめて停止/再開が届くと停止音声を落とす。全イベントと永続cursorを使い、TTS初期化待ち/発話中の遷移もキューに保存する。Audio Focus否認・TTS失敗はnative診断statusへ記録する。ただし実機音声の到達は次回確認する。
+
+### Diagnosticsの取得
+
+Standalone Test版のみ、設定→Auto Stop Diagnostics、または履歴→走行詳細→この記録のDiagnostics。最新情報に更新→コピー/共有→会話へ貼り付ける。
+
+features snapshotと現在設定を別に表示。各GPSについてtimestamp/receivedAt/state/accuracy/reported speed/effective speed/点間変位/origin変位/gap/候補開始・age/decision/reasonを保存する。`StopReason`に理由を集約する。START/CONTINUE/RESET/HOLD/SKIP/STOP_CONFIRMED/RESUME_CONFIRMEDを区別。欠損項目は未観測。通常画面にログを表示せず、座標はレポートから除く。
+
+既存draft/RunRecordにoptional diagnosticsを追加し、最近720 entriesと全区間のdecision/reason countsを保存。START時Test版だけ有効。Raw GPSは全件保持。TASK_ERROR、native TTS status/cursorも確認できる。native statusは取得時点の端末全体の音声Service状態であり、履歴当時の状態の証明ではない。
+
+旧Runでも保存GPSを読み取り、**v4の凍結した判定器の再判定**と現在判定器の再判定を実記録とは別表示する。手動BREAKイベントは反映する。旧ログを捏造せず、保存データを書き換えない。Replayは未観測区間や実際のTTSを証明できない。今回45分のRunのsnapshot・actualEvents・quality・legacyCandidateLossReasonsを取得後、根本原因を絞る。
+
+### History correction / Effective Run
+
+履歴一覧をタップすると詳細。AUTO_STOPとBREAKの開始/終了/duration/種別、現在の含む・除外状態を表示。各行で「走行に含める」「走行から除外する」を切り替える。手動BREAKも同じ構造なので訂正対象に含めた。
+
+`stopOverrides[イベントindex:timestamp:state] = { included, updatedAt }`を既存履歴keyへ保存する。元のpoints/events/始終・作成・更新timestamp/元distanceMetersは書き換えない。元イベント順序とIDを保ち、将来#14の操作へ一般化できる。不存在intervalへの編集は拒否する。訂正結果は再起動後も維持される。
+
+Original Record + Overrides → effectiveEvents/effectivePoints → effectiveRun。除外中は時間・距離を除き、停止点/境界を橋渡ししない。IncludeはRaw GPSの区間距離を再評価する。含めた区間だけaccuracy20mと8m移動anchorを追加し、静止jitterの長いpolylineを復活させない。accuracy不良点はsegmentを切る。既存のaccuracy50m/最小3m/最大12.5m/sフィルタも通す。Rawなし・微小移動は距離復元できない。安全側の過少計測があり得る。
+
+未訂正の通常GPSは従来フィルタと境界処理を維持する。非有限/負accuracy/範囲外座標/非有限timestampは距離へ加算しない。古い有効RunRecordにmigrationは不要。イベント・overrideなしは連続RUNNINGとして計算する。
+
+時間・距離・平均Pace・5分Lap・履歴詳細/一覧・Voiceは同じEffective Runを参照。各辺をまず**Raw GPS時刻でフィルタ**し、その後active clockへ配置する。Lapは境界を比例配分し、全Lap合計が同じ対象期間のtotalと一致する。Generic analyzePointsは既存APIとして保持する。停止時間の訂正後もactive/time/paceを同じモデルから求める。
+
+### #17の共通不具合
+
+旧Voice payloadはtotal=作成時点のrun.distanceMeters、lap=5分境界までだった。例: 5分時点300m、5分10秒時点400mで作成すると、初回通知がtotal0.4km/lap0.3kmになる。今回は両方を同じ5分境界へ揃え、合計Lapとの一致をテスト。画面は最新totalなので遅れた音声と表示の時点差は残り得る。今回の実走不整合がこれだったかは未確定で、#17はOPENを維持する。
+
+### 次回実走
+
+- Test版v5とGit hash・既存履歴を確認。Auto Stop/Break/音声ON後に新しいSTART。
+- 通常走行、STOP短押し/途中解除、完全静止とその場足踏みをそれぞれ10〜15秒。5秒確認でもGPS到着まで状態確定は遅れる。
+- AUTO_STOP表示/時計補正/停止音声、走り出しの自動再開・時間/距離回復・再開音声。画面OFFでも試す。
+- RUNNING/AUTO_STOP→BREAK。BREAK中に歩いても自動再開しない。手動再開。active5分音声を確認。
+- STOP1.5秒、履歴保存、距離jumpなし。停止区間を含める→時間・距離・Pace/Lapが再評価→除外して元へ戻る。
+- 成否にかかわらずDiagnosticsをコピー/共有。場所、実際の動き（完全静止/足踏み/走行）、停止/再開までの秒数、画面OFF、建物/GPS状況を添える。
+- 調整候補: accuracy noise幅、候補保留60秒、gap15秒の裏付け条件、0.6/1.2m/s、8/10m、2fix/3m。ただし診断結果を先に読む。#7は実走検証待ちOPEN。
+
+### v5の自動検証・ビルド
+
+- Focused: diagnostics / correction-model / correction-UI / background-stop / latency / voice、6 suites / 41 tests PASS。
+- Full: 12 suites / 81 tests PASS。STOP長押しの既存回帰テストを含む。
+- typecheck / lint: PASS、警告なし。RunAnnouncer release Kotlinコンパイル成功。
+- correctionの原データ不変・保存/再読込、include/excludeの復帰、jitter/300m BREAK境界、時間/Pace/Lap再計算、非有限GPS・時刻、旧互換、背景snapshot経路を検証。
+- versionCode 5、applicationId/signing/data sandboxは維持。署名鍵file SHA-256は既存の `221E0A3106AA4C3CCC154E0A418B55020B3F9EA6E84F92E8749CD9E2F39F5E58` と一致。
+- commit後に `npm run android:test:build`。APK内 `assets/app.config` のbuildGitHashとHEAD、非debuggable/JS bundle/署名を検証。端末がadb接続されればTest版だけ `adb install -r`。
+- 実機のタッチ/TTS/Audio Focus/画面OFF/OS復元/今回のGPS原因特定は端末検証待ち。推測でIssueをcloseしない。
 
 ## 今晩の実走チェックリスト
 

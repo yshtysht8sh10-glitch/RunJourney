@@ -55,11 +55,12 @@ test('single moving spike / slow jitter cancels resume candidate without adding 
   run = fix(run, point(35000, 26, 1.6));
   expect(run.events?.at(-1)?.timestamp).toBe(30000);
 });
-test.each(['accuracy', 'gap'])('resume candidate is discarded after %s loss', reason => {
+test.each(['accuracy', 'gap'])('resume evidence is held for accuracy loss, re-anchored after a gap (%s)', reason => {
   let run = fix(stopped(), point(20000, 4, 1.5));
   run = reason === 'accuracy' ? fix(run, point(25000, 200, 2, 100)) : fix(run, point(40000, 20, 2));
   expect(stateOf(run)).toBe('AUTO_STOP');
-  expect(run.detector?.movement).toBeUndefined();
+  if (reason === 'accuracy') expect(run.detector?.movement?.startedAt).toBe(20000);
+  else expect(run.detector?.movement).toBeUndefined();
 });
 test('Auto Stop OFF never starts candidates or adjusts time', () => {
   let run: ActiveRun = { ...initial(), features: { autoStop: false, break: true } };

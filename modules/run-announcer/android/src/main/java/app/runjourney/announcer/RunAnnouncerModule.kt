@@ -28,8 +28,12 @@ class RunAnnouncerModule : Module() {
     Function("transition") { eventKey: String, message: String ->
       val context = requireNotNull(appContext.reactContext)
       val prefs = context.getSharedPreferences(RunAnnouncerService.PREFS, 0)
-      if (prefs.getString("lastEvent", "") != eventKey) {
-        prefs.edit().putString("lastEvent", eventKey).apply()
+      val parts = eventKey.split(":")
+      val runId = parts.first()
+      val eventIndex = parts.getOrNull(1)?.toIntOrNull() ?: -1
+      val lastIndex = if (prefs.getString("transitionRun", "") == runId) prefs.getInt("transitionIndex", -1) else -1
+      if (eventIndex > lastIndex) {
+        prefs.edit().putString("transitionRun", runId).putInt("transitionIndex", eventIndex).apply()
         val intent = Intent(context, RunAnnouncerService::class.java).apply {
           action = RunAnnouncerService.ACTION_TEST
           putExtra("message", message)
@@ -47,6 +51,13 @@ class RunAnnouncerModule : Module() {
       val context = requireNotNull(appContext.reactContext)
       context.getSharedPreferences(RunAnnouncerService.PREFS, 0).edit()
         .putInt("messageInterval", intervalIndex).putString("message", message).apply()
+    }
+
+    Function("diagnostics") {
+      val prefs = requireNotNull(appContext.reactContext).getSharedPreferences(RunAnnouncerService.PREFS, 0)
+      mapOf("running" to prefs.getBoolean("running", false), "transitionRun" to prefs.getString("transitionRun", ""),
+        "transitionIndex" to prefs.getInt("transitionIndex", -1), "ttsStatus" to prefs.getString("ttsStatus", "UNKNOWN"),
+        "ttsStartedAt" to prefs.getLong("ttsStartedAt", 0))
     }
 
     Function("test") { message: String ->

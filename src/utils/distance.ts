@@ -26,7 +26,10 @@ export function calculateDistance(points: LocationPoint[]): number {
     const current = points[index];
     const elapsedSeconds = (current.timestamp - previous.timestamp) / 1000;
 
-    if (elapsedSeconds <= 0) continue;
+    if (!Number.isFinite(elapsedSeconds) || elapsedSeconds <= 0) continue;
+    if ([previous, current].some(point => !Number.isFinite(point.latitude) || !Number.isFinite(point.longitude)
+      || Math.abs(point.latitude) > 90 || Math.abs(point.longitude) > 180
+      || point.accuracy !== undefined && (!Number.isFinite(point.accuracy) || point.accuracy < 0))) continue;
     if ((previous.accuracy ?? 0) > MAX_USABLE_ACCURACY_METERS) continue;
     if ((current.accuracy ?? 0) > MAX_USABLE_ACCURACY_METERS) continue;
 
