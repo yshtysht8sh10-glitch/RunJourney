@@ -31,6 +31,7 @@ export function calculateDistance(points: LocationPoint[]): number {
     if ((current.accuracy ?? 0) > MAX_USABLE_ACCURACY_METERS) continue;
 
     const segment = distanceBetween(previous, current);
+    if (!Number.isFinite(segment)) continue;
     if (segment < MIN_MOVEMENT_METERS) continue;
     if (segment / elapsedSeconds > MAX_RUNNING_SPEED_METERS_PER_SECOND) continue;
 

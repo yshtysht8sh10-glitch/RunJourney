@@ -19,6 +19,24 @@ class RunAnnouncerModule : Module() {
       if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)
     }
 
+    Function("updateClock") { activeMs: Double, paused: Boolean ->
+      val context = requireNotNull(appContext.reactContext)
+      context.getSharedPreferences(RunAnnouncerService.PREFS, 0).edit()
+        .putLong("activeMs", activeMs.toLong()).putLong("clockUpdatedMs", System.currentTimeMillis())
+        .putBoolean("paused", paused).apply()
+    }
+    Function("transition") { eventKey: String, message: String ->
+      val context = requireNotNull(appContext.reactContext)
+      val prefs = context.getSharedPreferences(RunAnnouncerService.PREFS, 0)
+      if (prefs.getString("lastEvent", "") != eventKey) {
+        prefs.edit().putString("lastEvent", eventKey).apply()
+        val intent = Intent(context, RunAnnouncerService::class.java).apply {
+          action = RunAnnouncerService.ACTION_TEST
+          putExtra("message", message)
+        }
+        if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)
+      }
+    }
     Function("updateDistance") { distanceMeters: Double ->
       val context = requireNotNull(appContext.reactContext)
       context.getSharedPreferences(RunAnnouncerService.PREFS, 0).edit()

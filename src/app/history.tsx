@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { BuildInfo } from '@/components/build-info';
 import { RunService } from '@/services/run-service';
+import { timeModel } from '@/utils/run-model';
 import { RunRecord } from '@/types/run';
 
 const dateFormatter = new Intl.DateTimeFormat('ja-JP', {
@@ -52,7 +53,7 @@ export default function HistoryScreen() {
                   <Text style={styles.times}>
                     {started ? timeFormatter.format(started) : '開始時刻不明'} → {ended ? timeFormatter.format(ended) : '終了時刻不明'}
                   </Text>
-                  <Text style={styles.points}>GPSポイント {item.points.length}件</Text>
+                  <Text style={styles.points}>GPSポイント {item.points.length}件 · 実走 {Math.floor(timeModel(item).activeRunningTime / 60000)}分</Text>
                 </View>
                 <Text style={styles.distance}>{(item.distanceMeters / 1000).toFixed(2)} km</Text>
               </View>

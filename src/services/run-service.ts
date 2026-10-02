@@ -5,6 +5,7 @@ import * as TaskManager from 'expo-task-manager';
 import { RunRepository } from '@/repositories/run-repository';
 import { LOCATION_TASK_NAME } from '@/tasks/location-task';
 import { ActiveRun, RunRecord } from '@/types/run';
+import { RunSettings } from '@/repositories/run-settings';
 import { VoiceAnnouncement } from '@/services/voice-announcement';
 
 const trackingOptions: Location.LocationTaskOptions = {
@@ -49,7 +50,8 @@ async function requestPermissions(): Promise<void> {
 
 async function startLocationTask(): Promise<void> {
   if (!(await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME))) {
-    await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME, trackingOptions);
+    const active = await RunRepository.getActiveRun();
+    await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME, { ...trackingOptions, distanceInterval: active?.features?.autoStop ? 0 : trackingOptions.distanceInterval });
   }
 }
 
@@ -70,6 +72,8 @@ export const RunService = {
       startedAt: now,
       distanceMeters: 0,
       points: [],
+      features: await RunSettings.get(),
+      events: [],
       createdAt: now,
       updatedAt: now,
     };
@@ -110,6 +114,17 @@ export const RunService = {
 
   getHistory(): Promise<RunRecord[]> {
     return RunRepository.getRuns();
+  },
+
+  async breakRun() {
+    const run = await RunRepository.transition('BREAK', Date.now());
+    if (run) await VoiceAnnouncement.updateRun(run);
+    return run;
+  },
+  async resumeRun() {
+    const run = await RunRepository.transition('RUNNING', Date.now());
+    if (run) await VoiceAnnouncement.updateRun(run);
+    return run;
   },
 
   async stopRun(): Promise<RunRecord | null> {
