@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 
 import { ActiveRun } from '@/types/run';
-import { effectiveTimeline, paceTime, stateOf } from '@/utils/run-model';
+import { announcementClock, effectiveTimeline } from '@/utils/run-model';
 import { analyzePace, analyzePoints } from '@/utils/pace-analysis';
 import { DEFAULT_VOICE_ITEMS, formatAnnouncement, VoiceItems } from '@/utils/voice-format';
 
@@ -51,7 +51,8 @@ export const VoiceAnnouncement = {
   },
   start(run: ActiveRun): void {
     const native = nativeAnnouncer();
-    native?.updateClock(paceTime(run), stateOf(run) !== 'RUNNING');
+    const clock = announcementClock(run);
+    native?.updateClock(clock.activeMs, clock.paused, clock.confirmedActiveMs);
     native?.start(Date.parse(run.startedAt), FIVE_MINUTES_MS);
     native?.updateDistance(run.distanceMeters);
     void this.updateRun(run);
@@ -59,9 +60,10 @@ export const VoiceAnnouncement = {
   async updateRun(run: ActiveRun): Promise<void> {
     try {
       if (!(await this.enabled())) return;
-      const active = paceTime(run);
+      const clock = announcementClock(run);
+      const active = clock.confirmedActiveMs < 0 ? clock.activeMs : clock.confirmedActiveMs;
       const native = nativeAnnouncer();
-      native?.updateClock(active, stateOf(run) !== 'RUNNING');
+      native?.updateClock(clock.activeMs, clock.paused, clock.confirmedActiveMs);
       native?.updateDistance(run.distanceMeters);
       const event = run.events?.at(-1);
       if (event) native?.transition(`${run.id}:${event.timestamp}:${event.state}`, event.state === 'AUTO_STOP' ? '停止しました' : event.state === 'BREAK' ? '休憩します' : '走行を再開します');

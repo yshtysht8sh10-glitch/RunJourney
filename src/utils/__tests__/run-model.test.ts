@@ -29,6 +29,7 @@ describe('stop / break model', () => {
     for (let t = 0; t <= 20000; t += 5000) r = detectStop(r, point(t));
     expect(stateOf(r)).toBe('AUTO_STOP');
     r = detectStop(r, point(25000, 12, 2.4));
+    r = detectStop(r, point(30000, 24, 2.4));
     expect(stateOf(r)).toBe('RUNNING');
   });
   test('auto off, poor accuracy, missing fixes and spikes never infer stop', () => {

@@ -25,3 +25,34 @@ test.each(['RUNNING', 'AUTO_STOP', 'BREAK'] as const)('repository restores %s an
   expect(await RunRepository.getRuns()).toContainEqual(legacy);
   expect(await RunRepository.getRuns()).toHaveLength(2);
 });
+
+test('repository confirms persisted candidate retroactively, removes jitter and keeps raw fixes', async () => {
+  const run: ActiveRun = { id: 'pending', startedAt: new Date(0).toISOString(), createdAt: '', updatedAt: '', points: [], distanceMeters: 0, features: { autoStop: true, break: true }, events: [] };
+  const point = (timestamp: number, meters: number) => ({ timestamp, latitude: 35 + meters / 111195, longitude: 139, accuracy: 5, speed: 0 });
+  await RunRepository.saveActiveRun(run);
+  await RunRepository.appendActivePoints([point(10000, 0), point(14000, 4)]);
+  const pending = (await RunRepository.getActiveRun())!;
+  expect(pending.detector?.stillSince).toBe(10000);
+  expect(pending.events).toEqual([]);
+  expect(pending.distanceMeters).toBeGreaterThan(3);
+  await RunRepository.appendActivePoints([point(15000, 7)]);
+  const stopped = (await RunRepository.getActiveRun())!;
+  expect(stopped.events?.at(-1)).toMatchObject({ timestamp: 10000, confirmedAt: 15000 });
+  expect(stopped.distanceMeters).toBe(0);
+  const record = (await RunRepository.finishActiveRun(new Date(20000).toISOString()))!;
+  expect(record.points).toEqual([point(10000, 0), point(14000, 4), point(15000, 7)]);
+  expect(timeModel(record).activeRunningTime).toBe(10000);
+});
+test('repository restores movement candidate and recovers confirmation-window distance', async () => {
+  const point = (timestamp: number, meters: number, speed: number) => ({ timestamp, latitude: 35 + meters / 111195, longitude: 139, accuracy: 5, speed });
+  const run: ActiveRun = { id: 'resume', startedAt: new Date(0).toISOString(), createdAt: '', updatedAt: '', points: [], distanceMeters: 0, features: { autoStop: true, break: true }, events: [] };
+  await RunRepository.saveActiveRun(run);
+  await RunRepository.appendActivePoints([point(10000, 0, 0), point(15000, 0, 0), point(20000, 4, 1.5)]);
+  expect((await RunRepository.getActiveRun())?.detector?.movement?.startedAt).toBe(20000);
+  await RunRepository.appendActivePoints([point(25000, 12, 1.6)]);
+  const resumed = (await RunRepository.getActiveRun())!;
+  expect(stateOf(resumed)).toBe('RUNNING');
+  expect(resumed.events?.at(-1)).toMatchObject({ timestamp: 20000, confirmedAt: 25000 });
+  expect(resumed.distanceMeters).toBeCloseTo(8, 0);
+  expect(timeModel(resumed, 25000).activeRunningTime).toBe(15000);
+});

@@ -22,7 +22,7 @@ Metroなしで動作する屋外実機テスト用APKです。本番版・Develo
 
 Android権限を変更した後は、既存のAPKへのJavaScript更新だけでは反映されません。下記の手順で新しいAPKまたは開発ビルドを作成し、端末へ上書きインストールしてください。履歴を残すため、先にアプリをアンインストールしないでください。
 
-画面上部には `v0.1.0 (versionCode) · Build: Git短縮hash` が表示されます。Git hashはビルド時に自動取得します。異なるソースでAPKを作る際は `versionCode` も増やしてください。現在の修正版は `versionCode 3` です。
+画面上部には `v0.1.0 (versionCode) · Build: Git短縮hash` が表示されます。Git hashはビルド時に自動取得します。異なるソースでAPKを作る際は `versionCode` も増やしてください。現在の修正版は `versionCode 4` です。
 
 普段のランニングで使う場合は、PC上の開発サーバーを必要としない「方法A: EASでAPKを作る」を推奨します。
 

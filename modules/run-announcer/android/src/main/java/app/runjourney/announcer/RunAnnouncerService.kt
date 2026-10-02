@@ -46,9 +46,12 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       // Allow the background location task a short window to publish the lap.
       val active = preferences.getLong("activeMs", (now - started).coerceAtLeast(0)) +
         if (preferences.getBoolean("paused", false)) 0 else (now - preferences.getLong("clockUpdatedMs", now)).coerceAtLeast(0)
-      val due = ((active - 10_000).coerceAtLeast(0) / interval).toInt()
+      val confirmed = preferences.getLong("confirmedActiveMs", -1)
+      val verified = confirmed >= 0
+      val announcementTime = if (verified) minOf(active, confirmed) else (active - 10_000).coerceAtLeast(0)
+      val due = (announcementTime / interval).toInt()
       val last = preferences.getInt("lastAnnouncement", 0)
-      if (due > last && ready) {
+      if (due > last && ready && (!verified || preferences.getInt("messageInterval", -1) == due)) {
         preferences.edit().putInt("lastAnnouncement", due).apply()
         val minutes = (active / 60_000).toInt()
         val km = (preferences.getFloat("distanceMeters", 0f) / 100f).roundToInt() / 10.0
@@ -57,7 +60,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
         speak(message ?: "${minutes}分です。総走行距離${km}キロメートル。")
       }
       val next = now + ((due.toLong() + 1) * interval + 10_000 - active)
-      handler.postDelayed(this, (next - now).coerceIn(1_000, 10_000))
+      handler.postDelayed(this, if (verified) 1_000 else (next - now).coerceIn(1_000, 10_000))
     }
   }
 

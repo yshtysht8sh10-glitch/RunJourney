@@ -19,11 +19,11 @@ class RunAnnouncerModule : Module() {
       if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)
     }
 
-    Function("updateClock") { activeMs: Double, paused: Boolean ->
+    Function("updateClock") { activeMs: Double, paused: Boolean, confirmedActiveMs: Double ->
       val context = requireNotNull(appContext.reactContext)
       context.getSharedPreferences(RunAnnouncerService.PREFS, 0).edit()
         .putLong("activeMs", activeMs.toLong()).putLong("clockUpdatedMs", System.currentTimeMillis())
-        .putBoolean("paused", paused).apply()
+        .putBoolean("paused", paused).putLong("confirmedActiveMs", confirmedActiveMs.toLong()).apply()
     }
     Function("transition") { eventKey: String, message: String ->
       val context = requireNotNull(appContext.reactContext)
