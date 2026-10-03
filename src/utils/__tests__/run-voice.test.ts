@@ -11,6 +11,11 @@ const minute = 60000;
 const base = (): ActiveRun => ({ id: 'v', startedAt: new Date(0).toISOString(), createdAt: '', updatedAt: '', distanceMeters: 1000, points: [], features: { autoStop: true, break: true }, events: [] });
 beforeEach(async () => { jest.replaceProperty(Platform, 'OS', 'android'); await AsyncStorage.clear(); jest.clearAllMocks(); jest.spyOn(Date, 'now').mockReturnValue(6 * minute); });
 afterEach(() => jest.restoreAllMocks());
+test('Voice Test uses the production formatter with a two-digit lap and unrounded analysis', async () => {
+  await VoiceAnnouncement.setItems({ elapsed: true, totalDistance: true, lapDistance: true, pace: true, speed: true, marathon: true });
+  await VoiceAnnouncement.test();
+  expect(native.test).toHaveBeenCalledWith('20分です。総走行距離3.2キロメートル。直近5分間でれいてんはちさんキロメートル。1キロ6分3秒ペース。時速9.9キロメートル。フルマラソン4時間15分ペースです。');
+});
 test('batched stop/resume delivers both transition keys instead of losing the stop', async () => {
   await AsyncStorage.setItem('@runjourney/voice-announcement/v1', 'on');
   const run = transition(transition(base(), 'AUTO_STOP', 10000, 'sensor', 15000), 'RUNNING', 20000, 'sensor', 25000);
@@ -18,14 +23,14 @@ test('batched stop/resume delivers both transition keys instead of losing the st
   expect(native.transition).toHaveBeenNthCalledWith(1, 'v:0:10000:AUTO_STOP', '停止しました');
   expect(native.transition).toHaveBeenNthCalledWith(2, 'v:1:20000:RUNNING', '走行を再開します');
 });
-test('first-lap voice total uses the same five-minute boundary even when later fixes exist', async () => {
+test.each([5000, 10000])('first-lap voice keeps the five-minute boundary with delivery %sms late', async delay => {
   await AsyncStorage.setItem('@runjourney/voice-announcement/v1', 'on');
   await VoiceAnnouncement.setItems({ elapsed: true, totalDistance: true, lapDistance: true, pace: false, speed: false, marathon: false });
-  const points = [0, 100000, 200000, 300000, 310000].map((timestamp, index) => ({ timestamp, latitude: 35 + index * 100 / 111195, longitude: 139, accuracy: 5 }));
+  const points = [0, 100000, 200000, 300000, 300000 + delay].map((timestamp, index) => ({ timestamp, latitude: 35 + index * 60 / 111195, longitude: 139, accuracy: 5 }));
   const run = { ...base(), features: { autoStop: false, break: true }, points, distanceMeters: 400 };
-  jest.spyOn(Date, 'now').mockReturnValue(310000);
+  jest.spyOn(Date, 'now').mockReturnValue(300000 + delay);
   await VoiceAnnouncement.updateRun(run);
-  expect(native.updateAnnouncement).toHaveBeenCalledWith(1, expect.stringContaining('総走行距離0.3キロメートル。直近5分間で0.3キロメートル'));
+  expect(native.updateAnnouncement).toHaveBeenCalledWith(1, expect.stringContaining('総走行距離0.2キロメートル。直近5分間でれいてんいちはちキロメートル'));
 });
 test.each(['AUTO_STOP', 'BREAK'] as const)('voice %s freezes before five minutes then resumes', async state => {
   await AsyncStorage.setItem('@runjourney/voice-announcement/v1', 'on');

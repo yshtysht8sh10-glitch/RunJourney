@@ -158,7 +158,7 @@ Original Record + Overrides → effectiveEvents/effectivePoints → effectiveRun
 
 ### #17の共通不具合
 
-旧Voice payloadはtotal=作成時点のrun.distanceMeters、lap=5分境界までだった。例: 5分時点300m、5分10秒時点400mで作成すると、初回通知がtotal0.4km/lap0.3kmになる。今回は両方を同じ5分境界へ揃え、合計Lapとの一致をテスト。画面は最新totalなので遅れた音声と表示の時点差は残り得る。今回の実走不整合がこれだったかは未確定で、#17はOPENを維持する。
+旧Voice payloadはtotal=作成時点のrun.distanceMeters、lap=5分境界までだった。例: 5分時点300m、5分10秒時点400mで作成すると、初回通知がtotal0.4km/lap0.3kmになる。v5で両方を同じ5分境界へ揃えた。当時は実走不整合の真因が未確定のため#17をOPENで維持した。v6でSTART/STOP境界・native payload待機・全Lap合計を再検証し、共通計算へ統合。最新仕様・完了判断の根拠と実走上の限界は [Pace / Voice設計](pace-and-voice.md) を参照。画面は最新totalなので遅れた音声との時点差は残り得る。
 
 ### 次回実走
 

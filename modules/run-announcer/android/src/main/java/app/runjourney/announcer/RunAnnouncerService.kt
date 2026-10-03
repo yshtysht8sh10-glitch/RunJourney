@@ -18,7 +18,6 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import java.util.Locale
-import kotlin.math.roundToInt
 
 class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   companion object {
@@ -53,13 +52,11 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       val announcementTime = if (verified) minOf(active, confirmed) else (active - 10_000).coerceAtLeast(0)
       val due = (announcementTime / interval).toInt()
       val last = preferences.getInt("lastAnnouncement", 0)
-      if (due > last && ready && (!verified || preferences.getInt("messageInterval", -1) == due)) {
+      // Never substitute a latest-distance payload for an undelivered lap.
+      // OFF and ON both wait for the shared analysis at the exact boundary.
+      if (due > last && ready && preferences.getInt("messageInterval", -1) == due) {
         preferences.edit().putInt("lastAnnouncement", due).apply()
-        val minutes = (active / 60_000).toInt()
-        val km = (preferences.getFloat("distanceMeters", 0f) / 100f).roundToInt() / 10.0
-        val message = if (preferences.getInt("messageInterval", -1) == due)
-          preferences.getString("message", null) else null
-        speak(message ?: "${minutes}分です。総走行距離${km}キロメートル。")
+        speak(preferences.getString("message", "") ?: "")
       }
       val next = now + ((due.toLong() + 1) * interval + 10_000 - active)
       handler.postDelayed(this, if (verified) 1_000 else (next - now).coerceIn(1_000, 10_000))

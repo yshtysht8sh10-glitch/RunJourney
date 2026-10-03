@@ -1,6 +1,6 @@
 import { ActiveRun, LocationPoint, RunRecord, RunState, StopDiagnostic, StopReason } from '@/types/run';
 import { calculateDistance, distanceBetween } from '@/utils/distance';
-import { analyzePace } from '@/utils/pace-analysis';
+import { analyzePace, DEFAULT_LAP_MS, timeLapRanges } from '@/utils/pace-analysis';
 
 export const RUN_CONTROL = {
   holdMs: 1500, stopSpeed: 0.6, resumeSpeed: 1.2,
@@ -92,24 +92,44 @@ export function effectivePoints(run: DistanceRun): LocationPoint[] {
   });
   return selected;
 }
-export function effectiveDistance(run: DistanceRun) { return calculateDistance(effectivePoints(run)); }
+export function effectiveDistance(run: DistanceRun) { return effectiveEdges(run).reduce((sum, edge) => sum + edge.distanceMeters, 0); }
 
 // Filter edges in raw GPS time, then place them on the shared effective clock.
 // Every lap/total uses these same edges, including interpolated lap boundaries.
+function effectiveEdges(run: DistanceRun, now?: number) {
+  const points = effectivePoints(run), start = Date.parse(run.startedAt);
+  const end = run.endedAt ? Date.parse(run.endedAt) : now ?? points.at(-1)?.timestamp ?? start;
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return [];
+  return points.slice(1).map((point, index) => {
+    const previous = points[index], rawDuration = point.timestamp - previous.timestamp;
+    const clippedStart = Math.max(start, previous.timestamp), clippedEnd = Math.min(end, point.timestamp);
+    if (!Number.isFinite(rawDuration) || rawDuration <= 0 || clippedEnd <= clippedStart) return { startMs: 0, endMs: 0, distanceMeters: 0 };
+    return {
+      startMs: paceTime({ ...run, endedAt: undefined }, clippedStart),
+      endMs: paceTime({ ...run, endedAt: undefined }, clippedEnd),
+      distanceMeters: calculateDistance([previous, point]) * (clippedEnd - clippedStart) / rawDuration,
+    };
+  }).filter(edge => edge.endMs > edge.startMs && edge.distanceMeters > 0);
+}
 export function effectiveRun(run: ActiveRun, now = Date.now()) {
-  const points = effectivePoints(run), time = timeModel(run, now);
-  const edges = points.slice(1).map((point, index) => ({
-    startMs: paceTime({ ...run, endedAt: undefined }, points[index].timestamp),
-    endMs: paceTime({ ...run, endedAt: undefined }, point.timestamp),
-    distanceMeters: calculateDistance([points[index], point]),
-  })).filter(edge => edge.endMs > edge.startMs && edge.distanceMeters > 0);
+  const time = timeModel(run, now), edges = effectiveEdges(run, now);
   const distanceBetweenTimes = (startMs: number, endMs: number) => edges.reduce((sum, edge) => sum + edge.distanceMeters *
     Math.max(0, Math.min(endMs, edge.endMs) - Math.max(startMs, edge.startMs)) / (edge.endMs - edge.startMs), 0);
   const distanceMeters = edges.reduce((sum, edge) => sum + edge.distanceMeters, 0);
+  const lap = (startMs: number, endMs: number) => analyzePace(startMs, endMs, distanceBetweenTimes(startMs, endMs));
   return { ...time, distanceMeters, intervals: stopIntervals(run, now),
     pace: analyzePace(0, time.activeRunningTime, distanceMeters),
-    lap: (startMs: number, endMs: number) => analyzePace(startMs, endMs, distanceBetweenTimes(startMs, endMs)),
+    lap, laps: (intervalMs = DEFAULT_LAP_MS) => timeLapRanges(time.activeRunningTime, intervalMs).map(range => lap(range.startMs, range.endMs)),
   };
+}
+
+// Delivery time selects a completed interval; it never moves its boundaries.
+export function completedLapAnalysis(run: ActiveRun, activeMs: number, intervalMs = DEFAULT_LAP_MS) {
+  if (!Number.isFinite(activeMs) || !Number.isFinite(intervalMs) || intervalMs <= 0) return null;
+  const index = Math.floor(activeMs / intervalMs);
+  if (index < 1) return null;
+  const endMs = index * intervalMs, effective = effectiveRun(run);
+  return { index, endMs, total: effective.lap(0, endMs), lap: effective.lap(endMs - intervalMs, endMs) };
 }
 
 export function recordDiagnostic(run: ActiveRun, entry: StopDiagnostic): ActiveRun {

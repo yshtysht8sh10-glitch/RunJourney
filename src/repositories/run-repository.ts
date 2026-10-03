@@ -121,7 +121,7 @@ export const RunRepository = {
       const record: RunRecord = {
         ...active,
         endedAt,
-        distanceMeters: effectiveDistance(active),
+        distanceMeters: effectiveDistance({ ...active, endedAt }),
         updatedAt: endedAt,
       };
       const runs = parseArray<RunRecord>(await AsyncStorage.getItem(RUNS_KEY));

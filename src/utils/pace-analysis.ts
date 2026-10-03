@@ -2,6 +2,14 @@ import { LocationPoint } from '@/types/run';
 import { calculateDistance } from '@/utils/distance';
 
 export const MARATHON_METERS = 42_195;
+export const DEFAULT_LAP_MS = 5 * 60_000;
+
+export function timeLapRanges(durationMs: number, intervalMs = DEFAULT_LAP_MS) {
+  if (!Number.isFinite(durationMs) || durationMs <= 0 || !Number.isFinite(intervalMs) || intervalMs <= 0) return [];
+  return Array.from({ length: Math.ceil(durationMs / intervalMs) }, (_, index) => ({
+    startMs: index * intervalMs, endMs: Math.min((index + 1) * intervalMs, durationMs),
+  }));
+}
 
 export type PaceAnalysis = {
   startMs: number;

@@ -2,13 +2,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 
 import { ActiveRun } from '@/types/run';
-import { announcementClock, effectiveRun } from '@/utils/run-model';
-import { analyzePace } from '@/utils/pace-analysis';
+import { announcementClock, completedLapAnalysis } from '@/utils/run-model';
+import { analyzePace, DEFAULT_LAP_MS } from '@/utils/pace-analysis';
 import { DEFAULT_VOICE_ITEMS, formatAnnouncement, VoiceItems } from '@/utils/voice-format';
 
 const SETTING_KEY = '@runjourney/voice-announcement/v1';
 // Keep the trigger separate from the UI so distance and other intervals can be added later.
-const FIVE_MINUTES_MS = 5 * 60 * 1000;
+const FIVE_MINUTES_MS = DEFAULT_LAP_MS;
 const ITEMS_KEY = '@runjourney/voice-items/v1';
 
 function nativeAnnouncer() {
@@ -31,7 +31,7 @@ export const VoiceAnnouncement = {
   },
   async test(): Promise<void> {
     const items = await this.items();
-    const lap = analyzePace(15 * 60_000, 20 * 60_000, 800);
+    const lap = analyzePace(15 * 60_000, 20 * 60_000, 826.73);
     nativeAnnouncer()?.test(formatAnnouncement(20 * 60_000, 3200, lap, items));
   },
   async enabled(): Promise<boolean> {
@@ -72,16 +72,10 @@ export const VoiceAnnouncement = {
         if (event.state === 'AUTO_STOP' && !run.features?.autoStop || event.state === 'BREAK' && !run.features?.break) return;
         native?.transition(`${run.id}:${index}:${event.timestamp}:${event.state}`, event.state === 'AUTO_STOP' ? '停止しました' : event.state === 'BREAK' ? '休憩します' : '走行を再開します');
       });
-      const started = 0;
-      const due = Math.floor(active / FIVE_MINUTES_MS);
-      if (due < 1) return;
-      const end = started + due * FIVE_MINUTES_MS;
-      const effective = effectiveRun(run);
-      const lap = effective.lap(end - FIVE_MINUTES_MS, end);
-      // Total and lap describe the same interval endpoint, even if delivery is late.
-      const totalAtBoundary = effective.lap(0, end).distanceMeters;
-      const message = formatAnnouncement(due * FIVE_MINUTES_MS, totalAtBoundary, lap, await this.items());
-      nativeAnnouncer()?.updateAnnouncement(due, message);
+      const analysis = completedLapAnalysis(run, active);
+      if (!analysis) return;
+      const message = formatAnnouncement(analysis.endMs, analysis.total.distanceMeters, analysis.lap, await this.items());
+      nativeAnnouncer()?.updateAnnouncement(analysis.index, message);
     } catch (error) { console.warn('Voice announcement update failed', error); }
   },
   updateDistance(distanceMeters: number): void {

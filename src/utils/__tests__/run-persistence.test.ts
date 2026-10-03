@@ -2,10 +2,20 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { RunRepository } from '@/repositories/run-repository';
 import { RunSettings } from '@/repositories/run-settings';
 import { ActiveRun } from '@/types/run';
-import { stateOf, timeModel } from '@/utils/run-model';
+import { effectiveRun, stateOf, timeModel } from '@/utils/run-model';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 jest.mock('@react-native-async-storage/async-storage', () => require('@react-native-async-storage/async-storage/jest/async-storage-mock'));
 beforeEach(async () => { await AsyncStorage.clear(); });
+test('saved STOP total matches history laps when GPS spans START/STOP; raw fixes survive', async () => {
+  const points = [0, 10000, 20000].map((timestamp, index) => ({ timestamp, latitude: 35 + index * 20 / 111195, longitude: 139, accuracy: 5 }));
+  await RunRepository.saveActiveRun({ id: 'clipped', startedAt: new Date(5000).toISOString(), createdAt: '', updatedAt: '', points, distanceMeters: 40 });
+  const record = (await RunRepository.finishActiveRun(new Date(15000).toISOString()))!;
+  const effective = effectiveRun(record);
+  expect(record.distanceMeters).toBeCloseTo(20, 0);
+  expect(record.distanceMeters).toBe(effective.distanceMeters);
+  expect(effective.laps().reduce((sum, lap) => sum + lap.distanceMeters, 0)).toBeCloseTo(record.distanceMeters, 7);
+  expect((await RunRepository.getRuns())[0].points).toEqual(points);
+});
 test('missing settings default off and saved settings persist', async () => {
   expect(await RunSettings.get()).toEqual({ autoStop: false, break: false });
   await RunSettings.save({ autoStop: true, break: true });

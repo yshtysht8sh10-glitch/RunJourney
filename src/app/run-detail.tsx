@@ -28,7 +28,7 @@ export default function RunDetail() {
   const duration = (ms: number) => `${Math.floor(ms / 60000)}分${Math.floor(ms / 1000) % 60}秒`;
   const clock = (ms: number) => new Date(ms).toLocaleTimeString('ja-JP', { hour12: false });
   const pace = (seconds: number | null) => seconds ? `${Math.floor(Math.round(seconds) / 60)}:${String(Math.round(seconds) % 60).padStart(2, '0')} /km` : '—';
-  const laps = effective ? Array.from({ length: Math.ceil(effective.activeRunningTime / 300000) }, (_, index) => effective.lap(index * 300000, Math.min((index + 1) * 300000, effective.activeRunningTime))) : [];
+  const laps = effective?.laps() ?? [];
   return <SafeAreaView style={styles.screen}><ScrollView contentContainerStyle={styles.content}>
     <Pressable accessibilityRole="button" onPress={() => router.replace('/history')} style={styles.button}><Text style={styles.text}>‹ 履歴に戻る</Text></Pressable>
     <Text style={styles.title}>走行詳細</Text>
