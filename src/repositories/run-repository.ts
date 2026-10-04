@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import { isExpiredTrash, isTrashedRun, TrashedRun } from '@/utils/run-trash';
 import { ActiveRun, LocationPoint, RunRecord, RunState } from '@/types/run';
 import { detectStop, effectiveDistance, recordDiagnostic, stateOf, stopIntervals, transition } from '@/utils/run-model';
 
@@ -25,11 +26,78 @@ function parseArray<T>(value: string | null): T[] {
   }
 }
 
+// Unlike legacy permissive reads, destructive lifecycle operations fail closed on corrupt storage.
+async function readHistory(): Promise<RunRecord[]> {
+  const stored = await AsyncStorage.getItem(RUNS_KEY);
+  if (!stored) return [];
+  const parsed: unknown = JSON.parse(stored);
+  if (!Array.isArray(parsed) || parsed.some(run => !run || typeof run.id !== 'string' || typeof run.endedAt !== 'string')) {
+    throw new Error('履歴データを読み込めませんでした');
+  }
+  return parsed as RunRecord[];
+}
+
+async function loadRetainedRuns(now: number): Promise<RunRecord[]> {
+  const runs = await readHistory();
+  const retained = runs.filter(run => !isExpiredTrash(run, now));
+  if (retained.length !== runs.length) await AsyncStorage.setItem(RUNS_KEY, JSON.stringify(retained));
+  return retained;
+}
+
 export const RunRepository = {
+  /** Compatibility API: normal consumers only receive active, completed history. */
   getRuns(): Promise<RunRecord[]> {
+    return RunRepository.getActiveRuns();
+  },
+
+  getActiveRuns(): Promise<RunRecord[]> {
+    return serialized(async () => (await loadRetainedRuns(Date.now())).filter(run => run.trashedAt == null)
+      .sort((a, b) => b.startedAt.localeCompare(a.startedAt)));
+  },
+
+  getTrashedRuns(): Promise<TrashedRun[]> {
+    return serialized(async () => (await loadRetainedRuns(Date.now())).filter(isTrashedRun)
+      .sort((a, b) => b.trashedAt - a.trashedAt));
+  },
+
+  moveToTrash(runId: string): Promise<void> {
     return serialized(async () => {
-      const runs = parseArray<RunRecord>(await AsyncStorage.getItem(RUNS_KEY));
-      return runs.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+      const runs = await readHistory();
+      const run = runs.find(record => record.id === runId);
+      if (!run) throw new Error('記録が見つかりません');
+      if (run.trashedAt != null) return; // Repeated moves never extend retention.
+      run.trashedAt = Date.now();
+      await AsyncStorage.setItem(RUNS_KEY, JSON.stringify(runs));
+    });
+  },
+
+  restoreFromTrash(runId: string): Promise<void> {
+    return serialized(async () => {
+      const runs = await loadRetainedRuns(Date.now());
+      const run = runs.find(record => record.id === runId);
+      if (!run) throw new Error('記録が見つかりません。保持期間を過ぎた記録は復元できません');
+      if (run.trashedAt == null) return;
+      delete run.trashedAt;
+      await AsyncStorage.setItem(RUNS_KEY, JSON.stringify(runs));
+    });
+  },
+
+  deletePermanently(runId: string): Promise<void> {
+    return serialized(async () => {
+      const runs = await readHistory();
+      const run = runs.find(record => record.id === runId);
+      if (!run) return;
+      if (run.trashedAt == null) throw new Error('完全削除できるのはごみ箱の記録だけです');
+      await AsyncStorage.setItem(RUNS_KEY, JSON.stringify(runs.filter(record => record.id !== runId)));
+    });
+  },
+
+  purgeExpiredTrash(now = Date.now()): Promise<number> {
+    return serialized(async () => {
+      const runs = await readHistory();
+      const retained = runs.filter(run => !isExpiredTrash(run, now));
+      if (retained.length !== runs.length) await AsyncStorage.setItem(RUNS_KEY, JSON.stringify(retained));
+      return runs.length - retained.length;
     });
   },
 
@@ -38,7 +106,7 @@ export const RunRepository = {
       const runs = parseArray<RunRecord>(await AsyncStorage.getItem(RUNS_KEY));
       const index = runs.findIndex(run => run.id === runId);
       const original = runs[index];
-      if (!original || !stopIntervals(original).some(interval => interval.id === intervalId)) throw new Error('停止区間が見つかりません');
+      if (!original || original.trashedAt != null || !stopIntervals(original).some(interval => interval.id === intervalId)) throw new Error('停止区間が見つかりません');
       const updated = { ...original, stopOverrides: { ...original.stopOverrides, [intervalId]: { included, updatedAt: new Date().toISOString() } } };
       // Original timestamps, events, points and original distance remain intact.
       runs[index] = updated;

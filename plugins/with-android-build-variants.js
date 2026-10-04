@@ -36,6 +36,16 @@ module.exports = function withAndroidBuildVariants(config) {
       );
     }
 
+    if (!source.includes('output.versionCodeOverride = 7')) {
+      source += `
+// Increment only Standalone Test; production retains its configured version.
+android.applicationVariants.all { variant ->
+    if (variant.buildType.name == 'standaloneTest') {
+        variant.outputs.all { output -> output.versionCodeOverride = 7 }
+    }
+}
+`;
+    }
     mod.modResults.contents = source;
     return mod;
   });

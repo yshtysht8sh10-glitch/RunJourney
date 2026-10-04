@@ -36,6 +36,7 @@ export default function HistoryScreen() {
     <View style={styles.background}>
       <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
         <Text style={styles.title}>履歴</Text>
+        <Pressable testID="open-trash" accessibilityRole="button" onPress={() => router.push('/trash')} style={{ paddingHorizontal: 24, paddingVertical: 14 }}><Text style={styles.date}>ごみ箱 ›</Text></Pressable>
         <View style={styles.buildInfo}><BuildInfo /></View>
         <FlatList
           data={runs}

@@ -11,6 +11,8 @@ export type RunRecord = {
   id: string;
   startedAt: string;
   endedAt: string;
+  /** Epoch milliseconds; absent means active history. */
+  trashedAt?: number;
   distanceMeters: number;
   points: LocationPoint[];
   createdAt: string;
@@ -25,7 +27,7 @@ export type RunRecord = {
 export type RunState = 'RUNNING' | 'AUTO_STOP' | 'BREAK';
 export type RunEvent = { timestamp: number; state: RunState; source: 'sensor' | 'user'; confirmedAt?: number; reason?: string };
 
-export type ActiveRun = Omit<RunRecord, 'endedAt'> & { endedAt?: string };
+export type ActiveRun = Omit<RunRecord, 'endedAt' | 'trashedAt'> & { endedAt?: string };
 
 export const StopReason = {
   SPEED_TOO_HIGH: 'SPEED_TOO_HIGH', DISPLACEMENT_TOO_LARGE: 'DISPLACEMENT_TOO_LARGE',

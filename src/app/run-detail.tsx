@@ -14,7 +14,7 @@ export default function RunDetail() {
   const [error, setError] = useState('');
   useFocusEffect(useCallback(() => {
     let mounted = true;
-    RunRepository.getRuns().then(runs => { if (mounted) { setRun(runs.find(r => r.id === id) ?? null); setError(''); } }).catch(() => mounted && setError('履歴を読み込めませんでした'));
+    RunRepository.getRuns().then(runs => { if (mounted) { const found = runs.find(r => r.id === id) ?? null; setRun(found); setError(found ? '' : '記録が見つかりません'); } }).catch(() => mounted && setError('履歴を読み込めませんでした'));
     return () => { mounted = false; };
   }, [id]));
   const effective = run ? effectiveRun(run) : null;
@@ -24,6 +24,18 @@ export default function RunDetail() {
     try { setRun(await RunRepository.setStopInclusion(run.id, intervalId, included)); }
     catch (err) { Alert.alert('訂正を保存できませんでした', String(err)); }
     finally { setBusy(false); }
+  };
+  const trash = () => {
+    if (!run || busy) return;
+    Alert.alert('ごみ箱へ移動', 'この記録をごみ箱へ移動します。7日以内であれば復元できます。', [
+      { text: 'キャンセル', style: 'cancel' },
+      { text: 'ごみ箱へ移動', style: 'destructive', onPress: async () => {
+        setBusy(true);
+        try { await RunRepository.moveToTrash(run.id); router.replace('/history'); }
+        catch (err) { Alert.alert('ごみ箱へ移動できませんでした', String(err)); }
+        finally { setBusy(false); }
+      } },
+    ]);
   };
   const duration = (ms: number) => `${Math.floor(ms / 60000)}分${Math.floor(ms / 1000) % 60}秒`;
   const clock = (ms: number) => new Date(ms).toLocaleTimeString('ja-JP', { hour12: false });
@@ -36,6 +48,7 @@ export default function RunDetail() {
       <Text style={styles.text}>{new Date(run.startedAt).toLocaleString('ja-JP')}</Text>
       <Text style={styles.metric}>{(effective.distanceMeters / 1000).toFixed(2)} km · {pace(effective.pace.secondsPerKm)}</Text>
       <Text style={styles.text}>実走 {duration(effective.activeRunningTime)} / 全経過 {duration(effective.wallClockElapsed)}</Text>
+      <Pressable testID="move-to-trash" accessibilityRole="button" disabled={busy} onPress={trash} style={[styles.button, busy && styles.disabled]}><Text style={styles.text}>削除</Text></Pressable>
       <Text style={styles.title}>停止区間</Text>
       {!effective.intervals.length && <Text style={styles.text}>記録された停止区間はありません。</Text>}
       {effective.intervals.map(interval => <View key={interval.id} style={styles.row}>
