@@ -6,6 +6,7 @@ import { RunRepository } from '@/repositories/run-repository';
 import { RunRecord } from '@/types/run';
 import { effectiveRun } from '@/utils/run-model';
 import { isStandaloneTest } from '@/utils/build';
+import { exportAnalysis } from '@/services/run-export';
 
 export default function RunDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -48,6 +49,14 @@ export default function RunDetail() {
       <Text style={styles.text}>{new Date(run.startedAt).toLocaleString('ja-JP')}</Text>
       <Text style={styles.metric}>{(effective.distanceMeters / 1000).toFixed(2)} km · {pace(effective.pace.secondsPerKm)}</Text>
       <Text style={styles.text}>実走 {duration(effective.activeRunningTime)} / 全経過 {duration(effective.wallClockElapsed)}</Text>
+      <Text style={styles.note}>Analysis Exportには正確な緯度経度は含まれません。走行日時・活動情報は含まれます。</Text>
+      <Pressable testID="analysis-export" accessibilityRole="button" disabled={busy} style={styles.button} onPress={async () => {
+        if (busy) return;
+        setBusy(true);
+        try { await exportAnalysis(run); }
+        catch (err) { Alert.alert('Exportできませんでした', String(err)); }
+        finally { setBusy(false); }
+      }}><Text style={styles.text}>Analysis MarkdownをExport</Text></Pressable>
       <Pressable testID="move-to-trash" accessibilityRole="button" disabled={busy} onPress={trash} style={[styles.button, busy && styles.disabled]}><Text style={styles.text}>削除</Text></Pressable>
       <Text style={styles.title}>停止区間</Text>
       {!effective.intervals.length && <Text style={styles.text}>記録された停止区間はありません。</Text>}

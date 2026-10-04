@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { isExpiredTrash, isTrashedRun, TrashedRun } from '@/utils/run-trash';
 import { ActiveRun, LocationPoint, RunRecord, RunState } from '@/types/run';
 import { detectStop, effectiveDistance, recordDiagnostic, stateOf, stopIntervals, transition } from '@/utils/run-model';
+import { previewImport, validateRuns } from '@/utils/run-backup';
 
 
 const RUNS_KEY = '@runjourney/runs/v1';
@@ -45,6 +46,28 @@ async function loadRetainedRuns(now: number): Promise<RunRecord[]> {
 }
 
 export const RunRepository = {
+  /** Read-only snapshot, including expired trash; never invokes lifecycle purge. */
+  getBackupRuns(): Promise<RunRecord[]> {
+    return serialized(readHistory);
+  },
+
+  importRuns(incoming: RunRecord[]): Promise<{ added: number; skipped: number }> {
+    // Clone before queueing: later caller mutations cannot change approved input.
+    validateRuns(incoming);
+    const snapshot: RunRecord[] = JSON.parse(JSON.stringify(incoming));
+    return serialized(async () => {
+      validateRuns(snapshot);
+      const current = await readHistory();
+      const { additions, duplicates } = previewImport(snapshot, current);
+      // Protect the identity of an unfinished run, without modifying its storage.
+      const active = await AsyncStorage.getItem(ACTIVE_RUN_KEY);
+      const activeId = active ? JSON.parse(active).id : undefined;
+      if (additions.some(run => run.id === activeId)) throw new Error('進行中の記録とIDが一致します。走行終了後に再確認してください');
+      if (additions.length) await AsyncStorage.setItem(RUNS_KEY, JSON.stringify([...current, ...additions]));
+      return { added: additions.length, skipped: duplicates };
+    });
+  },
+
   /** Compatibility API: normal consumers only receive active, completed history. */
   getRuns(): Promise<RunRecord[]> {
     return RunRepository.getActiveRuns();

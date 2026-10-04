@@ -51,3 +51,4 @@ example
 /modules/*/android/build/
 /modules/*/android/.gradle/
 /build-issue6.log
+/tmp/issue15-*.log

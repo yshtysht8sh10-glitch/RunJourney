@@ -54,6 +54,7 @@ export default function SettingsScreen() {
 
   return <View style={styles.background}><SafeAreaView style={styles.container}><ScrollView>
     <Text style={styles.title}>設定</Text>
+    <Pressable accessibilityRole="button" onPress={() => router.push('./data-transfer')} style={styles.testButton}><Text style={styles.label}>データ / Export・Import</Text></Pressable>
     <Text style={styles.section}>走行中の機能（次のSTARTから適用）</Text>
     <View style={styles.row}><View style={styles.copy}><Text style={styles.label}>自動停止（Auto Stop）</Text><Text style={styles.detail}>信号待ちなどで停止すると、走行時計を自動的に停止します。走り出すと自動的に再開します。</Text></View><Switch value={features.autoStop} disabled={busy} onValueChange={value => changeFeature('autoStop', value)} /></View>
     <View style={styles.row}><View style={styles.copy}><Text style={styles.label}>休憩（Break）</Text><Text style={styles.detail}>走行中に休憩ボタンを表示します。自分の意思で休憩を開始・終了できます。</Text></View><Switch value={features.break} disabled={busy} onValueChange={value => changeFeature('break', value)} /></View>

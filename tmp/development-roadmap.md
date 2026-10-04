@@ -43,7 +43,7 @@ GPS等の一次データ、アプリによる推定、ユーザーによる補�
 
 ### 2. #20 — 履歴のごみ箱
 
-次の実装対象。
+**CLOSED** — 6377ef2で実装済み、ユーザーの実機確認・Close指示をIssue #20で確認済み。
 
 誤STARTやテスト記録を安全に通常履歴から除去する。
 
@@ -61,7 +61,11 @@ GPS等の一次データ、アプリによる推定、ユーザーによる補�
 
 ## NEXT
 
-### 3. #18 — High Frequency GPS Observation
+### 3. #15 — Export / Import
+
+**OPEN** — Backup JSON v1（Active + Trash + Raw GPS）、安全な追加Import / Preview / 重複スキップ、個別RunのAnalysis Markdownを実装。ユーザー実機確認後にCloseする。詳細は [Export / Import設計](../docs/export-import.md)。複数Run Analysisは将来対応。
+
+### 4. #18 — High Frequency GPS Observation
 
 現在約5秒周期のGPS観測を、**約1秒観測 + 約5秒永続記録**へ分離できるかPoCする。
 
@@ -73,7 +77,7 @@ GPS等の一次データ、アプリによる推定、ユーザーによる補�
 
 まずSO_51Bでbattery / background / screen-offを検証する。
 
-### 4. #7 — Auto Stop / Break仕上げ
+### 5. #7 — Auto Stop / Break仕上げ
 
 現状:
 - Auto Stop実装済み
@@ -89,21 +93,6 @@ GPS等の一次データ、アプリによる推定、ユーザーによる補�
 ---
 
 ## 基盤完成フェーズ
-
-### 5. #15 — Export / Import
-
-2種類を想定する。
-
-**Backup / Restore**
-- 完全な機械可読データ
-- Standalone Test → Production移行
-- 端末移行
-- Raw GPS等を保持
-
-**Human / AI Analysis Export**
-- 人間が読める
-- ChatGPT等へ渡して走行分析できる
-- ラップ、ペース、停止等を含む
 
 ### 6. #5 — Pace Analysis
 
@@ -193,6 +182,7 @@ Run / Cycle等の異なる活動カテゴリはランキングを混在させな
 ## Close管理
 
 ### ユーザー確認後Close
+- #15 Export / Import — 実装済み。Backup / Analysis Export・Import Preview・安全な重複動作のユーザー確認待ち
 - #6 Voice — 実装・自動テスト・実機インストール完了。次回実走の動作確認をもってClose
 
 ### Close候補
@@ -210,13 +200,13 @@ Run / Cycle等の異なる活動カテゴリはランキングを混在させな
 ```text
 #6 Voice 実走確認 ──→ Close
         │
-        ├── 並行して #20 ごみ箱を実装
+        ├── #20 ごみ箱 実機確認済み → CLOSED
+        ↓
+#15 Export / Import（OPEN・ユーザー確認待ち）
         ↓
 #18 1秒GPS PoC
         ↓
 #7 Auto Stop仕上げ
-        ↓
-#15 Export / Import
         ↓
 #5 Pace Analysis拡張
         ↓
