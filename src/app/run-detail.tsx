@@ -49,6 +49,7 @@ export default function RunDetail() {
       <Text style={styles.text}>{new Date(run.startedAt).toLocaleString('ja-JP')}</Text>
       <Text style={styles.metric}>{(effective.distanceMeters / 1000).toFixed(2)} km · {pace(effective.pace.secondsPerKm)}</Text>
       <Text style={styles.text}>実走 {duration(effective.activeRunningTime)} / 全経過 {duration(effective.wallClockElapsed)}</Text>
+      <Text style={styles.text}>GPSポイント {run.points.length}件</Text>
       <Text style={styles.note}>Analysis Exportには正確な緯度経度は含まれません。走行日時・活動情報は含まれます。</Text>
       <Pressable testID="analysis-export" accessibilityRole="button" disabled={busy} style={styles.button} onPress={async () => {
         if (busy) return;

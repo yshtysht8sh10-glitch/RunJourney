@@ -7,6 +7,7 @@ import { RunRecord } from '@/types/run';
 import { effectiveRun } from '@/utils/run-model';
 import { parseBackup, serializeBackup } from '@/utils/run-backup';
 import { RunRepository } from '@/repositories/run-repository';
+import { router } from 'expo-router';
 
 jest.mock('expo-router', () => ({ router: { push: jest.fn() },
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -48,7 +49,7 @@ test.each([
   await AsyncStorage.setItem('@runjourney/runs/v1', stored);
   await act(async () => { tree = create(createElement(HistoryScreen)); });
   const when = tree!.root.findByProps({ testID: 'history-when' });
-  expect(when.findAllByType(Text).map(node => node.props.testID)).toEqual(['history-date', 'history-times']);
+  expect(when.findAllByType(Text).map(node => node.props.testID)).toEqual(['history-date', 'history-times', 'history-details']);
   const primary = tree!.root.findByProps({ testID: 'history-primary' });
   const texts = primary.findAllByType(Text);
   expect(texts.map(node => node.props.testID)).toEqual(['history-active-time', 'history-distance', 'history-speed']);
@@ -57,11 +58,10 @@ test.each([
   expect(texts[1].props.children.join('')).toBe(`${(effectiveRun(record).distanceMeters / 1000).toFixed(2)} km`);
   const speed = effectiveRun(record).pace.kmPerHour;
   expect(texts[2].props.children.join('')).toBe(`平均 ${speed === null ? '—' : speed.toFixed(1)} km/h`);
-  const secondary = tree!.root.findByProps({ testID: 'history-secondary' });
-  const supplemental = secondary.findAllByType(Text).map(node => [node.props.children].flat().join('')).join('');
-  expect(supplemental).toContain(`GPSポイント ${record.points.length}件`);
-  expect(supplemental).toContain('詳細 ›');
-  expect(supplemental).not.toContain('実走');
+  expect(tree!.root.findAllByProps({ testID: 'history-secondary' })).toHaveLength(0);
+  const allText = tree!.root.findAllByType(Text).map(node => [node.props.children].flat().join('')).join('');
+  expect(allText).not.toContain('GPSポイント');
+  expect(allText).toContain('詳細 ›');
   expect(tree!.root.findAllByType(Text).filter(node => [node.props.children].flat().join('').includes('実走'))).toHaveLength(1);
   expect(await AsyncStorage.getItem('@runjourney/runs/v1')).toBe(stored);
   expect(tree!.root.findAllByType(Text).map(node => [node.props.children].flat().join('')).join('')).not.toMatch(/NaN|Infinity/);
@@ -70,6 +70,15 @@ test.each([
     expect(speed).toBeCloseTo(effectiveRun(record).distanceMeters / 1000 / (29 / 60));
     expect(speed).not.toBeCloseTo(effectiveRun(record).distanceMeters / 1000 / (32 / 60));
   }
+});
+
+test('the whole compact card, including the details label, opens the existing detail route', async () => {
+  await AsyncStorage.setItem('@runjourney/runs/v1', JSON.stringify([legacy]));
+  await act(async () => { tree = create(createElement(HistoryScreen)); });
+  const card = tree!.root.findAllByProps({ accessibilityLabel: '走行履歴の詳細' }).find(node => typeof node.props.onPress === 'function')!;
+  expect(card.findAllByProps({ testID: 'history-details' }).length).toBeGreaterThan(0);
+  act(() => card.props.onPress());
+  expect(router.push).toHaveBeenCalledWith({ pathname: '/run-detail', params: { id: legacy.id } });
 });
 
 test('restored legacy run retains its metrics and is visible in history', async () => {
