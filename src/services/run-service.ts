@@ -8,6 +8,7 @@ import { LOCATION_TASK_NAME } from '@/tasks/location-task';
 import { ActiveRun, RunRecord } from '@/types/run';
 import { RunSettings } from '@/repositories/run-settings';
 import { VoiceAnnouncement } from '@/services/voice-announcement';
+import { isStandaloneTest } from '@/utils/build';
 
 const trackingOptions: Location.LocationTaskOptions = {
   accuracy: Location.Accuracy.High,
@@ -50,9 +51,12 @@ async function requestPermissions(): Promise<void> {
 }
 
 async function startLocationTask(): Promise<void> {
-  if (!(await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME))) {
+  // Refresh an existing Test registration after an APK update (native setOptions).
+  if (isStandaloneTest() || !(await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME))) {
     const active = await RunRepository.getActiveRun();
-    await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME, { ...trackingOptions, distanceInterval: active?.features?.autoStop ? 0 : trackingOptions.distanceInterval });
+    await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME, { ...trackingOptions,
+      timeInterval: isStandaloneTest() ? 1000 : trackingOptions.timeInterval,
+      distanceInterval: isStandaloneTest() || active?.features?.autoStop ? 0 : trackingOptions.distanceInterval });
   }
 }
 

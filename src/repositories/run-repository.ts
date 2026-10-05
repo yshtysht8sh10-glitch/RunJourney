@@ -4,12 +4,24 @@ import { isExpiredTrash, isTrashedRun, TrashedRun } from '@/utils/run-trash';
 import { ActiveRun, LocationPoint, RunRecord, RunState } from '@/types/run';
 import { detectStop, effectiveDistance, recordDiagnostic, stateOf, stopIntervals, transition } from '@/utils/run-model';
 import { previewImport, validateRuns } from '@/utils/run-backup';
+import { GpsObservationSession, incrementObservationCount, RawLocationObservation } from '@/utils/gps-observation';
 
 
 const RUNS_KEY = '@runjourney/runs/v1';
 const ACTIVE_RUN_KEY = '@runjourney/active-run/v1';
 
 let operationQueue: Promise<unknown> = Promise.resolve();
+let observationSession: { active: ActiveRun; observation: GpsObservationSession; needsCheckpoint: boolean } | null = null;
+
+function flushObservation(active: ActiveRun, endMs: number): ActiveRun {
+  const pending = observationSession?.observation.latestPoint;
+  if (!pending || pending.timestamp > endMs || !observationSession!.observation.gate.accept(pending.timestamp, true)) return active;
+  const updated = { ...active, points: [...active.points, pending] };
+  updated.distanceMeters = effectiveDistance(updated);
+  observationSession!.active = updated;
+  observationSession!.needsCheckpoint = true;
+  return updated;
+}
 
 function serialized<T>(operation: () => Promise<T>): Promise<T> {
   const result = operationQueue.then(operation, operation);
@@ -142,7 +154,7 @@ export const RunRepository = {
     return serialized(async () => {
       const stored = await AsyncStorage.getItem(ACTIVE_RUN_KEY);
       if (!stored) return;
-      const run: ActiveRun = JSON.parse(stored);
+      const run: ActiveRun = observationSession?.active ?? JSON.parse(stored);
       if (!run.diagnostics) return;
       run.diagnostics.counts.TASK_ERROR = (run.diagnostics.counts.TASK_ERROR ?? 0) + 1;
       await AsyncStorage.setItem(ACTIVE_RUN_KEY, JSON.stringify(run));
@@ -151,6 +163,7 @@ export const RunRepository = {
 
   getActiveRun(): Promise<ActiveRun | null> {
     return serialized(async () => {
+      if (observationSession) return observationSession.active;
       const stored = await AsyncStorage.getItem(ACTIVE_RUN_KEY);
       if (!stored) return null;
       try {
@@ -162,11 +175,51 @@ export const RunRepository = {
   },
 
   saveActiveRun(run: ActiveRun): Promise<void> {
-    return serialized(() => AsyncStorage.setItem(ACTIVE_RUN_KEY, JSON.stringify(run)));
+    return serialized(() => { observationSession = null; return AsyncStorage.setItem(ACTIVE_RUN_KEY, JSON.stringify(run)); });
   },
 
   clearActiveRun(): Promise<void> {
-    return serialized(() => AsyncStorage.removeItem(ACTIVE_RUN_KEY));
+    return serialized(() => { observationSession = null; return AsyncStorage.removeItem(ACTIVE_RUN_KEY); });
+  },
+
+  /** Test PoC entry point: RAM observations, shared detector, throttled GPS/storage. */
+  appendActiveObservations(raws: RawLocationObservation[], appState = 'unknown'): Promise<ActiveRun | null> {
+    return serialized(async () => {
+      if (!observationSession) {
+        const stored = await AsyncStorage.getItem(ACTIVE_RUN_KEY);
+        if (!stored) return null;
+        const active: ActiveRun = JSON.parse(stored);
+        const counts = { ...(active.diagnostics?.counts ?? {}) };
+        incrementObservationCount(counts, 'SEGMENTS');
+        active.diagnostics = { entries: active.diagnostics?.entries ?? [], processed: active.diagnostics?.processed ?? 0, counts };
+        observationSession = { active, observation: new GpsObservationSession(active.points.at(-1)?.timestamp, counts.GPS_OBS_LAST_TIMESTAMP), needsCheckpoint: false };
+      }
+      let active = observationSession.active;
+      const previousEventCount = active.events?.length ?? 0;
+      const counts = { ...active.diagnostics!.counts };
+      const incoming = observationSession.observation.ingest(raws, counts, appState, Date.parse(active.startedAt));
+      active = { ...active, diagnostics: { ...active.diagnostics!, counts } };
+      const persisted: LocationPoint[] = [];
+      for (const { point, persist } of incoming) {
+        active = detectStop(active, point);
+        if (persist) persisted.push(point);
+      }
+      active = { ...active, points: [...active.points, ...persisted], updatedAt: new Date().toISOString() };
+      if (persisted.length || (active.events?.length ?? 0) !== previousEventCount) {
+        active.distanceMeters = effectiveDistance(active);
+        observationSession.needsCheckpoint = true;
+      }
+      observationSession.active = active;
+      if (observationSession.needsCheckpoint) {
+        await AsyncStorage.setItem(ACTIVE_RUN_KEY, JSON.stringify(active));
+        observationSession.needsCheckpoint = false;
+      }
+      return active;
+    });
+  },
+
+  getRecentObservations(windowMs = 10_000, now = Date.now()) {
+    return serialized(async () => observationSession?.observation.buffer.getRecent(windowMs, now) ?? []);
   },
 
   appendActivePoints(points: LocationPoint[]): Promise<ActiveRun | null> {
@@ -195,10 +248,12 @@ export const RunRepository = {
     return serialized(async () => {
       const stored = await AsyncStorage.getItem(ACTIVE_RUN_KEY);
       if (!stored) return null;
-      const original: ActiveRun = JSON.parse(stored);
+      const original: ActiveRun = flushObservation(observationSession?.active ?? JSON.parse(stored), timestamp);
       let run = transition(original, state, timestamp, 'user');
       if (stateOf(run) !== stateOf(original)) run = recordDiagnostic(run, { timestamp, state: stateOf(run), decision: 'RESET', reason: 'STATE_CHANGED' });
+      if (observationSession) run.distanceMeters = effectiveDistance(run);
       await AsyncStorage.setItem(ACTIVE_RUN_KEY, JSON.stringify(run));
+      if (observationSession) observationSession.active = run;
       return run;
     });
   },
@@ -208,7 +263,7 @@ export const RunRepository = {
       const stored = await AsyncStorage.getItem(ACTIVE_RUN_KEY);
       if (!stored) return null;
 
-      let active = JSON.parse(stored) as ActiveRun;
+      const active = flushObservation(observationSession?.active ?? JSON.parse(stored) as ActiveRun, Date.parse(endedAt));
       const record: RunRecord = {
         ...active,
         endedAt,
@@ -221,6 +276,7 @@ export const RunRepository = {
         [RUNS_KEY, JSON.stringify([record, ...withoutDuplicate])],
       ]);
       await AsyncStorage.removeItem(ACTIVE_RUN_KEY);
+      observationSession = null;
       return record;
     });
   },

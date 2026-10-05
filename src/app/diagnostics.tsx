@@ -28,8 +28,8 @@ export default function Diagnostics() {
   const report = useMemo(() => run ? diagnosticReport(run, String(Constants.expoConfig?.extra?.buildGitHash ?? 'unknown')) : null, [run]);
   const payload = report ? JSON.stringify({ ...report, currentSettings: settings, voice: VoiceAnnouncement.diagnostics() }) : '';
   // Keep the phone view light; Copy/Share includes the retained full report.
-  const display = report ? JSON.stringify({ quality: report.quality, actualEvents: report.actualEvents,
-    actualCounts: report.actualDiagnostics?.counts ?? null, legacyReplay: report.legacyV4Replay,
+  const display = report ? JSON.stringify({ observation: report.observation, quality: report.quality, actualEvents: report.actualEvents,
+    actualCounts: report.actualDiagnostics ? Object.fromEntries(Object.entries(report.actualDiagnostics.counts).filter(([key]) => !key.startsWith('GPS_OBS_'))) : null, legacyReplay: report.legacyV4Replay,
     currentReplayCounts: report.currentReplay.diagnostics?.counts,
     latestEntries: (report.actualDiagnostics?.entries ?? report.currentReplay.diagnostics?.entries ?? []).slice(-20) }, null, 2) : '';
   const copy = async () => { try { await Clipboard.setStringAsync(payload); Alert.alert('コピーしました', 'この会話へ貼り付けてください。'); } catch (err) { Alert.alert('コピーできませんでした', String(err)); } };
@@ -41,7 +41,8 @@ export default function Diagnostics() {
       <Pressable accessibilityRole="button" onPress={load} style={styles.button}><Text style={styles.text}>最新情報に更新</Text></Pressable>
       {!report ? <Text style={styles.text}>{error || '記録がありません'}</Text> : <>
         <Text style={styles.text}>Run snapshot: Auto Stop {report.featuresSnapshot.autoStop ? 'ON' : 'OFF'} / Break {report.featuresSnapshot.break ? 'ON' : 'OFF'}</Text>
-        <Text style={styles.text}>Raw GPS {report.rawPointCount}件 / 保存イベント {report.actualEvents.length}件</Text>
+        <Text style={styles.text}>保存GPS {report.rawPointCount}件 / 保存イベント {report.actualEvents.length}件</Text>
+        {report.observation && <Text style={styles.text}>観測 {report.observation.observationCount}件 / バッファ最大 {report.observation.maxBufferSize}件</Text>}
         <Text style={styles.text}>実記録と仮想再判定は別表示です。旧版には実診断ログがありません。座標は共有しません。</Text>
         <Pressable accessibilityRole="button" onPress={copy} style={styles.button}><Text style={styles.text}>診断ログをコピー</Text></Pressable>
         <Pressable accessibilityRole="button" onPress={share} style={styles.button}><Text style={styles.text}>診断ログを共有</Text></Pressable>

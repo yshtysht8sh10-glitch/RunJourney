@@ -2,6 +2,7 @@ import { ActiveRun, RunRecord } from '@/types/run';
 import { legacyDetectStop } from '@/utils/legacy-auto-stop-audit';
 import { detectStop, RUN_CONTROL, stateOf } from '@/utils/run-model';
 import { distanceBetween } from '@/utils/distance';
+import { observationDiagnosticSummary } from '@/utils/gps-observation';
 
 // Replays are explicitly labelled simulations. They never change the saved run,
 // and cannot prove what happened between fixes or whether a person actually stopped.
@@ -39,6 +40,7 @@ export function diagnosticReport(run: ActiveRun, buildHash: string) {
     featuresSnapshot: run.features ?? { autoStop: false, break: false }, rawPointCount: run.points.length,
     actualEvents: run.events ?? [], overrides: run.stopOverrides ?? {}, quality,
     actualDiagnostics: run.diagnostics ?? null,
+    observation: observationDiagnosticSummary(run.diagnostics?.counts ?? {}, run.points.length),
     replayNotice: '保存GPSによる仮想再判定。実際の状態/TTS/停止理由は証明しない。座標は含めない。',
     legacyV4Replay: { events: legacy.events, candidateLossReasons: legacyLossReasons },
     currentReplay: { events: replay.events, diagnostics: replay.diagnostics },
