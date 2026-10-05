@@ -50,13 +50,16 @@ export default function HistoryScreen() {
             const effective = effectiveRun(item);
             return (
               <Pressable accessibilityRole="button" accessibilityLabel="走行履歴の詳細" onPress={() => router.push({ pathname: '/run-detail', params: { id: item.id } })} style={styles.row}>
-                <Text style={styles.date}>{started ? dateFormatter.format(started) : '日付不明'}</Text>
-                <View testID="history-primary" style={styles.primary}>
+                <View testID="history-when" style={styles.when}>
+                  <Text testID="history-date" style={styles.date}>{started ? dateFormatter.format(started) : '日付不明'}</Text>
                   <Text testID="history-times" style={styles.times}>
                     {started ? timeFormatter.format(started) : '開始時刻不明'} → {ended ? timeFormatter.format(ended) : '終了時刻不明'}
                   </Text>
+                </View>
+                <View testID="history-primary" style={styles.primary}>
                   <Text testID="history-active-time" style={styles.activeTime}>実走 {Math.floor(effective.activeRunningTime / 60000)}分</Text>
                   <Text testID="history-distance" style={styles.distance}>{(effective.distanceMeters / 1000).toFixed(2)} km</Text>
+                  <Text testID="history-speed" style={styles.activeTime}>平均 {effective.pace.kmPerHour !== null && Number.isFinite(effective.pace.kmPerHour) ? effective.pace.kmPerHour.toFixed(1) : '—'} km/h</Text>
                 </View>
                 <View testID="history-secondary" style={styles.secondary}>
                   <Text style={styles.points}>GPSポイント {item.points.length}件</Text>
@@ -77,12 +80,13 @@ const styles = StyleSheet.create({
   buildInfo: { paddingHorizontal: 24, paddingBottom: 12 },
   list: { paddingHorizontal: 24, paddingBottom: 32 }, emptyList: { flexGrow: 1 },
   row: { paddingVertical: 20, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#363A3F' },
+  when: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', justifyContent: 'space-between', columnGap: 12, rowGap: 6 },
   primary: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', justifyContent: 'space-between', columnGap: 12, rowGap: 6, marginTop: 6 },
   secondary: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: 6, marginTop: 6 },
   date: { color: '#F5F2EB', fontSize: 16, fontWeight: '600' }, points: { color: '#777B80', fontSize: 12, flexShrink: 1 },
-  times: { color: '#C7CACD', fontSize: 15, flexShrink: 1, fontVariant: ['tabular-nums'] },
+  times: { color: '#C7CACD', fontSize: 15, flexShrink: 1, marginLeft: 'auto', fontVariant: ['tabular-nums'] },
   activeTime: { color: '#F5F2EB', fontSize: 16, fontWeight: '600', flexShrink: 1, fontVariant: ['tabular-nums'] },
-  distance: { color: '#E85D2A', fontSize: 21, fontWeight: '700', flexShrink: 1, marginLeft: 'auto', fontVariant: ['tabular-nums'] },
+  distance: { color: '#E85D2A', fontSize: 21, fontWeight: '700', flexShrink: 1, fontVariant: ['tabular-nums'] },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 80 },
   emptyTitle: { color: '#F5F2EB', fontSize: 20, fontWeight: '700' }, emptyText: { color: '#777B80', fontSize: 15, marginTop: 8 },
 });
