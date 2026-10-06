@@ -1,6 +1,6 @@
 import { ActiveRun, RunRecord } from '@/types/run';
 import { legacyDetectStop } from '@/utils/legacy-auto-stop-audit';
-import { detectStop, RUN_CONTROL, stateOf } from '@/utils/run-model';
+import { detectStop, detectStopV3, RUN_CONTROL, stateOf } from '@/utils/run-model';
 import { distanceBetween } from '@/utils/distance';
 import { observationDiagnosticSummary } from '@/utils/gps-observation';
 
@@ -9,6 +9,7 @@ import { observationDiagnosticSummary } from '@/utils/gps-observation';
 export function diagnosticReport(run: ActiveRun, buildHash: string) {
   let replay: ActiveRun = { ...run, endedAt: undefined, points: [], events: [], detector: undefined,
     stopOverrides: undefined, diagnostics: { entries: [], counts: {}, processed: 0 } };
+  let v3: ActiveRun = { ...replay };
   let legacy: ActiveRun = { ...replay, diagnostics: undefined };
   const quality = { accuracyPoor: 0, speedMissing: 0, intervalsOver15s: 0, maxIntervalMs: 0, legacyCandidateStarts: 0, legacyCandidateLosses: 0 };
   const legacyLossReasons: Record<string, number> = {};
@@ -21,6 +22,7 @@ export function diagnosticReport(run: ActiveRun, buildHash: string) {
     // Respect saved manual BREAK/Resume events in both hypothetical replays.
     const manual = (run.events ?? []).filter(e => e.source === 'user' && e.timestamp <= point.timestamp && (!index || e.timestamp > run.points[index - 1].timestamp));
     if (manual.length) {
+      v3 = { ...v3, events: [...(v3.events ?? []), ...manual], detector: undefined };
       legacy = { ...legacy, events: [...(legacy.events ?? []), ...manual], detector: undefined };
       replay = { ...replay, events: [...(replay.events ?? []), ...manual], detector: undefined };
     }
@@ -34,15 +36,18 @@ export function diagnosticReport(run: ActiveRun, buildHash: string) {
         : prior.anchor && distanceBetween(prior.anchor, point) > RUN_CONTROL.stopRadius ? 'DISPLACEMENT_TOO_LARGE' : 'SPEED_TOO_HIGH_OR_SPIKE';
       legacyLossReasons[reason] = (legacyLossReasons[reason] ?? 0) + 1;
     }
-    replay = detectStop(replay, point);
+    v3 = detectStopV3(v3, point);
+    replay = detectStop(replay, point, 'replay');
   });
-  return { schema: 1, buildHash, runId: run.id, startedAt: run.startedAt, endedAt: run.endedAt,
+  return { schema: 2, buildHash, runId: run.id, startedAt: run.startedAt, endedAt: run.endedAt,
     featuresSnapshot: run.features ?? { autoStop: false, break: false }, rawPointCount: run.points.length,
-    actualEvents: run.events ?? [], overrides: run.stopOverrides ?? {}, quality,
+    actualEvents: run.events ?? [], recovery: run.recovery ?? null,
+    liveEvidence: { retainedDecisions: run.diagnostics?.entries.length ?? 0, firstRetainedAt: run.diagnostics?.entries[0]?.timestamp ?? null, candidateTrace: run.diagnostics?.trace ?? [], traceDropped: run.diagnostics?.traceDropped ?? 0 }, overrides: run.stopOverrides ?? {}, quality,
     actualDiagnostics: run.diagnostics ?? null,
     observation: observationDiagnosticSummary(run.diagnostics?.counts ?? {}, run.points.length),
     replayNotice: '保存GPSによる仮想再判定。実際の状態/TTS/停止理由は証明しない。座標は含めない。',
     legacyV4Replay: { events: legacy.events, candidateLossReasons: legacyLossReasons },
+    v3Replay: { events: v3.events, diagnostics: v3.diagnostics },
     currentReplay: { events: replay.events, diagnostics: replay.diagnostics },
   };
 }
