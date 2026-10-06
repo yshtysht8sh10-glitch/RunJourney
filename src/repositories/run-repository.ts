@@ -1,3 +1,4 @@
+import { applyRecovery, undoRecovery } from '@/utils/run-recovery';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { isExpiredTrash, isTrashedRun, TrashedRun } from '@/utils/run-trash';
@@ -45,7 +46,7 @@ async function readHistory(): Promise<RunRecord[]> {
   if (!stored) return [];
   const parsed: unknown = JSON.parse(stored);
   if (!Array.isArray(parsed) || parsed.some(run => !run || typeof run.id !== 'string' || typeof run.endedAt !== 'string')) {
-    throw new Error('óöóÉfÅ[É^Çì«Ç›çûÇﬂÇ‹ÇπÇÒÇ≈ÇµÇΩ');
+    throw new Error('Â±•Ê≠¥„Éá„Éº„Çø„ÇíË™≠„ÅøËæº„ÇÅ„Åæ„Åõ„Çì„Åß„Åó„Åü');
   }
   return parsed as RunRecord[];
 }
@@ -74,7 +75,7 @@ export const RunRepository = {
       // Protect the identity of an unfinished run, without modifying its storage.
       const active = await AsyncStorage.getItem(ACTIVE_RUN_KEY);
       const activeId = active ? JSON.parse(active).id : undefined;
-      if (additions.some(run => run.id === activeId)) throw new Error('êiçsíÜÇÃãLò^Ç∆IDÇ™àÍívÇµÇ‹Ç∑ÅBëñçsèIóπå„Ç…çƒämîFÇµÇƒÇ≠ÇæÇ≥Ç¢');
+      if (additions.some(run => run.id === activeId)) throw new Error('ÈÄ≤Ë°å‰∏≠„ÅÆË®òÈå≤„Å®ID„Åå‰∏ÄËá¥„Åó„Åæ„Åô„ÄÇËµ∞Ë°åÁµÇ‰∫ÜÂæå„Å´ÂÜçÁ¢∫Ë™ç„Åó„Å¶„Åè„Å†„Åï„ÅÑ');
       if (additions.length) await AsyncStorage.setItem(RUNS_KEY, JSON.stringify([...current, ...additions]));
       return { added: additions.length, skipped: duplicates };
     });
@@ -99,7 +100,7 @@ export const RunRepository = {
     return serialized(async () => {
       const runs = await readHistory();
       const run = runs.find(record => record.id === runId);
-      if (!run) throw new Error('ãLò^Ç™å©Ç¬Ç©ÇËÇ‹ÇπÇÒ');
+      if (!run) throw new Error('Ë®òÈå≤„ÅåË¶ã„Å§„Åã„Çä„Åæ„Åõ„Çì');
       if (run.trashedAt != null) return; // Repeated moves never extend retention.
       run.trashedAt = Date.now();
       await AsyncStorage.setItem(RUNS_KEY, JSON.stringify(runs));
@@ -110,7 +111,7 @@ export const RunRepository = {
     return serialized(async () => {
       const runs = await loadRetainedRuns(Date.now());
       const run = runs.find(record => record.id === runId);
-      if (!run) throw new Error('ãLò^Ç™å©Ç¬Ç©ÇËÇ‹ÇπÇÒÅBï€éùä˙ä‘ÇâﬂÇ¨ÇΩãLò^ÇÕïúå≥Ç≈Ç´Ç‹ÇπÇÒ');
+      if (!run) throw new Error('Ë®òÈå≤„ÅåË¶ã„Å§„Åã„Çä„Åæ„Åõ„Çì„ÄÇ‰øùÊåÅÊúüÈñì„ÇíÈÅé„Åé„ÅüË®òÈå≤„ÅØÂæ©ÂÖÉ„Åß„Åç„Åæ„Åõ„Çì');
       if (run.trashedAt == null) return;
       delete run.trashedAt;
       await AsyncStorage.setItem(RUNS_KEY, JSON.stringify(runs));
@@ -122,7 +123,7 @@ export const RunRepository = {
       const runs = await readHistory();
       const run = runs.find(record => record.id === runId);
       if (!run) return;
-      if (run.trashedAt == null) throw new Error('äÆëSçÌèúÇ≈Ç´ÇÈÇÃÇÕÇ≤Ç›î†ÇÃãLò^ÇæÇØÇ≈Ç∑');
+      if (run.trashedAt == null) throw new Error('ÂÆåÂÖ®ÂâäÈô§„Åß„Åç„Çã„ÅÆ„ÅØ„Åî„ÅøÁÆ±„ÅÆË®òÈå≤„Å†„Åë„Åß„Åô');
       await AsyncStorage.setItem(RUNS_KEY, JSON.stringify(runs.filter(record => record.id !== runId)));
     });
   },
@@ -141,12 +142,24 @@ export const RunRepository = {
       const runs = parseArray<RunRecord>(await AsyncStorage.getItem(RUNS_KEY));
       const index = runs.findIndex(run => run.id === runId);
       const original = runs[index];
-      if (!original || original.trashedAt != null || !stopIntervals(original).some(interval => interval.id === intervalId)) throw new Error('í‚é~ãÊä‘Ç™å©Ç¬Ç©ÇËÇ‹ÇπÇÒ');
+      if (original?.recovery) throw new Error('ÂÅúÊ≠¢Âå∫Èñì„ÇíË®ÇÊ≠£„Åô„Çã„Å´„ÅØÂÖà„Å´ÂÖÉ„ÅÆË®òÈå≤„Å∏Êàª„Åó„Å¶„Åè„Å†„Åï„ÅÑ');
+      if (!original || original.trashedAt != null || !stopIntervals(original).some(interval => interval.id === intervalId)) throw new Error('ÂÅúÊ≠¢Âå∫Èñì„ÅåË¶ã„Å§„Åã„Çä„Åæ„Åõ„Çì');
       const updated = { ...original, stopOverrides: { ...original.stopOverrides, [intervalId]: { included, updatedAt: new Date().toISOString() } } };
       // Original timestamps, events, points and original distance remain intact.
       runs[index] = updated;
       await AsyncStorage.setItem(RUNS_KEY, JSON.stringify(runs));
       return updated;
+    });
+  },
+
+  setRecovery(runId: string, enabled: boolean): Promise<RunRecord> {
+    return serialized(async () => {
+      const runs = await readHistory();
+      const index = runs.findIndex(r => r.id === runId && r.trashedAt == null);
+      if (index < 0) throw new Error('Ë®òÈå≤„ÅåË¶ã„Å§„Åã„Çä„Åæ„Åõ„Çì');
+      runs[index] = enabled ? applyRecovery(runs[index]) : undoRecovery(runs[index]);
+      await AsyncStorage.setItem(RUNS_KEY, JSON.stringify(runs));
+      return runs[index];
     });
   },
 

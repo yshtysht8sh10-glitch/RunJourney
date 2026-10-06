@@ -65,9 +65,11 @@ export default function RunDetail() {
         <Text style={styles.text}>{interval.kind === 'AUTO_STOP' ? 'Auto Stop（推定）' : 'Break（手動）'}</Text>
         <Text style={styles.text}>{clock(interval.startMs)} → {clock(interval.endMs)} · {duration(interval.durationMs)}</Text>
         <Text style={styles.text}>現在：{interval.included ? '走行に含む' : '走行から除外'}</Text>
-        <Pressable testID={`stop-inclusion-${interval.id}`} accessibilityRole="button" disabled={busy} onPress={() => change(interval.id, !interval.included)} style={[styles.button, busy && styles.disabled]}><Text style={styles.text}>{interval.included ? '走行から除外する' : '走行に含める'}</Text></Pressable>
+        <Pressable testID={`stop-inclusion-${interval.id}`} accessibilityRole="button" disabled={busy || !!run.recovery} onPress={() => change(interval.id, !interval.included)} style={[styles.button, busy && styles.disabled]}><Text style={styles.text}>{interval.included ? '走行から除外する' : '走行に含める'}</Text></Pressable>
       </View>)}
       <Text style={styles.note}>訂正は時間とGPSから再評価した距離へ反映されます。元のGPS・時刻・推定は保持します。GPSが不足する区間や静止中の揺れは、含めても距離が増えないことがあります。</Text>
+      <Pressable accessibilityRole="button" onPress={() => router.push({ pathname: './run-recovery', params: { id: run.id } })} style={styles.button}><Text style={styles.text}>GPSデータから履歴を復元</Text></Pressable>
+      {run.recovery && <Text style={styles.note}>GPS再解析を適用済みです。表示中の停止区間は元の推定です。停止区間の手動訂正は、元の記録へ戻してから行ってください。</Text>}
       <Text style={styles.title}>実走5分ラップ</Text>
       {laps.map((lap, index) => <Text key={index} style={styles.text}>{index + 1} · {duration(lap.durationMs)} · {(lap.distanceMeters / 1000).toFixed(2)} km · {pace(lap.secondsPerKm)}</Text>)}
       {isStandaloneTest() && <Pressable accessibilityRole="button" onPress={() => router.push({ pathname: '/diagnostics', params: { id: run.id } })} style={styles.button}><Text style={styles.text}>この記録のDiagnostics</Text></Pressable>}
