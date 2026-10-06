@@ -4,7 +4,7 @@ export const BACKUP_FORMAT = 'runjourney-backup';
 export const MAX_BACKUP_BYTES = 50 * 1024 * 1024;
 export type Backup = { format: typeof BACKUP_FORMAT; schemaVersion: 1; exportedAt: number; app: Record<string, string | number | null>; runs: RunRecord[] };
 type ObjectValue = Record<string, unknown>;
-const invalid = (path: string): never => { throw new Error(`ãƒ‡ãƒ¼ã‚¿å½¢å¼ãŒä¸æ­£ã§ã™: ${path}`); };
+const invalid = (path: string): never => { throw new Error(`ƒf[ƒ^Œ`®‚ª•s³‚Å‚·: ${path}`); };
 function object(value: unknown, path: string): ObjectValue {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return invalid(path);
   return value as ObjectValue;
@@ -34,7 +34,7 @@ function array(value: unknown, path: string): unknown[] {
 const states = ['RUNNING', 'AUTO_STOP', 'BREAK'];
 // Bound unknown extension data too; preserve it without silently dropping future metadata.
 function jsonValue(value: unknown, depth = 0): void {
-  if (depth > 24) invalid('æ§‹é€ ãŒæ·±ã™ãã¾ã™');
+  if (depth > 24) invalid('\‘¢‚ª[‚·‚¬‚Ü‚·');
   if (typeof value === 'number') number(value, 'numeric field');
   else if (Array.isArray(value)) array(value, 'array').forEach(v => jsonValue(v, depth + 1));
   else if (value && typeof value === 'object') {
@@ -46,7 +46,7 @@ function jsonValue(value: unknown, depth = 0): void {
 }
 export function validateRuns(values: unknown): asserts values is RunRecord[] {
   const runs = array(values, 'runs');
-  if (runs.length > 100_000) invalid('è¨˜éŒ²æ•°ãŒå¤šã™ãã¾ã™');
+  if (runs.length > 100_000) invalid('‹L˜^”‚ª‘½‚·‚¬‚Ü‚·');
   jsonValue(runs);
   runs.forEach((value, index) => {
     const path = `runs[${index}]`, run = object(value, path);
@@ -79,8 +79,9 @@ export function validateRuns(values: unknown): asserts values is RunRecord[] {
     });
     if (run.detector !== undefined) {
       const d = object(run.detector, `${path}.detector`);
-      if (d.version !== undefined && d.version !== 2 && d.version !== 3) invalid(`${path}.detector.version`);
+      if (d.version !== undefined && d.version !== 2 && d.version !== 3 && d.version !== 4) invalid(`${path}.detector.version`);
       for (const key of ['anchor', 'last']) if (d[key] !== undefined) point(d[key], `${path}.detector.${key}`);
+      if (d.window !== undefined) array(d.window, `${path}.window`).forEach(p => point(p, `${path}.window.point`));
       if (d.stillSince !== undefined) epoch(d.stillSince, `${path}.stillSince`);
       if (d.movement !== undefined) {
         const m = object(d.movement, `${path}.movement`); point(m.origin, `${path}.origin`);
@@ -102,13 +103,13 @@ export function validateRuns(values: unknown): asserts values is RunRecord[] {
   });
 }
 export function parseBackup(text: string): Backup {
-  if (text.length > MAX_BACKUP_BYTES) throw new Error('ãƒãƒƒã‚¯ã‚¢ãƒƒãƒ—ãŒå¤§ãã™ãã¾ã™ï¼ˆä¸Šé™50MBï¼‰');
+  if (text.length > MAX_BACKUP_BYTES) throw new Error('ƒoƒbƒNƒAƒbƒv‚ª‘å‚«‚·‚¬‚Ü‚·iãŒÀ50MBj');
   let parsed: unknown;
-  try { parsed = JSON.parse(text); } catch { throw new Error('JSONãŒå£Šã‚Œã¦ã„ã¾ã™'); }
+  try { parsed = JSON.parse(text); } catch { throw new Error('JSON‚ª‰ó‚ê‚Ä‚¢‚Ü‚·'); }
   const root = object(parsed, 'root');
-  if (root.format !== BACKUP_FORMAT) throw new Error('RunJourney Backupã§ã¯ã‚ã‚Šã¾ã›ã‚“');
-  if (root.schemaVersion === undefined) throw new Error('schemaVersionãŒã‚ã‚Šã¾ã›ã‚“');
-  if (root.schemaVersion !== 1) throw new Error('æœªå¯¾å¿œã®schemaVersionã§ã™');
+  if (root.format !== BACKUP_FORMAT) throw new Error('RunJourney Backup‚Å‚Í‚ ‚è‚Ü‚¹‚ñ');
+  if (root.schemaVersion === undefined) throw new Error('schemaVersion‚ª‚ ‚è‚Ü‚¹‚ñ');
+  if (root.schemaVersion !== 1) throw new Error('–¢‘Î‰‚ÌschemaVersion‚Å‚·');
   epoch(root.exportedAt, 'exportedAt'); object(root.app, 'app'); jsonValue(root.app);
   validateRuns(root.runs);
   return normalizeBackup(migrateBackup(root as Backup));

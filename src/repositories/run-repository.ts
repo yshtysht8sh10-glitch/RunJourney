@@ -45,7 +45,7 @@ async function readHistory(): Promise<RunRecord[]> {
   if (!stored) return [];
   const parsed: unknown = JSON.parse(stored);
   if (!Array.isArray(parsed) || parsed.some(run => !run || typeof run.id !== 'string' || typeof run.endedAt !== 'string')) {
-    throw new Error('å±¥æ­´ãƒ‡ãƒ¼ã‚¿ã‚’èª­ã¿è¾¼ã‚ã¾ã›ã‚“ã§ã—ãŸ');
+    throw new Error('—š—ðƒf[ƒ^‚ð“Ç‚Ýž‚ß‚Ü‚¹‚ñ‚Å‚µ‚½');
   }
   return parsed as RunRecord[];
 }
@@ -74,7 +74,7 @@ export const RunRepository = {
       // Protect the identity of an unfinished run, without modifying its storage.
       const active = await AsyncStorage.getItem(ACTIVE_RUN_KEY);
       const activeId = active ? JSON.parse(active).id : undefined;
-      if (additions.some(run => run.id === activeId)) throw new Error('é€²è¡Œä¸­ã®è¨˜éŒ²ã¨IDãŒä¸€è‡´ã—ã¾ã™ã€‚èµ°è¡Œçµ‚äº†å¾Œã«å†ç¢ºèªã—ã¦ãã ã•ã„');
+      if (additions.some(run => run.id === activeId)) throw new Error('is’†‚Ì‹L˜^‚ÆID‚ªˆê’v‚µ‚Ü‚·B‘–sI—¹Œã‚ÉÄŠm”F‚µ‚Ä‚­‚¾‚³‚¢');
       if (additions.length) await AsyncStorage.setItem(RUNS_KEY, JSON.stringify([...current, ...additions]));
       return { added: additions.length, skipped: duplicates };
     });
@@ -99,7 +99,7 @@ export const RunRepository = {
     return serialized(async () => {
       const runs = await readHistory();
       const run = runs.find(record => record.id === runId);
-      if (!run) throw new Error('è¨˜éŒ²ãŒè¦‹ã¤ã‹ã‚Šã¾ã›ã‚“');
+      if (!run) throw new Error('‹L˜^‚ªŒ©‚Â‚©‚è‚Ü‚¹‚ñ');
       if (run.trashedAt != null) return; // Repeated moves never extend retention.
       run.trashedAt = Date.now();
       await AsyncStorage.setItem(RUNS_KEY, JSON.stringify(runs));
@@ -110,7 +110,7 @@ export const RunRepository = {
     return serialized(async () => {
       const runs = await loadRetainedRuns(Date.now());
       const run = runs.find(record => record.id === runId);
-      if (!run) throw new Error('è¨˜éŒ²ãŒè¦‹ã¤ã‹ã‚Šã¾ã›ã‚“ã€‚ä¿æŒæœŸé–“ã‚’éŽãŽãŸè¨˜éŒ²ã¯å¾©å…ƒã§ãã¾ã›ã‚“');
+      if (!run) throw new Error('‹L˜^‚ªŒ©‚Â‚©‚è‚Ü‚¹‚ñB•ÛŽŠúŠÔ‚ð‰ß‚¬‚½‹L˜^‚Í•œŒ³‚Å‚«‚Ü‚¹‚ñ');
       if (run.trashedAt == null) return;
       delete run.trashedAt;
       await AsyncStorage.setItem(RUNS_KEY, JSON.stringify(runs));
@@ -122,7 +122,7 @@ export const RunRepository = {
       const runs = await readHistory();
       const run = runs.find(record => record.id === runId);
       if (!run) return;
-      if (run.trashedAt == null) throw new Error('å®Œå…¨å‰Šé™¤ã§ãã‚‹ã®ã¯ã”ã¿ç®±ã®è¨˜éŒ²ã ã‘ã§ã™');
+      if (run.trashedAt == null) throw new Error('Š®‘Síœ‚Å‚«‚é‚Ì‚Í‚²‚Ý” ‚Ì‹L˜^‚¾‚¯‚Å‚·');
       await AsyncStorage.setItem(RUNS_KEY, JSON.stringify(runs.filter(record => record.id !== runId)));
     });
   },
@@ -141,7 +141,7 @@ export const RunRepository = {
       const runs = parseArray<RunRecord>(await AsyncStorage.getItem(RUNS_KEY));
       const index = runs.findIndex(run => run.id === runId);
       const original = runs[index];
-      if (!original || original.trashedAt != null || !stopIntervals(original).some(interval => interval.id === intervalId)) throw new Error('åœæ­¢åŒºé–“ãŒè¦‹ã¤ã‹ã‚Šã¾ã›ã‚“');
+      if (!original || original.trashedAt != null || !stopIntervals(original).some(interval => interval.id === intervalId)) throw new Error('’âŽ~‹æŠÔ‚ªŒ©‚Â‚©‚è‚Ü‚¹‚ñ');
       const updated = { ...original, stopOverrides: { ...original.stopOverrides, [intervalId]: { included, updatedAt: new Date().toISOString() } } };
       // Original timestamps, events, points and original distance remain intact.
       runs[index] = updated;
@@ -191,7 +191,7 @@ export const RunRepository = {
         const active: ActiveRun = JSON.parse(stored);
         const counts = { ...(active.diagnostics?.counts ?? {}) };
         incrementObservationCount(counts, 'SEGMENTS');
-        active.diagnostics = { entries: active.diagnostics?.entries ?? [], processed: active.diagnostics?.processed ?? 0, counts };
+        active.diagnostics = { ...active.diagnostics, entries: active.diagnostics?.entries ?? [], processed: active.diagnostics?.processed ?? 0, counts };
         observationSession = { active, observation: new GpsObservationSession(active.points.at(-1)?.timestamp, counts.GPS_OBS_LAST_TIMESTAMP), needsCheckpoint: false };
       }
       let active = observationSession.active;
@@ -200,8 +200,8 @@ export const RunRepository = {
       const incoming = observationSession.observation.ingest(raws, counts, appState, Date.parse(active.startedAt));
       active = { ...active, diagnostics: { ...active.diagnostics!, counts } };
       const persisted: LocationPoint[] = [];
-      for (const { point, persist } of incoming) {
-        active = detectStop(active, point);
+      for (const { point, persist, window } of incoming) {
+        active = detectStop(active, point, 'live-observation', window);
         if (persist) persisted.push(point);
       }
       active = { ...active, points: [...active.points, ...persisted], updatedAt: new Date().toISOString() };
@@ -232,7 +232,7 @@ export const RunRepository = {
       const incoming = points.filter(point => { if (seen.has(point.timestamp)) return false; seen.add(point.timestamp); return true; });
       const merged = [...active.points, ...incoming]
         .sort((a, b) => a.timestamp - b.timestamp);
-      for (const point of incoming.sort((a, b) => a.timestamp - b.timestamp).filter(p => p.timestamp >= (active.points.at(-1)?.timestamp ?? Date.parse(active.startedAt)))) active = detectStop(active, point);
+      for (const point of incoming.sort((a, b) => a.timestamp - b.timestamp).filter(p => p.timestamp >= (active.points.at(-1)?.timestamp ?? Date.parse(active.startedAt)))) active = detectStop(active, point, 'live-persisted');
       const updated: ActiveRun = {
         ...active,
         points: merged,
@@ -266,6 +266,7 @@ export const RunRepository = {
       const active = flushObservation(observationSession?.active ?? JSON.parse(stored) as ActiveRun, Date.parse(endedAt));
       const record: RunRecord = {
         ...active,
+        detector: active.detector ? { ...active.detector, window: undefined } : undefined,
         endedAt,
         distanceMeters: effectiveDistance({ ...active, endedAt }),
         updatedAt: endedAt,

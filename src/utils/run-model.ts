@@ -1,5 +1,6 @@
 import { ActiveRun, LocationPoint, RunRecord, RunState, StopDiagnostic, StopReason } from '@/types/run';
 import { calculateDistance, distanceBetween } from '@/utils/distance';
+import { inferMovement, usableObservation } from '@/utils/movement-inference';
 import { analyzePace, DEFAULT_LAP_MS, timeLapRanges } from '@/utils/pace-analysis';
 
 export const RUN_CONTROL = {
@@ -12,10 +13,10 @@ export const RUN_CONTROL = {
 export type PaceMode = 'active' | 'with-break' | 'wall';
 export const stateOf = (run: Pick<RunRecord, 'events'>): RunState => run.events?.at(-1)?.state ?? 'RUNNING';
 
-type TimeRun = Pick<ActiveRun, 'startedAt' | 'endedAt' | 'events' | 'stopOverrides'>;
+type TimeRun = Pick<ActiveRun, 'startedAt' | 'endedAt' | 'events' | 'stopOverrides' | 'recovery' | 'recovery'>;
 const intervalId = (index: number, timestamp: number, state: RunState) => `${index}:${timestamp}:${state}`;
-function effectiveEvents(run: Pick<RunRecord, 'events' | 'stopOverrides'>) {
-  return (run.events ?? []).map((event, index) => event.state !== 'RUNNING' && run.stopOverrides?.[intervalId(index, event.timestamp, event.state)]?.included
+function effectiveEvents(run: Pick<RunRecord, 'events' | 'stopOverrides' | 'recovery'>) {
+  return (run.recovery?.events ?? run.events ?? []).map((event, index) => event.state !== 'RUNNING' && run.stopOverrides?.[intervalId(index, event.timestamp, event.state)]?.included
     ? { ...event, state: 'RUNNING' as const } : event);
 }
 export function stopIntervals(run: TimeRun, now = Date.now()) {
@@ -63,7 +64,7 @@ export function transition(run: ActiveRun, state: RunState, timestamp: number, s
   return { ...run, events: [...(run.events ?? []), event], detector: {}, updatedAt: new Date(confirmedAt ?? timestamp).toISOString() };
 }
 
-type DistanceRun = Pick<ActiveRun, 'points' | 'events' | 'startedAt' | 'endedAt' | 'stopOverrides'>;
+type DistanceRun = Pick<ActiveRun, 'points' | 'events' | 'startedAt' | 'endedAt' | 'stopOverrides' | 'recovery'>;
 export function effectivePoints(run: DistanceRun): LocationPoint[] {
   const events = effectiveEvents(run);
   const included = stopIntervals(run, run.points.at(-1)?.timestamp ?? Date.parse(run.startedAt)).filter(interval => interval.included);
@@ -134,12 +135,73 @@ export function completedLapAnalysis(run: ActiveRun, activeMs: number, intervalM
 
 export function recordDiagnostic(run: ActiveRun, entry: StopDiagnostic): ActiveRun {
   if (!run.diagnostics) return run;
+  const trace = [...(run.diagnostics.trace ?? []), ...(['START', 'RESET', 'STOP_CONFIRMED', 'RESUME_CONFIRMED'].includes(entry.decision) ? [entry] : [])];
   const key = entry.reason ? `${entry.decision}:${entry.reason}` : entry.decision;
-  return { ...run, diagnostics: { entries: [...run.diagnostics.entries, entry].slice(-RUN_CONTROL.diagnosticEntries),
+  return { ...run, diagnostics: { trace: trace.slice(-4096), traceDropped: (run.diagnostics.traceDropped ?? 0) + Math.max(0, trace.length - 4096), entries: [...run.diagnostics.entries, entry].slice(-RUN_CONTROL.diagnosticEntries),
     processed: run.diagnostics.processed + 1, counts: { ...run.diagnostics.counts, [key]: (run.diagnostics.counts[key] ?? 0) + 1 } } };
 }
 
-export function detectStop(run: ActiveRun, point: LocationPoint): ActiveRun {
+export function detectStop(run: ActiveRun, point: LocationPoint, inputSource: StopDiagnostic['inputSource'] = 'live-persisted', observations?: LocationPoint[]): ActiveRun {
+  const state = stateOf(run), prior = run.detector?.version === 4 ? run.detector : {};
+  const last = prior.last;
+  const detail: Omit<StopDiagnostic, 'decision'> = { timestamp: point.timestamp, receivedAt: Date.now(), state,
+    speed: point.speed, accuracy: point.accuracy, inputSource, intervalMs: last ? point.timestamp - last.timestamp : undefined };
+  const report = (next: ActiveRun, decision: StopDiagnostic['decision'], reason?: StopDiagnostic['reason']) => recordDiagnostic(next, { ...detail, state: stateOf(next), decision, reason });
+  if (!run.features?.autoStop) return report(run, 'SKIP', StopReason.SETTING_DISABLED);
+  if (state === 'BREAK') return report(run, 'SKIP', StopReason.STATE_CHANGED);
+  const boundary = run.events?.at(-1)?.confirmedAt ?? run.events?.at(-1)?.timestamp ?? Date.parse(run.startedAt);
+  if (point.timestamp < boundary || last && point.timestamp <= last.timestamp) return report(run, 'SKIP', StopReason.STALE_FIX);
+  if (!usableObservation(point)) {
+    const expired = last && point.timestamp - last.timestamp > RUN_CONTROL.maxGapMs;
+    return report(expired ? { ...run, detector: { version: 4 } } : run, expired ? 'RESET' : 'HOLD', StopReason.ACCURACY_POOR);
+  }
+  const gap = last && point.timestamp - last.timestamp > RUN_CONTROL.maxGapMs;
+  // Reject a jump without allowing it to replace the last reliable position.
+  if (!gap && last && distanceBetween(last, point) / ((point.timestamp - last.timestamp) / 1000) > RUN_CONTROL.maxSpeed)
+    return report(run, 'HOLD', StopReason.SPEED_SPIKE);
+  const rawWindow = observations ?? [...(prior.window ?? []), point];
+  let window = gap ? [point] : rawWindow.filter(p => usableObservation(p) && p.timestamp >= Math.max(boundary, point.timestamp - 10000) && p.timestamp <= point.timestamp);
+  window = [...new Map(window.map(p => [p.timestamp, p])).values()].sort((a, b) => a.timestamp - b.timestamp).slice(-256);
+  // A bad fix in the rolling source must not create an outlier edge later.
+  window = window.filter((p, i, all) => !i || distanceBetween(all[i - 1], p) / ((p.timestamp - all[i - 1].timestamp) / 1000) <= RUN_CONTROL.maxSpeed);
+  // Earliest qualifying suffix is the evidence onset, not the confirmation time.
+  const target = state === 'AUTO_STOP' ? 'moving' : 'stationary';
+  let candidate: LocationPoint[] | undefined;
+  for (let i = 0; i < window.length - 1; i++) {
+    const suffix = window.slice(i), inference = inferMovement(suffix);
+    if (!inference[target]) continue;
+    if (target === 'stationary' && distanceBetween(suffix[0], suffix[1]) / ((suffix[1].timestamp - suffix[0].timestamp) / 1000) > 0.5) continue;
+    if (target === 'moving' && distanceBetween(suffix[0], suffix[1]) / ((suffix[1].timestamp - suffix[0].timestamp) / 1000) < 0.5) continue;
+    candidate = suffix; break;
+  }
+  const inference = inferMovement(candidate ?? window);
+  detail.window = inference.summary;
+  const first = window[0];
+  const provisionalStill = state === 'RUNNING' && first && inferMovement(window).summary.spread <= 3 ? first.timestamp : undefined;
+  const movingStart = state === 'AUTO_STOP' ? window.find((p, i) => {
+    const next = window[i + 1];
+    return next && distanceBetween(p, next) / ((next.timestamp - p.timestamp) / 1000) >= 0.5
+      && inferMovement(window.slice(i)).summary.coherence >= 0.7;
+  }) : undefined;
+  const movement = movingStart ? { startedAt: movingStart.timestamp, origin: movingStart, fixes: window.filter(p => p.timestamp >= movingStart.timestamp).length } : undefined;
+  const updated: ActiveRun = { ...run, detector: { version: 4, last: point, window, stillSince: provisionalStill, movement } };
+  detail.candidateStartedAt = candidate?.[0].timestamp ?? provisionalStill ?? movement?.startedAt;
+  detail.candidateAgeMs = detail.candidateStartedAt === undefined ? undefined : point.timestamp - detail.candidateStartedAt;
+  if (candidate) {
+    const onset = candidate[0].timestamp;
+    detail.effectiveTimestamp = onset; detail.confirmedAt = point.timestamp;
+    const next = transition(updated, state === 'AUTO_STOP' ? 'RUNNING' : 'AUTO_STOP', onset, 'sensor', point.timestamp);
+    if (stateOf(next) === state) return report(updated, 'RESET', StopReason.STATE_CHANGED);
+    return report({ ...next, detector: { version: 4, last: point, window: [point] } }, state === 'AUTO_STOP' ? 'RESUME_CONFIRMED' : 'STOP_CONFIRMED');
+  }
+  if (gap) return report(updated, 'RESET', StopReason.GPS_INTERVAL_TOO_LONG);
+  if (prior.stillSince !== undefined && provisionalStill === undefined) return report(updated, 'RESET', StopReason.DISPLACEMENT_TOO_LARGE);
+  if (prior.movement && !movement) return report(updated, 'RESET', StopReason.MOVEMENT_TOO_SMALL);
+  if (movement) return report(updated, prior.movement ? 'CONTINUE' : 'START');
+  return report(updated, provisionalStill !== undefined ? prior.stillSince === undefined ? 'START' : 'CONTINUE' : 'HOLD', StopReason.OBSERVATION_REQUIRED);
+}
+
+export function detectStopV3(run: ActiveRun, point: LocationPoint): ActiveRun {
   const state = stateOf(run);
   let detail: Omit<StopDiagnostic, 'decision'> = { timestamp: point.timestamp, receivedAt: Date.now(), state, accuracy: point.accuracy, speed: point.speed };
   const report = (next: ActiveRun, decision: StopDiagnostic['decision'], reason?: StopDiagnostic['reason']) => recordDiagnostic(next, { ...detail, decision, reason, state: stateOf(next) });

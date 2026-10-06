@@ -84,7 +84,7 @@ export class GpsObservationSession {
       }
       this.lastCallback = receivedAt;
     }
-    const accepted: { point: LocationPoint; persist: boolean }[] = [];
+    const accepted: { point: LocationPoint; persist: boolean; window: LocationPoint[] }[] = [];
     for (const raw of [...raws].sort((a, b) => a.timestamp - b.timestamp)) {
       incrementObservationCount(counts, 'DELIVERED');
       if (!Number.isFinite(raw.timestamp) || raw.timestamp < startedAt || raw.timestamp <= this.lastObservation) {
@@ -109,7 +109,7 @@ export class GpsObservationSession {
         incrementObservationCount(counts, 'INVALID_COORDINATES'); continue;
       }
       this.latestPoint = observationToPoint(raw);
-      accepted.push({ point: this.latestPoint, persist: this.gate.accept(raw.timestamp) });
+      accepted.push({ point: this.latestPoint, persist: this.gate.accept(raw.timestamp), window: this.buffer.getRecent(10_000, raw.timestamp).map(observationToPoint) });
     }
     this.lastAppState = appState;
     return accepted;

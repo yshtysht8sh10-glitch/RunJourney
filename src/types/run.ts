@@ -19,9 +19,10 @@ export type RunRecord = {
   updatedAt: string;
   features?: { autoStop: boolean; break: boolean };
   events?: RunEvent[];
-  detector?: { version?: 2 | 3; anchor?: LocationPoint; last?: LocationPoint; stillSince?: number; movement?: { startedAt: number; origin: LocationPoint; fixes: number } };
+  detector?: { version?: 2 | 3 | 4; window?: LocationPoint[]; anchor?: LocationPoint; last?: LocationPoint; stillSince?: number; movement?: { startedAt: number; origin: LocationPoint; fixes: number } };
+  recovery?: { algorithm: string; appliedAt: string; events: RunEvent[] };
   stopOverrides?: Record<string, { included: boolean; updatedAt: string }>;
-  diagnostics?: { entries: StopDiagnostic[]; counts: Record<string, number>; processed: number };
+  diagnostics?: { trace?: StopDiagnostic[]; traceDropped?: number; entries: StopDiagnostic[]; counts: Record<string, number>; processed: number };
 };
 
 export type RunState = 'RUNNING' | 'AUTO_STOP' | 'BREAK';
@@ -43,5 +44,8 @@ export type StopDiagnostic = {
   speed?: number; effectiveSpeed?: number; displacement?: number; originDisplacement?: number;
   intervalMs?: number; candidateStartedAt?: number; candidateAgeMs?: number;
   decision: 'START' | 'CONTINUE' | 'RESET' | 'HOLD' | 'SKIP' | 'STOP_CONFIRMED' | 'RESUME_CONFIRMED';
+  inputSource?: 'live-observation' | 'live-persisted' | 'replay';
+  window?: { durationMs: number; validCount: number; displacement: number; pathLength: number; spread: number; speedMedian?: number; coherence: number };
+  effectiveTimestamp?: number; confirmedAt?: number;
   reason?: StopReasonCode;
 };

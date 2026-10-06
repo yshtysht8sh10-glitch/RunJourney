@@ -1,5 +1,6 @@
+// Historical v3 audit contracts; current movement semantics are tested in movement-inference.test.ts.
 import { ActiveRun, LocationPoint } from '@/types/run';
-import { announcementClock, detectStop, effectiveDistance, effectiveTimeline, paceTime, stateOf, transition } from '@/utils/run-model';
+import { announcementClock, detectStopV3 as detectStop, effectiveDistance, effectiveTimeline, paceTime, stateOf, transition } from '@/utils/run-model';
 import { analyzePoints } from '@/utils/pace-analysis';
 const point = (timestamp: number, meters = 0, speed = 0, accuracy = 5): LocationPoint => ({ latitude: 35 + meters / 111195, longitude: 139, timestamp, speed, accuracy });
 const initial = (): ActiveRun => ({ id: 'latency', startedAt: new Date(0).toISOString(), createdAt: '', updatedAt: '', distanceMeters: 0, points: [], events: [], features: { autoStop: true, break: true } });

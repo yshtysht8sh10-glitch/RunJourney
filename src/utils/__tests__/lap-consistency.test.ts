@@ -59,13 +59,13 @@ test('pending candidate stays running; confirmed stop/resume retroactively re-pa
   const fix = (p: LocationPoint) => { record = detectStop(record, p); record.points = [...record.points, p]; };
   fix({ ...point(299000, 0), speed: 0 });
   expect(effectiveRun(record, 303900).activeRunningTime).toBe(303900);
-  fix({ ...point(304000, 3), speed: 0 });
+  fix({ ...point(304000, 1), speed: 0 });
   expect(record.events?.[0]).toMatchObject({ timestamp: 299000, confirmedAt: 304000 });
   expect(effectiveRun(record, 304000).activeRunningTime).toBe(299000);
-  fix({ ...point(310000, 7), speed: 1.5 }); fix({ ...point(315000, 15), speed: 1.6 });
-  expect(record.events?.at(-1)).toMatchObject({ timestamp: 310000, confirmedAt: 315000 });
-  const { effective } = assertPartition({ ...record, endedAt: new Date(315000).toISOString() });
-  expect(effective.distanceMeters).toBeCloseTo(8, 0); expect(effective.activeRunningTime).toBe(304000);
+  fix({ ...point(309000, 7), speed: 1.5 }); fix({ ...point(314000, 15), speed: 1.6 });
+  expect(record.events?.at(-1)).toMatchObject({ timestamp: 304000, confirmedAt: 314000 });
+  const { effective } = assertPartition({ ...record, endedAt: new Date(314000).toISOString() });
+  expect(effective.distanceMeters).toBeCloseTo(14, 0); expect(effective.activeRunningTime).toBe(309000);
 });
 test('GPS filter rejects inaccurate/spike/nonfinite fixes before both total and lap calculation', () => {
   const record = run(); record.points[50] = { ...record.points[50], accuracy: 100 };

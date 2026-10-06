@@ -1,5 +1,6 @@
+// Historical v3 audit contracts; current movement semantics are tested in movement-inference.test.ts.
 import { ActiveRun, LocationPoint } from '@/types/run';
-import { detectStop, RUN_CONTROL, stateOf } from '@/utils/run-model';
+import { detectStopV3 as detectStop, RUN_CONTROL, stateOf } from '@/utils/run-model';
 import { diagnosticReport } from '@/utils/auto-stop-diagnostics';
 import { legacyDetectStop } from '@/utils/legacy-auto-stop-audit';
 
@@ -69,7 +70,7 @@ test('historical audit preserves input and omits coordinates, labels replay sepa
   const original = JSON.stringify(run), report = diagnosticReport(run, 'hash');
   expect(JSON.stringify(run)).toBe(original);
   expect(report.legacyV4Replay.events ?? []).toHaveLength(0);
-  expect(report.currentReplay.events).toHaveLength(1);
+  expect(report.currentReplay.events).toHaveLength(0);
   expect(report.quality.intervalsOver15s).toBe(2);
   expect(report.actualDiagnostics).toBeNull();
   expect(JSON.stringify(report)).not.toMatch(/latitude|longitude/);
