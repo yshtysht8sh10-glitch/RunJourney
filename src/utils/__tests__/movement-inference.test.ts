@@ -55,3 +55,11 @@ test('diagnostics record source, coordinate-free window and confirmed/effective 
   expect(entry).toMatchObject({ inputSource: 'live-observation', effectiveTimestamp: 0, confirmedAt: 5000, window: { durationMs: 5000, validCount: 6 } });
   expect(JSON.stringify(run.diagnostics)).not.toMatch(/latitude|longitude/);
 });
+test('irregular persisted 5–6s gate samples can resume without exact 10s alignment', () => {
+  let run = base();
+  for (const t of [0, 5.4, 10.8]) run = detectStop(run, p(t, 0, 0), 'replay');
+  expect(stateOf(run)).toBe('AUTO_STOP');
+  for (const t of [16.2, 21.6, 27, 32.4]) run = detectStop(run, p(t, (t - 10.8) * 2), 'replay');
+  expect(stateOf(run)).toBe('RUNNING');
+  expect(run.events?.[1]).toMatchObject({ timestamp: 10800, confirmedAt: 21600 });
+});

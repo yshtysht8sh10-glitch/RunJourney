@@ -8,9 +8,9 @@ v3 Resume required previous-fix displacement >=3m AND speed>=1.2m/s. At 2m/s and
 
 ## Inference v4
 
-Use event-time rolling observations (max10s / 256 points); the Test ingest captures each observation's window before later batch points can affect it. Other inputs/replay build the same window. Accuracy<=20m, finite geographic coordinates, duplicate/stale suppression, >12.5m/s coordinate jumps held, >15s usable gaps reset evidence. Provider speed median is exported for context, not a hard gate.
+Use event-time rolling observations (normally10s / 256 points; sparse saved GPS retains at least3 fixes within15s); the Test ingest captures each observation's window before later batch points can affect it. Other inputs/replay build the same window. Accuracy<=20m, finite geographic coordinates, duplicate/stale suppression, >12.5m/s coordinate jumps held, >15s usable gaps reset evidence. Provider speed median is exported for context, not a hard gate.
 
-Moving: >=5s coverage and >=3 valid fixes, displacement/time >=0.7m/s, displacement/path >=0.7, >=70% of edges have displacement/time>=0.5m/s. Stationary: >=5s coverage, spatial spread<=3m and net displacement/time<=0.35m/s. Earliest qualifying suffix is the candidate onset; first edge must support the target (moving>=0.5m/s, stationary<=0.5m/s). Confirmation timestamp is retained separately. Break is never sensor-resumed. A5s stream can require10s to collect3 points; cadence changes resolution/latency, not a fixed per-fix distance threshold. These are explainable Test parameters; urban jitter, tight turns, weak fixes and sub0.7m/s movement remain field risks.
+Moving: >=5s coverage and >=3 valid fixes, displacement/time >=0.7m/s, displacement/path >=0.7, >=70% of edges have displacement/time>=0.5m/s. Stationary: >=5s coverage, spatial spread<=3m and net displacement/time<=0.35m/s. Earliest qualifying suffix is the candidate onset; first edge must support the target (moving>=0.5m/s, stationary<=0.5m/s). Confirmation timestamp is retained separately. Break is never sensor-resumed. A5–6s persisted stream can require10–12s to collect3 points; a sparse replay window may extend up to15s; cadence changes resolution/latency, not a fixed per-fix distance threshold. These are explainable Test parameters; urban jitter, tight turns, weak fixes and sub0.7m/s movement remain field risks.
 
 A bounded window supports active checkpoint/restart. It is removed from completed RunRecord; all1s observations are not archived. The completed record keeps ~5s GPS plus the prior small detector anchors. Do not infer 2223 recoverable coordinates from diagnostic observationCount.
 
@@ -26,7 +26,7 @@ Preview also calculates candidate running distance/time inside original excluded
 
 ## Verification / next field session
 
-Focused:6 suites48 tests pass, including1s/5s run/walk/stop, bouncing, jump, missing/low speed, poor accuracy, retroactive onset, Break, raw immutability, apply/undo, legacy, backup and preview confirmation UI. Retained v3 contracts are explicitly labelled historical audits; new v4 and repository suites exercise current semantics. Typecheck/lint pass. Outdoor acceptance is pending; #21/#26 stay OPEN.
+Focused:6 suites49 tests pass, including1s/5s run/walk/stop, bouncing, jump, missing/low speed, poor accuracy, retroactive onset, Break, raw immutability, apply/undo, legacy, backup and preview confirmation UI. Retained v3 contracts are explicitly labelled historical audits; new v4 and repository suites exercise current semantics. Typecheck/lint pass. Outdoor acceptance is pending; #21/#26 stay OPEN.
 
 Standalone Test versionCode13, production6 unchanged, existing signing key. Build uses the repository's already established standaloneTest Gradle variant after no-clean Expo prebuild. No uninstall/storage clear/Production install or Recovery application. Device update, if performed later, must verify certificate/package and use adb install -r only.
 

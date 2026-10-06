@@ -160,7 +160,11 @@ export function detectStop(run: ActiveRun, point: LocationPoint, inputSource: St
   if (!gap && last && distanceBetween(last, point) / ((point.timestamp - last.timestamp) / 1000) > RUN_CONTROL.maxSpeed)
     return report(run, 'HOLD', StopReason.SPEED_SPIKE);
   const rawWindow = observations ?? [...(prior.window ?? []), point];
-  let window = gap ? [point] : rawWindow.filter(p => usableObservation(p) && p.timestamp >= Math.max(boundary, point.timestamp - 10000) && p.timestamp <= point.timestamp);
+  const available = rawWindow.filter(p => usableObservation(p) && p.timestamp >= Math.max(boundary, point.timestamp - 15000) && p.timestamp <= point.timestamp);
+  const recent = available.filter(p => p.timestamp >= point.timestamp - 10000);
+  // The 5s gate means >=5s, often 5–6s. Keep three sparse fixes (<=15s)
+  // rather than requiring three points to fit an impossible exact 10s grid.
+  let window = gap ? [point] : recent.length >= 3 ? recent : available.slice(-3);
   window = [...new Map(window.map(p => [p.timestamp, p])).values()].sort((a, b) => a.timestamp - b.timestamp).slice(-256);
   // A bad fix in the rolling source must not create an outlier edge later.
   window = window.filter((p, i, all) => !i || distanceBetween(all[i - 1], p) / ((p.timestamp - all[i - 1].timestamp) / 1000) <= RUN_CONTROL.maxSpeed);
