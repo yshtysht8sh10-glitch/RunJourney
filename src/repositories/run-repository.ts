@@ -208,6 +208,7 @@ export const RunRepository = {
         observationSession = { active, observation: new GpsObservationSession(active.points.at(-1)?.timestamp, counts.GPS_OBS_LAST_TIMESTAMP), needsCheckpoint: false };
       }
       let active = observationSession.active;
+        if (active.endedAt) return active;
       const previousEventCount = active.events?.length ?? 0;
       const counts = { ...active.diagnostics!.counts };
       const incoming = observationSession.observation.ingest(raws, counts, appState, Date.parse(active.startedAt));
@@ -241,6 +242,7 @@ export const RunRepository = {
       if (!stored) return null;
 
       let active = JSON.parse(stored) as ActiveRun;
+        if (active.endedAt) return active;
       const seen = new Set(active.points.map((point) => point.timestamp));
       const incoming = points.filter(point => { if (seen.has(point.timestamp)) return false; seen.add(point.timestamp); return true; });
       const merged = [...active.points, ...incoming]
@@ -262,6 +264,7 @@ export const RunRepository = {
       const stored = await AsyncStorage.getItem(ACTIVE_RUN_KEY);
       if (!stored) return null;
       const original: ActiveRun = flushObservation(observationSession?.active ?? JSON.parse(stored), timestamp);
+      if (original.endedAt) return original;
       let run = transition(original, state, timestamp, 'user');
       if (stateOf(run) !== stateOf(original)) run = recordDiagnostic(run, { timestamp, state: stateOf(run), decision: 'RESET', reason: 'STATE_CHANGED' });
       if (observationSession) run.distanceMeters = effectiveDistance(run);
@@ -276,7 +279,9 @@ export const RunRepository = {
       const stored = await AsyncStorage.getItem(ACTIVE_RUN_KEY);
       if (!stored) return null;
 
-      const active = flushObservation(observationSession?.active ?? JSON.parse(stored) as ActiveRun, Date.parse(endedAt));
+      const draft: ActiveRun = observationSession?.active ?? JSON.parse(stored);
+      endedAt = draft.endedAt ?? endedAt;
+      const active = flushObservation(draft, Date.parse(endedAt));
       const record: RunRecord = {
         ...active,
         detector: active.detector ? { ...active.detector, window: undefined } : undefined,
@@ -284,14 +289,19 @@ export const RunRepository = {
         distanceMeters: effectiveDistance({ ...active, endedAt }),
         updatedAt: endedAt,
       };
-      const runs = parseArray<RunRecord>(await AsyncStorage.getItem(RUNS_KEY));
+      // Freeze the STOP snapshot durably before writing history. Failed writes
+      // can be retried after a restart without counting the retry wait as running.
+      await AsyncStorage.setItem(ACTIVE_RUN_KEY, JSON.stringify(record));
+      if (observationSession) observationSession.active = record;
+      const runs = await readHistory();
+      const alreadySaved = runs.find(run => run.id === record.id);
       const withoutDuplicate = runs.filter((run) => run.id !== record.id);
       await AsyncStorage.multiSet([
-        [RUNS_KEY, JSON.stringify([record, ...withoutDuplicate])],
+        [RUNS_KEY, JSON.stringify([alreadySaved ?? record, ...withoutDuplicate])],
       ]);
       await AsyncStorage.removeItem(ACTIVE_RUN_KEY);
       observationSession = null;
-      return record;
+      return alreadySaved ?? record;
     });
   },
 };

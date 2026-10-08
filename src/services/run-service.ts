@@ -27,6 +27,8 @@ const trackingOptions: Location.LocationTaskOptions = {
   },
 };
 
+let stopInFlight: Promise<RunRecord | null> | null = null;
+
 async function assertTrackingIsAvailable(): Promise<void> {
   if (!(await TaskManager.isAvailableAsync())) {
     throw new Error('このビルドではバックグラウンド計測を利用できません。開発ビルドを使用してください。');
@@ -66,6 +68,7 @@ export const RunService = {
     await requestPermissions();
     const existing = await RunRepository.getActiveRun();
     if (existing) {
+      if (existing.endedAt) throw new Error('終了した記録の保存を再試行してください。');
       await startLocationTask();
       await VoiceAnnouncement.restore(existing);
       return existing;
@@ -97,6 +100,7 @@ export const RunService = {
   async restoreActiveRun(): Promise<ActiveRun | null> {
     const active = await RunRepository.getActiveRun();
     if (!active) return null;
+    if (active.endedAt) return active;
     await VoiceAnnouncement.restore(active);
 
     const foreground = await Location.getForegroundPermissionsAsync();
@@ -133,11 +137,16 @@ export const RunService = {
     return run;
   },
 
-  async stopRun(): Promise<RunRecord | null> {
-    VoiceAnnouncement.stop();
-    if (await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME)) {
-      await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
-    }
-    return RunRepository.finishActiveRun(new Date().toISOString());
+  stopRun(): Promise<RunRecord | null> {
+    if (stopInFlight) return stopInFlight;
+    const endedAt = new Date().toISOString();
+    stopInFlight = (async () => {
+      VoiceAnnouncement.stop();
+      if (await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME)) {
+        await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
+      }
+      return RunRepository.finishActiveRun(endedAt);
+    })().finally(() => { stopInFlight = null; });
+    return stopInFlight;
   },
 };

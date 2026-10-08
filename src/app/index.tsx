@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { router } from 'expo-router';
 import { Alert, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -37,6 +38,7 @@ export default function RunScreen() {
   const [activeRun, setActiveRun] = useState<ActiveRun | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [busy, setBusy] = useState(true);
+  const [saveError, setSaveError] = useState('');
 
   const showError = useCallback((error: unknown) => {
     const message = error instanceof Error ? error.message : '処理に失敗しました。';
@@ -76,8 +78,17 @@ export default function RunScreen() {
   const stop = async () => {
     if (stopping.current) return;
     stopping.current = true; setBusy(true);
-    try { await RunService.stopRun(); setActiveRun(null); }
-    catch (error) { showError(error); }
+    setSaveError('');
+    try {
+      const saved = await RunService.stopRun();
+      if (!saved) throw new Error('保存された記録を確認できませんでした。履歴を確認してください。');
+      setActiveRun(null);
+      router.replace({ pathname: './run-summary', params: { id: saved.id } });
+    }
+    catch (error) {
+      setSaveError(error instanceof Error ? error.message : '保存に失敗しました。');
+      setActiveRun(await RunService.getActiveRun().catch(() => activeRun));
+    }
     finally { stopping.current = false; setBusy(false); }
   };
   const changeState = async () => {
@@ -101,8 +112,11 @@ export default function RunScreen() {
               <Text style={styles.unit}>km</Text>
               <Text style={styles.elapsed}>{formatElapsed(time!.activeRunningTime)}</Text>
               <Text style={styles.status}>{stateOf(activeRun) === 'AUTO_STOP' ? '停止しています。走り出すと自動再開' : stateOf(activeRun) === 'BREAK' ? `休憩中 ${formatElapsed(time!.breakDuration)}` : pace ? `${Math.floor(pace / 60)}:${String(Math.floor(pace % 60)).padStart(2, '0')} /km` : 'GPSを記録中'}</Text>
-              {activeRun.features?.break && <Pressable accessibilityRole="button" disabled={busy} onPress={changeState} style={{ width: '100%', minHeight: 64, borderRadius: 16, backgroundColor: '#33424C', alignItems: 'center', justifyContent: 'center', marginBottom: 20 }}><Text style={styles.startButtonText}>{stateOf(activeRun) === 'BREAK' ? '再 開' : '休 憩'}</Text></Pressable>}
-              <StopButton disabled={busy} onStop={stop} />
+              {activeRun.features?.break && !activeRun.endedAt && <Pressable accessibilityRole="button" disabled={busy} onPress={changeState} style={{ width: '100%', minHeight: 64, borderRadius: 16, backgroundColor: '#33424C', alignItems: 'center', justifyContent: 'center', marginBottom: 20 }}><Text style={styles.startButtonText}>{stateOf(activeRun) === 'BREAK' ? '再 開' : '休 憩'}</Text></Pressable>}
+              {saveError || activeRun.endedAt ? <View style={{ width: '100%' }}>
+                <Text accessibilityRole="alert" style={styles.description}>{saveError || '終了した記録の保存が未完了です。'}</Text>
+                <Pressable testID="retry-save" accessibilityRole="button" disabled={busy} onPress={stop} style={styles.startButton}><Text style={styles.startButtonText}>{busy ? '保存中…' : '保存を再試行'}</Text></Pressable>
+              </View> : <StopButton disabled={busy} onStop={stop} />}
             </>
           ) : (
             <>
