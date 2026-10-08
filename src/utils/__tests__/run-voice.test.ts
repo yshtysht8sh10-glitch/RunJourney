@@ -14,7 +14,7 @@ afterEach(() => jest.restoreAllMocks());
 test('Voice Test uses the production formatter with a two-digit lap and unrounded analysis', async () => {
   await VoiceAnnouncement.setItems({ elapsed: true, totalDistance: true, lapDistance: true, pace: true, speed: true, marathon: true });
   await VoiceAnnouncement.test();
-  expect(native.test).toHaveBeenCalledWith('20分です。総走行距離3.2キロメートル。直近5分間でれいてんはちさんキロメートル。1キロ6分3秒ペース。時速9.9キロメートル。フルマラソン4時間15分ペースです。');
+  expect(native.test).toHaveBeenCalledWith('20分です。総走行距離3てんにれいキロメートル。直近5分間でれいてんはちさんキロメートル。1キロ6分3秒ペース。時速9.9キロメートル。フルマラソン4時間15分ペースです。');
 });
 test('batched stop/resume delivers both transition keys instead of losing the stop', async () => {
   await AsyncStorage.setItem('@runjourney/voice-announcement/v1', 'on');
@@ -30,7 +30,7 @@ test.each([5000, 10000])('first-lap voice keeps the five-minute boundary with de
   const run = { ...base(), features: { autoStop: false, break: true }, points, distanceMeters: 400 };
   jest.spyOn(Date, 'now').mockReturnValue(300000 + delay);
   await VoiceAnnouncement.updateRun(run);
-  expect(native.updateAnnouncement).toHaveBeenCalledWith(1, expect.stringContaining('総走行距離0.2キロメートル。直近5分間でれいてんいちはちキロメートル'));
+  expect(native.updateAnnouncement).toHaveBeenCalledWith(1, expect.stringContaining('総走行距離れいてんいちはちキロメートル。直近5分間でれいてんいちはちキロメートル'));
 });
 test.each(['AUTO_STOP', 'BREAK'] as const)('voice %s freezes before five minutes then resumes', async state => {
   await AsyncStorage.setItem('@runjourney/voice-announcement/v1', 'on');

@@ -8,7 +8,7 @@ test.each([[826.73, 'れいてんはちさん'], [824, 'れいてんはちに'],
 test('826.73m speech is 0.83km while all calculated metrics retain 826.73m', () => {
   const lap = analyzePace(0, 300000, 826.73), original = { ...lap };
   const message = formatAnnouncement(300000, 826.73, lap, items);
-  expect(message).toContain('総走行距離0.8キロメートル'); expect(message).toContain('れいてんはちさんキロメートル');
+  expect(message).toContain('総走行距離れいてんはちさんキロメートル'); expect(message).toContain('れいてんはちさんキロメートル');
   expect(lap.distanceMeters).toBe(826.73); expect(lap.secondsPerKm).toBeCloseTo(300000 / 826.73, 10);
   expect(lap.kmPerHour).toBeCloseTo(826.73 * 12 / 1000, 10);
   expect(lap.projectedTimeSeconds(MARATHON_METERS)).toBeCloseTo(300 * MARATHON_METERS / 826.73, 10);
@@ -25,4 +25,8 @@ test.each([NaN, Infinity, -Infinity])('nonfinite %s is never spoken', value => {
 test('Japanese speech is explicit kana and never relies on English decimal punctuation', () => {
   const message = formatAnnouncement(300000, 826.73, analyzePace(0, 300000, 826.73), { ...DEFAULT_VOICE_ITEMS, totalDistance: false, lapDistance: true });
   expect(message).toContain('れいてんはちさん'); expect(message).not.toMatch(/point|0\.830000|83キロメートル/);
+});
+
+test.each([[4987, '4てんきゅうきゅう'], [5000, '5てんれいれい'], [821, 'れいてんはちに']])('total %sm retains two spoken digits', (meters, speech) => {
+  expect(formatAnnouncement(0, Number(meters), null, DEFAULT_VOICE_ITEMS)).toContain(`総走行距離${speech}キロメートル`);
 });

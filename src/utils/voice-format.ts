@@ -14,7 +14,6 @@ export const DEFAULT_VOICE_ITEMS: VoiceItems = {
   pace: false, speed: false, marathon: false,
 };
 
-const km = (meters: number) => (Math.round(meters / 100) / 10).toFixed(1);
 // Round only at presentation. Japanese kana avoids engine-dependent parsing of
 // decimal punctuation; retaining both digits also makes 1.00 explicit.
 export function lapDistanceSpeech(meters: number): string | null {
@@ -30,7 +29,7 @@ export function lapDistanceSpeech(meters: number): string | null {
 export function formatAnnouncement(elapsedMs: number, totalMeters: number, lap: PaceAnalysis | null, items: VoiceItems): string {
   const parts: string[] = [];
   if (items.elapsed && Number.isFinite(elapsedMs) && elapsedMs >= 0) parts.push(`${Math.floor(elapsedMs / 60_000)}分です`);
-  if (items.totalDistance && Number.isFinite(totalMeters) && totalMeters >= 0) parts.push(`総走行距離${km(totalMeters)}キロメートル`);
+  if (items.totalDistance && Number.isFinite(totalMeters) && totalMeters >= 0) parts.push(`総走行距離${lapDistanceSpeech(totalMeters)}`);
   if (lap && Number.isFinite(lap.distanceMeters) && lap.distanceMeters >= 30 && Number.isFinite(lap.durationMs) && lap.durationMs > 0) {
     const distanceSpeech = lapDistanceSpeech(lap.distanceMeters);
     if (items.lapDistance && distanceSpeech) parts.push(`直近${Math.round(lap.durationMs / 60_000)}分間で${distanceSpeech}`);
