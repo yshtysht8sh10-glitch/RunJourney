@@ -1,5 +1,5 @@
 import { ActiveRun, LocationPoint } from '@/types/run';
-import { detectStop, stateOf, transition } from '@/utils/run-model';
+import { detectStop, stateOf, transition, timeModel } from '@/utils/run-model';
 
 const p = (t: number, m: number, speed: number | undefined = 2, accuracy = 5): LocationPoint => ({ timestamp: t * 1000, latitude: 35 + m / 111195, longitude: 139, accuracy, speed });
 const base = (): ActiveRun => ({ id: 'synthetic', startedAt: new Date(0).toISOString(), createdAt: '', updatedAt: '', points: [], distanceMeters: 0, features: { autoStop: true, break: true }, diagnostics: { entries: [], counts: {}, processed: 0 } });
@@ -62,4 +62,31 @@ test('irregular persisted 5–6s gate samples can resume without exact 10s align
   for (const t of [16.2, 21.6, 27, 32.4]) run = detectStop(run, p(t, (t - 10.8) * 2), 'replay');
   expect(stateOf(run)).toBe('RUNNING');
   expect(run.events?.[1]).toMatchObject({ timestamp: 10800, confirmedAt: 21600 });
+});
+
+test.each([0.7, 2, 4, 6, 8])('bounded %sm foot-stepping/jumping starts Auto Stop despite fast first edge', amplitude => {
+  let run = feed(series(0, 16, 1, t => (t % 2) * amplitude, 2));
+  expect(stateOf(run)).toBe('AUTO_STOP');
+  expect(run.events?.[0]).toMatchObject({ timestamp: 0, confirmedAt: 8000 });
+  expect(timeModel(run, 16000).activeRunningTime).toBe(0);
+  const evidence = run.diagnostics?.trace?.find(e => e.decision === 'STOP_CONFIRMED');
+  expect(evidence?.window).toMatchObject({ stopEvidence: amplitude <= 3 ? 'narrow-stillness' : 'bounded-dwell', movingEdgeRatio: 1 });
+  expect(JSON.stringify(evidence)).not.toMatch(/latitude|longitude/);
+  run = feed(series(17, 40, 1, t => (t - 16) * 2), run);
+  expect(stateOf(run)).toBe('RUNNING');
+  expect(run.events).toHaveLength(2);
+  expect(run.events?.[1].confirmedAt! - run.events?.[1].timestamp!).toBeLessThanOrEqual(10000);
+});
+
+test('a wider loop, coherent slow jog and inaccurate observations cannot establish bounded dwell', () => {
+  for (const points of [series(0, 30, 1, t => t * 1.2), series(0, 30, 1, t => Math.sin(t / 2) * 8)]) {
+    expect(feed(points).events ?? []).toHaveLength(0);
+  }
+  const run = feed(series(0, 30, 1, t => t % 2 * 6).map(point => ({ ...point, accuracy: 100 })));
+  expect(run.events ?? []).toHaveLength(0);
+});
+
+test('Auto Stop OFF preserves all motion without inferred events', () => {
+  const run = feed(series(0, 30, 1, t => t % 2 * 6), { ...base(), features: { autoStop: false, break: true } });
+  expect(run.events ?? []).toHaveLength(0);
 });

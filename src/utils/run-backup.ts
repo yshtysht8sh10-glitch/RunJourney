@@ -74,7 +74,7 @@ export function validateRuns(values: unknown): asserts values is RunRecord[] {
     }
     if (run.recovery !== undefined) {
       const recovery = object(run.recovery, `${path}.recovery`);
-      if (recovery.algorithm !== 'window-v4') invalid(`${path}.recovery.algorithm`);
+      if (!['window-v4', 'window-v5-stop-dwell'].includes(recovery.algorithm as string)) invalid(`${path}.recovery.algorithm`);
       date(recovery.appliedAt, `${path}.recovery.appliedAt`);
       // Reuse normal event validation without reinterpreting original fields.
       validateRuns([{ ...run, recovery: undefined, detector: undefined, diagnostics: undefined, events: recovery.events }]);

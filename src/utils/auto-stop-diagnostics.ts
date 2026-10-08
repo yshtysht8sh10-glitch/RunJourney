@@ -1,6 +1,7 @@
 import { ActiveRun, RunRecord } from '@/types/run';
 import { legacyDetectStop } from '@/utils/legacy-auto-stop-audit';
 import { detectStop, detectStopV3, RUN_CONTROL, stateOf } from '@/utils/run-model';
+import { MOVEMENT_ALGORITHM } from '@/utils/movement-inference';
 import { distanceBetween } from '@/utils/distance';
 import { observationDiagnosticSummary } from '@/utils/gps-observation';
 
@@ -39,7 +40,7 @@ export function diagnosticReport(run: ActiveRun, buildHash: string) {
     v3 = detectStopV3(v3, point);
     replay = detectStop(replay, point, 'replay');
   });
-  return { schema: 2, buildHash, runId: run.id, startedAt: run.startedAt, endedAt: run.endedAt,
+  return { schema: 2, movementAlgorithm: MOVEMENT_ALGORITHM, buildHash, runId: run.id, startedAt: run.startedAt, endedAt: run.endedAt,
     featuresSnapshot: run.features ?? { autoStop: false, break: false }, rawPointCount: run.points.length,
     actualEvents: run.events ?? [], recovery: run.recovery ?? null,
     liveEvidence: { retainedDecisions: run.diagnostics?.entries.length ?? 0, firstRetainedAt: run.diagnostics?.entries[0]?.timestamp ?? null, candidateTrace: run.diagnostics?.trace ?? [], traceDropped: run.diagnostics?.traceDropped ?? 0 }, overrides: run.stopOverrides ?? {}, quality,

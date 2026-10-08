@@ -174,14 +174,14 @@ export function detectStop(run: ActiveRun, point: LocationPoint, inputSource: St
   for (let i = 0; i < window.length - 1; i++) {
     const suffix = window.slice(i), inference = inferMovement(suffix);
     if (!inference[target]) continue;
-    if (target === 'stationary' && distanceBetween(suffix[0], suffix[1]) / ((suffix[1].timestamp - suffix[0].timestamp) / 1000) > 0.5) continue;
+    if (target === 'stationary' && !inference.boundedDwell && distanceBetween(suffix[0], suffix[1]) / ((suffix[1].timestamp - suffix[0].timestamp) / 1000) > 0.5) continue;
     if (target === 'moving' && distanceBetween(suffix[0], suffix[1]) / ((suffix[1].timestamp - suffix[0].timestamp) / 1000) < 0.5) continue;
     candidate = suffix; break;
   }
   const inference = inferMovement(candidate ?? window);
   detail.window = inference.summary;
   const first = window[0];
-  const provisionalStill = state === 'RUNNING' && first && inferMovement(window).summary.spread <= 3 ? first.timestamp : undefined;
+  const provisionalStill = state === 'RUNNING' && first && (inferMovement(window).summary.spread <= 3 || inferMovement(window).stationary) ? first.timestamp : undefined;
   const movingStart = state === 'AUTO_STOP' ? window.find((p, i) => {
     const next = window[i + 1];
     return next && distanceBetween(p, next) / ((next.timestamp - p.timestamp) / 1000) >= 0.5

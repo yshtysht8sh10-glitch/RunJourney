@@ -45,7 +45,7 @@ export type StopDiagnostic = {
   intervalMs?: number; candidateStartedAt?: number; candidateAgeMs?: number;
   decision: 'START' | 'CONTINUE' | 'RESET' | 'HOLD' | 'SKIP' | 'STOP_CONFIRMED' | 'RESUME_CONFIRMED';
   inputSource?: 'live-observation' | 'live-persisted' | 'replay';
-  window?: { durationMs: number; validCount: number; displacement: number; pathLength: number; spread: number; speedMedian?: number; coherence: number };
+  window?: { durationMs: number; validCount: number; displacement: number; pathLength: number; spread: number; speedMedian?: number; coherence: number; displacementSpeed?: number; movingEdgeRatio?: number; stopEvidence?: 'narrow-stillness' | 'bounded-dwell' | 'none' };
   effectiveTimestamp?: number; confirmedAt?: number;
   reason?: StopReasonCode;
 };
