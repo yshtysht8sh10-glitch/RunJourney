@@ -1,0 +1,14 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+group = 'app.runjourney.storage'
+version = '1.0.0'
+android {
+  namespace 'app.runjourney.storage'
+  defaultConfig {
+    versionCode 1
+    versionName '1.0.0'
+    minSdkVersion 26
+  }
+}
