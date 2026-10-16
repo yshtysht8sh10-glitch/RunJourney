@@ -27,6 +27,8 @@
     "expo-system-ui": "~57.0.4",
     "expo-task-manager": "~57.0.20",
     "expo-web-browser": "~57.0.3",
+    "firebase": "12.4.0",
+    "leaflet": "^1.9.4",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-native": "0.86.3",
@@ -39,6 +41,7 @@
   },
   "devDependencies": {
     "@types/jest": "29.5.14",
+    "@types/leaflet": "^1.9.22",
     "@types/react": "~19.2.2",
     "eslint": "^9.0.0",
     "eslint-config-expo": "~57.0.2",
@@ -55,7 +58,11 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
-    "test": "jest --runInBand"
+    "test": "jest --runInBand",
+    "web:build": "expo export --platform web",
+    "sync:emulators": "npx --yes firebase-tools@15.34.0 emulators:start --only auth,firestore --project demo-runjourney --config firebase.runjourney.json",
+    "sync:demo": "node scripts/sync-demo.cjs",
+    "test:sync:emulator": "node --test scripts/sync-emulator.test.cjs"
   },
   "jest": {
     "preset": "jest-expo",
