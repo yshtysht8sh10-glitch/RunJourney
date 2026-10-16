@@ -8,17 +8,17 @@ import {
   TextInput,
   View,
 } from "react-native";
-import * as Crypto from "expo-crypto";
+
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signOut,
 } from "firebase/auth";
-import { emulatorClient, firebaseTransport } from "../sync/firebase";
-import { RunSyncQueue, QueueEntry } from "../sync/protocol";
+import { emulatorClient, firebasePagedTransport } from "../sync/firebase";
+import { PagedSyncQueue } from "../sync/paged-protocol";
 import { RunRepository } from "../repositories/run-repository";
 import Storage from "../repositories/storage";
-import { RunRecord } from "../types/run";
+import { RunSummary } from "../domain/pages";
 
 // Separate opt-in screen. Recording/STOP and production data paths never depend on sync.
 export default function CloudSyncScreen() {
@@ -28,9 +28,9 @@ export default function CloudSyncScreen() {
   const [uid, setUid] = useState(""),
     [busy, setBusy] = useState(false),
     [message, setMessage] = useState("");
-  const [preview, setPreview] = useState<RunRecord[]>([]),
-    [entries, setEntries] = useState<QueueEntry[]>([]);
-  const [queue, setQueue] = useState<RunSyncQueue | null>(null);
+  const [preview, setPreview] = useState<RunSummary[]>([]),
+    [entries, setEntries] = useState<PagedSyncQueue["state"]>([]);
+  const [queue, setQueue] = useState<PagedSyncQueue | null>(null);
   async function work(action: () => Promise<void>) {
     setBusy(true);
     setMessage("");
@@ -49,16 +49,15 @@ export default function CloudSyncScreen() {
       ? createUserWithEmailAndPassword(client.auth, email, password)
       : signInWithEmailAndPassword(client.auth, email, password));
     const owner = credential.user.uid,
-      key = `@runjourney/sync/emulator/${owner}`;
-    const next = new RunSyncQueue(
+      key = `@runjourney/sync/paged-v2/emulator/${owner}`;
+    const next = new PagedSyncQueue(
       owner,
       {
         load: () => Storage.getItem(key),
         save: (value) => Storage.setItem(key, value),
       },
-      firebaseTransport(client, owner),
-      (text) =>
-        Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, text),
+      RunRepository.pagedSource,
+      firebasePagedTransport(client, owner),
     );
     await next.open();
     setQueue(next);
@@ -123,16 +122,20 @@ export default function CloudSyncScreen() {
             "送信対象の履歴を確認（まだ送信しません）",
             () =>
               void work(async () => {
-                setPreview(
-                  (await RunRepository.getBackupRuns()).filter(
-                    (r) => r.trashedAt === undefined,
-                  ),
-                );
+                const selected: RunSummary[] = [];
+                for (let offset = 0; ; offset += 200) {
+                  const page = await RunRepository.getReviewPage(200, offset);
+                  selected.push(
+                    ...page.filter((r) => r.trashedAt === undefined),
+                  );
+                  if (page.length < 200) break;
+                }
+                setPreview(selected);
               }),
           )}
           <Text style={styles.text}>
             対象 {preview.length}件 / GPS{" "}
-            {preview.reduce((s, r) => s + r.points.length, 0)}
+            {preview.reduce((s, r) => s + r.pointCount, 0)}
             点。draftとごみ箱は対象外。
           </Text>
           {preview.length > 0 &&
@@ -140,7 +143,7 @@ export default function CloudSyncScreen() {
               "表示した履歴をEmulator送信キューへ登録",
               () =>
                 void work(async () => {
-                  for (const run of preview) await queue!.enqueue(run);
+                  for (const run of preview) await queue!.enqueue(run.id);
                   setPreview([]);
                   setMessage(
                     "SQLiteの同期キューへ登録しました。原記録は変更していません",
@@ -160,8 +163,8 @@ export default function CloudSyncScreen() {
               }),
           )}
           {entries.map((e) => (
-            <Text key={e.run.id} style={styles.text}>
-              {e.run.id} · {e.status} · 試行 {e.attempts} ·{" "}
+            <Text key={e.id} style={styles.text}>
+              {e.id} · {e.status} · 試行 {e.attempts} ·{" "}
               {e.error ?? "エラーなし"}
             </Text>
           ))}

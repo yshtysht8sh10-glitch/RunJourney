@@ -7,8 +7,9 @@ import { database } from '@/repositories/database';
 import { encodeBackup, decodeBackup } from '@/repositories/sqlite-backup';
 /// <reference types="node" />
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { syntheticRun } from '@/test/long-run';
+import { SCHEMA_VERSION } from '@/repositories/sqlite-store';
+import { effectiveRun } from '@/utils/run-model';
 
 jest.mock('@/tasks/location-task', () => ({ LOCATION_TASK_NAME: 'sqlite-test-task' }));
 jest.mock('@/utils/build', () => ({ isStandaloneTest: () => true }));
@@ -58,13 +59,12 @@ test('v2 backup checksum and draft/settings round trip use the production SQLite
   resetNative(); await RunRepository.restoreSnapshot(decoded.snapshot);
   expect(await db.snapshot()).toEqual(decoded.snapshot);
   await expect(decodeBackup(backup.replace('true','false'),digest)).rejects.toThrow();
-  expect((await connection.getAllAsync<{user_version:number}>('PRAGMA user_version'))[0].user_version).toBe(1);
+  expect((await connection.getAllAsync<{user_version:number}>('PRAGMA user_version'))[0].user_version).toBe(SCHEMA_VERSION);
 });
 test('rescued 23 + ended draft remain intact; explicit draft completion and new START use one SQLite', async () => {
-  const source = readFileSync('.expo/rescue-active-root.txt','utf8').trim();
-  const manifest = JSON.parse(readFileSync(join(source,'session-original','manifest.json'),'utf8'));
-  const read = (key:string) => JSON.parse(readFileSync(join(source,'session-original',manifest.entries.find((e:{key:string})=>e.key===key).file),'utf8'));
-  const originalRuns = read('@runjourney/runs/v1'); const draft = read('@runjourney/active-run/v1');
+  const originalRuns = Array.from({ length: 23 }, (_, i) => syntheticRun(.01, 5000, `synthetic-preserved-${i}`));
+  const draft = syntheticRun(.01, 5000, 'synthetic-ended-draft');
+  draft.distanceMeters = effectiveRun(draft).distanceMeters;
   await RunRepository.restoreSnapshot({runs:originalRuns,draft,settings:{},protectedIds:[...originalRuns.map((run:{id:string})=>run.id),draft.id]});
   expect(await RunRepository.getBackupRuns()).toEqual(originalRuns);
   expect(await RunService.restoreActiveRun()).toEqual(draft);

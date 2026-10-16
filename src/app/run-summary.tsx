@@ -3,19 +3,20 @@ import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { RunRepository } from '@/repositories/run-repository';
-import { RunRecord } from '@/types/run';
-import { effectiveRun } from '@/utils/run-model';
+import { RunSummary as SavedRunSummary } from '@/domain/pages';
+import { runMetrics } from '@/domain/review';
 
 export default function RunSummary() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const [run, setRun] = useState<RunRecord | null>(null);
+  const [run, setRun] = useState<SavedRunSummary | null>(null);
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
   useFocusEffect(useCallback(() => {
     let mounted = true;
     setRun(null); setError('');
-    RunRepository.getRun(id).then(savedRun => {
+    RunRepository.pagedSource(id).summary().then(savedRun => {
       if (!mounted) return;
+      if (savedRun.error) throw new Error(savedRun.error);
       const saved = savedRun;
       setRun(saved); setError(saved ? '' : '記録を確認できませんでした。履歴を確認してください。');
     }).catch(() => mounted && setError('記録を読み込めませんでした。'));
@@ -23,7 +24,7 @@ export default function RunSummary() {
   // A retry deliberately re-runs the focused read, even when the ID is unchanged.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, attempt]));
-  const effective = run ? effectiveRun(run) : null;
+  const effective = run ? runMetrics(run) : null;
   const seconds = effective?.pace.secondsPerKm;
   return <SafeAreaView style={styles.screen}><ScrollView contentContainerStyle={styles.content}>
     <Text style={styles.title}>本日のRUN完了！</Text>

@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "dependencies": {
     "@expo/ui": "~57.0.20",
+    "@noble/hashes": "1.8.0",
     "expo": "~57.0.25",
     "expo-application": "~57.0.3",
     "expo-clipboard": "~57.0.2",
@@ -63,7 +64,9 @@
     "sync:emulators": "npx --yes firebase-tools@15.34.0 emulators:start --only auth,firestore --project demo-runjourney --config firebase.runjourney.json",
     "sync:demo": "node scripts/sync-demo.cjs",
     "test:sync:emulator": "node --test scripts/sync-emulator.test.cjs",
-    "web:preview": "node scripts/serve-review.cjs"
+    "web:preview": "node scripts/serve-review.cjs",
+    "test:pages": "node --test scripts/paged-storage.test.cjs",
+    "test:long": "node --test scripts/long-run.test.cjs"
   },
   "jest": {
     "preset": "jest-expo",

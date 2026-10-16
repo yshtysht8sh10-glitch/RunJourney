@@ -1,5 +1,7 @@
 import { applyRecovery, undoRecovery } from '@/utils/run-recovery';
 import { database } from './database';
+import { SqlitePagedStore } from './paged-store';
+import type { PagedRunSource } from '../domain/pages';
 import { SqlSnapshot } from './sqlite-store';
 import { validateSnapshot } from './sqlite-backup';
 
@@ -30,6 +32,11 @@ function serialized<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 export const RunRepository = {
+  getReviewPage(limit = 100, offset = 0) { return serialized(async () => new SqlitePagedStore(await database()).list(limit, offset)); },
+  pagedSource(id: string): PagedRunSource { return {
+    summary: async () => new SqlitePagedStore(await database()).source(id).summary(),
+    read: async (kind, start) => new SqlitePagedStore(await database()).source(id).read(kind, start),
+  }; },
   async getStorageWarning() { return (await database()).diagnosticWarning; },
   pruneDiagnostics(before = new Date(Date.now()-30*86400000).toISOString()) {
     return serialized(async () => (await database()).pruneDiagnostics(before));

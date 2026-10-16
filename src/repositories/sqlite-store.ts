@@ -1,5 +1,7 @@
 import type { ActiveRun, RunRecord } from '../types/run';
 import { effectiveRun } from '../utils/run-model';
+import { PAGE_SCHEMA, migratePageIndex, stampRow } from './paged-store';
+import { hashText, PAGE_ROWS, StreamKind } from '../domain/pages';
 
 export interface SqlConnection {
   execAsync(sql: string): Promise<void>;
@@ -7,9 +9,9 @@ export interface SqlConnection {
   getAllAsync<T>(sql: string, ...params: (string | number | null)[]): Promise<T[]>;
 }
 export const DATABASE_NAME = 'runjourney.sqlite';
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 export type SqlSnapshot = { runs: RunRecord[]; draft: ActiveRun | null; settings: Record<string, string>; protectedIds?: string[] };
-export const SCHEMA = `
+export const V17_SCHEMA = `
 CREATE TABLE runs(id TEXT PRIMARY KEY NOT NULL, status TEXT NOT NULL CHECK(status IN ('draft','completed')),
  started_at TEXT NOT NULL, ended_at TEXT, distance REAL NOT NULL, trashed_at INTEGER,
  effective_distance REAL NOT NULL, effective_time REAL NOT NULL, position INTEGER NOT NULL DEFAULT 0, protected INTEGER NOT NULL DEFAULT 0);
@@ -40,6 +42,7 @@ CREATE TRIGGER completed_gps_insert BEFORE INSERT ON gps_points WHEN (SELECT sta
 CREATE TRIGGER completed_event_insert BEFORE INSERT ON run_events WHEN (SELECT status FROM runs WHERE id=NEW.run_id)='completed'
  BEGIN SELECT RAISE(ABORT,'Completed events are immutable'); END;
 `;
+export const SCHEMA = V17_SCHEMA + PAGE_SCHEMA;
 export function canonical(value: unknown): string {
   const normalize = (v: unknown): unknown => Array.isArray(v) ? v.map(normalize) : v && typeof v === 'object'
     ? Object.fromEntries(Object.entries(v).filter(([, child]) => child !== undefined).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, child]) => [key, normalize(child)])) : v;
@@ -79,6 +82,11 @@ export class SqliteStore {
       try { await this.db.execAsync(SCHEMA); await this.db.execAsync('PRAGMA user_version=1; COMMIT;'); }
       catch (error) { await this.rollback(error); }
     }
+    if (version < 2) {
+      await this.db.execAsync('BEGIN IMMEDIATE');
+      try { await this.db.execAsync(PAGE_SCHEMA); await migratePageIndex(this.db); await this.db.execAsync('PRAGMA user_version=2; COMMIT;'); }
+      catch (error) { await this.rollback(error); }
+    }
     const result = await this.db.getAllAsync<{ quick_check: string }>('PRAGMA quick_check');
     if (result.some(row => row.quick_check !== 'ok')) throw new Error('SQLite整合性検証に失敗しました');
     this.initialized = true;
@@ -102,10 +110,15 @@ export class SqliteStore {
     throw original;
   }
   private async writePart(table: PartTable, id: string, value: unknown) {
+    const kind = table.slice(4) as StreamKind;
     await this.db.runAsync(`DELETE FROM ${table} WHERE run_id=?`, id);
+    await this.db.runAsync('DELETE FROM run_row_hash WHERE run_id=? AND kind=?', id, kind);
     if (value === undefined) return;
     const parts = chunks(canonical(value));
-    for (let i = 0; i < parts.length; i++) await this.db.runAsync(`INSERT INTO ${table}(run_id,chunk,payload) VALUES(?,?,?)`, id, i, parts[i]);
+    for (let i = 0; i < parts.length; i++) {
+      await this.db.runAsync(`INSERT INTO ${table}(run_id,chunk,payload) VALUES(?,?,?)`, id, i, parts[i]);
+      await stampRow(this.db, id, kind, i, parts[i]);
+    }
   }
   private async readPart(table: PartTable, id: string): Promise<unknown> {
     const rows = await this.db.getAllAsync<{ chunk: number; payload: string }>(`SELECT chunk,payload FROM ${table} WHERE run_id=? ORDER BY chunk`, id);
@@ -141,14 +154,25 @@ export class SqliteStore {
     if ('_sqlitePresence' in metadata) throw new Error('予約されたメタデータ名です');
     const effective = effectiveRun(run);
     if (!existing) await this.db.runAsync('INSERT INTO runs(id,status,started_at,ended_at,distance,trashed_at,effective_distance,effective_time,position) VALUES(?,?,?,?,?,?,?,?,(SELECT coalesce(max(position),0)+1 FROM runs))', run.id, 'draft', run.startedAt, run.endedAt ?? null, run.distanceMeters, (run as RunRecord).trashedAt ?? null, effective.distanceMeters, effective.activeRunningTime);
-    const previous = await this.db.getAllAsync<{ seq: number; payload: string }>('SELECT seq,payload FROM gps_points WHERE run_id=? ORDER BY seq', run.id);
+    const [{ total: previousCount }] = await this.db.getAllAsync<{ total: number }>('SELECT count(*) AS total FROM gps_points WHERE run_id=?', run.id);
     const positions = new Map<string, number[]>();
-    for (const point of previous) positions.set(point.payload, [...(positions.get(point.payload) ?? []), point.seq]);
-    const order: number[] = []; let nextSeq = previous.length;
+    for (let start = 0; start < previousCount; start += PAGE_ROWS) {
+      const rows = await this.db.getAllAsync<{ seq: number; payload: string; hash: string }>("SELECT p.seq,p.payload,h.hash FROM gps_points p LEFT JOIN run_row_hash h ON h.run_id=p.run_id AND h.kind='gps' AND h.seq=p.seq WHERE p.run_id=? AND p.seq>=? ORDER BY p.seq LIMIT ?", run.id, start, PAGE_ROWS);
+      if (!rows.length) throw new Error('Raw GPSの欠落を拒否しました');
+      for (let i=0;i<rows.length;i++) {
+        const point=rows[i], hash=hashText(point.payload);
+        if (point.seq!==start+i || hash!==point.hash) throw new Error('Raw GPSの順序・SHA-256異常を拒否しました');
+        positions.set(hash,[...(positions.get(hash)??[]),point.seq]);
+      }
+    }
+    const order: number[] = []; let nextSeq = previousCount;
     for (const point of points) {
-      const payload = canonical(point), matches = positions.get(payload);
+      const payload = canonical(point), matches = positions.get(hashText(payload));
       const seq = matches?.shift() ?? nextSeq++;
-      if (seq >= previous.length) await this.db.runAsync('INSERT INTO gps_points(run_id,seq,payload) VALUES(?,?,?)', run.id, seq, payload);
+      if (seq >= previousCount) {
+        await this.db.runAsync('INSERT INTO gps_points(run_id,seq,payload) VALUES(?,?,?)', run.id, seq, payload);
+        await stampRow(this.db, run.id, 'gps', seq, payload);
+      }
       order.push(seq);
     }
     if ([...positions.values()].some(values => values.length)) throw new Error('Raw GPSの変更・欠落を拒否しました');
@@ -161,9 +185,16 @@ export class SqliteStore {
       await this.db.runAsync('DELETE FROM gps_order WHERE run_id=?', run.id);
       for (let i = 0; i < order.length; i++) await this.db.runAsync('INSERT INTO gps_order(run_id,position,seq) VALUES(?,?,?)', run.id, i, order[i]);
     }
-    const oldEvents = await this.db.getAllAsync<{ payload: string }>('SELECT payload FROM run_events WHERE run_id=? ORDER BY seq', run.id);
-    if (oldEvents.some((row, i) => row.payload !== canonical(events?.[i]))) throw new Error('元イベントの変更・欠落を拒否しました');
-    for (let i = oldEvents.length; i < (events?.length ?? 0); i++) await this.db.runAsync('INSERT INTO run_events(run_id,seq,payload) VALUES(?,?,?)', run.id, i, canonical(events![i]));
+    const [{total:oldEventCount}] = await this.db.getAllAsync<{total:number}>('SELECT count(*) AS total FROM run_events WHERE run_id=?',run.id);
+    for(let start=0;start<oldEventCount;start+=PAGE_ROWS){
+      const rows=await this.db.getAllAsync<{seq:number;payload:string}>('SELECT seq,payload FROM run_events WHERE run_id=? AND seq>=? ORDER BY seq LIMIT ?',run.id,start,PAGE_ROWS);
+      if(!rows.length||rows.some((row,i)=>row.seq!==start+i||row.payload!==canonical(events?.[start+i])))throw new Error('元イベントの変更・欠落を拒否しました');
+    }
+    for (let i = oldEventCount; i < (events?.length ?? 0); i++) {
+      const payload = canonical(events![i]);
+      await this.db.runAsync('INSERT INTO run_events(run_id,seq,payload) VALUES(?,?,?)', run.id, i, payload);
+      await stampRow(this.db, run.id, 'events', i, payload);
+    }
     await this.writePart('run_metadata', run.id, { ...metadata, _sqlitePresence: { events: events !== undefined, diagnostics: diagnostics !== undefined, points: points.length, eventCount: events?.length ?? 0 } });
     await this.writePart('run_operations', run.id, recovery !== undefined || stopOverrides !== undefined ? { recovery, stopOverrides } : undefined);
     if (preserveDiagnostics) {
@@ -171,6 +202,7 @@ export class SqliteStore {
       await this.writePart('run_diagnostics', run.id, diagnostics);
     }
     await this.db.runAsync('UPDATE runs SET status=?,started_at=?,ended_at=?,distance=?,trashed_at=?,effective_distance=?,effective_time=? WHERE id=?', status, run.startedAt, run.endedAt ?? null, run.distanceMeters, (run as RunRecord).trashedAt ?? null, effective.distanceMeters, effective.activeRunningTime, run.id);
+    await this.db.runAsync('INSERT OR REPLACE INTO run_stream_state(run_id,points,events,error) VALUES(?,?,?,NULL)', run.id, points.length, events?.length ?? 0);
   }
   getRun(id: string) { return this.atomic(s => s.readRun(id)); }
   async saveDraft(run: ActiveRun) { await this.atomic(async s => {
@@ -273,6 +305,7 @@ export class SqliteStore {
     return { added, skipped };
   }); }
   pruneDiagnostics(before: string) { return this.atomic(async s => {
+    await s.db.runAsync("DELETE FROM run_row_hash WHERE kind='diagnostics' AND run_id IN(SELECT id FROM runs WHERE status='completed' AND ended_at<?)", before);
     const rows = await s.db.getAllAsync<{ rows: number; bytes: number }>("SELECT count(*) AS rows,coalesce(sum(length(CAST(payload AS BLOB))),0) AS bytes FROM run_diagnostics WHERE run_id IN(SELECT id FROM runs WHERE status='completed' AND ended_at<?)", before);
     await s.db.runAsync("DELETE FROM run_diagnostics WHERE run_id IN(SELECT id FROM runs WHERE status='completed' AND ended_at<?)", before);
     return rows[0];

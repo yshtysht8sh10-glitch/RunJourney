@@ -10,6 +10,8 @@ import {
   runTransaction,
 } from "firebase/firestore";
 import { Manifest, SyncConflict, Transport } from "./protocol";
+import type { PagedRemote, PublishedRun } from "./paged-protocol";
+import { hashText } from "../domain/pages";
 
 // Deliberately emulator-only for this phase. No production project configuration is read.
 export function emulatorClient(host = "127.0.0.1") {
@@ -34,6 +36,69 @@ export function emulatorClient(host = "127.0.0.1") {
     connectFirestoreEmulator(db, host, 8080);
   }
   return { auth, db };
+}
+export function firebasePagedTransport(
+  client: ReturnType<typeof emulatorClient>,
+  uid: string,
+): PagedRemote {
+  const { db, auth } = client;
+  const check = () => {
+    if (!uid || auth.currentUser?.uid !== uid)
+      throw new Error("認証ユーザーが変更されました");
+  };
+  const runDoc = (id: string) =>
+    doc(db, "runjourney", uid, "pagedRuns", encodeURIComponent(id));
+  const blobDoc = (hash: string) => {
+    if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error("不正なページhash");
+    return doc(db, "runjourney", uid, "pageBlobs", hash);
+  };
+  return {
+    async get(id) {
+      check();
+      const value = await getDocFromServer(runDoc(id));
+      return value.exists() ? (value.data() as PublishedRun) : null;
+    },
+    async list() {
+      check();
+      return (
+        await getDocsFromServer(collection(db, "runjourney", uid, "pagedRuns"))
+      ).docs.map((d) => d.data() as PublishedRun);
+    },
+    async getBlob(hash) {
+      check();
+      const value = await getDocFromServer(blobDoc(hash));
+      return value.exists() ? (value.data().data as string) : null;
+    },
+    async putBlob(hash, data) {
+      check();
+      if (
+        hashText(data) !== hash ||
+        new TextEncoder().encode(data).byteLength > 600000
+      )
+        throw new Error("ページhash/容量不一致");
+      const ref = blobDoc(hash);
+      await runTransaction(db, async (tx) => {
+        const prior = await tx.get(ref);
+        check();
+        if (prior.exists()) {
+          if (prior.data().data !== data)
+            throw new SyncConflict("既存ページの内容不一致");
+        } else tx.set(ref, { ownerUid: uid, hash, data });
+      });
+    },
+    async publish(header) {
+      check();
+      const ref = runDoc(header.id);
+      await runTransaction(db, async (tx) => {
+        const prior = await tx.get(ref);
+        check();
+        if (prior.exists()) {
+          if (prior.data().hash !== header.hash)
+            throw new SyncConflict("既存Runのmanifest衝突");
+        } else tx.set(ref, header);
+      });
+    },
+  };
 }
 export function firebaseTransport(
   client: ReturnType<typeof emulatorClient>,

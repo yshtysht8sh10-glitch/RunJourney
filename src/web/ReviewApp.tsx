@@ -7,24 +7,30 @@ import {
   onAuthStateChanged,
   User,
 } from "firebase/auth";
-import { RunRecord } from "../types/run";
+import { RunRecord, LocationPoint } from "../types/run";
+import {
+  PagedRunSource,
+  RunSummary,
+  RunPage,
+  sourceFromRun,
+} from "../domain/pages";
+import { BrowserPageCache, importPagedFile, seedCache } from "./paged-cache";
+import PageInspector, { PageAnalysis } from "./PageInspector";
 import {
   dailyDistances,
   dayKey,
   groupedDistances,
   journey,
   JOURNEY,
-  parseReviewFile,
   runMetrics,
   shiftDay,
   statistics,
   streak,
-  uniqueRuns,
 } from "../domain/review";
 import { demoRuns } from "./demo";
 import RouteMap from "./RouteMap";
-import { emulatorClient, firebaseTransport } from "../sync/firebase";
-import { download } from "../sync/protocol";
+import { emulatorClient, firebasePagedTransport } from "../sync/firebase";
+import { openPaged } from "../sync/paged-protocol";
 import { calculateDistance } from "../utils/distance";
 import "./review.css";
 
@@ -136,17 +142,43 @@ function Chart({
   );
 }
 type Toggles = { map: boolean; journey: boolean; streak: boolean };
+type ReviewRow = RunSummary &
+  Pick<RunRecord, "points" | "createdAt" | "updatedAt">;
+const asRow = (summary: RunSummary): ReviewRow => ({
+  ...summary,
+  points: [],
+  createdAt: "",
+  updatedAt: "",
+});
 export default function ReviewApp() {
   const params = useLocalSearchParams<{ view?: string; run?: string }>();
   const view = typeof params.view === "string" ? params.view : "dashboard";
   useEffect(() => {
     document.title = `RunJourney · ${view}`;
   }, [view]);
-  const [runs, setRuns] = useState<RunRecord[]>([]),
+  const [runs, setRuns] = useState<ReviewRow[]>([]),
     [source, setSource] = useState("未読込"),
     [diagnostic, setDiagnostic] = useState<Record<string, unknown> | null>(
       null,
     );
+  const [cache, setCache] = useState<BrowserPageCache | null>(null);
+  const [context, setContext] = useState<{
+    open(id: string): Promise<PagedRunSource>;
+  } | null>(null);
+  const [gpsPage, setGpsPage] = useState<{ id: string; page: RunPage } | null>(
+    null,
+  );
+  const [analysis, setAnalysis] = useState<{
+    id: string;
+    result: PageAnalysis;
+  } | null>(null);
+  const [progress, setProgress] = useState("");
+  function localCache() {
+    if (cache) return cache;
+    const next = new BrowserPageCache();
+    setCache(next);
+    return next;
+  }
   const [period, setPeriod] = useState(30),
     [unit, setUnit] = useState<"day" | "week" | "month">("day"),
     [zone, setZone] = useState("Asia/Tokyo");
@@ -250,13 +282,40 @@ export default function ReviewApp() {
     () => groupedDistances(dailyDistances(filtered, zone), unit),
     [filtered, zone, unit],
   );
-  const selected = params.run
+  const selectedMetadata = params.run
     ? runs.find((r) => r.id === params.run)
     : active[0];
-  const metrics = useMemo(
-    () => (selected ? runMetrics(selected) : null),
-    [selected],
+  const selected = useMemo(
+    () =>
+      selectedMetadata
+        ? {
+            ...selectedMetadata,
+            points:
+              gpsPage?.id === selectedMetadata.id
+                ? (gpsPage.page.items as LocationPoint[])
+                : [],
+          }
+        : undefined,
+    [selectedMetadata, gpsPage],
   );
+  const range = useMemo(
+    () => ({
+      start: gpsPage?.id === selected?.id ? (gpsPage?.page.start ?? 0) : 0,
+      total: selected?.pointCount ?? 0,
+    }),
+    [gpsPage, selected?.id, selected?.pointCount],
+  );
+  const metrics = useMemo(() => {
+    if (!selected) return null;
+    const result = runMetrics(selected);
+    return analysis?.id === selected.id
+      ? {
+          ...result,
+          laps: () => analysis.result.laps,
+          intervals: analysis.result.intervals,
+        }
+      : result;
+  }, [selected, analysis]);
   const nav = [
     { id: "dashboard", name: "Overview", sub: "ダッシュボード", icon: "◫" },
     { id: "history", name: "Your runs", sub: "走行履歴", icon: "↗" },
@@ -389,38 +448,51 @@ export default function ReviewApp() {
           <div className="toolbar">
             <button
               disabled={busy}
-              onClick={() => {
-                setRuns(uniqueRuns(demoRuns()));
-                setSource("サンプル（架空データ）");
-                setDiagnostic(null);
-                setPage(0);
-              }}
+              onClick={() =>
+                void action(async () => {
+                  const c = localCache();
+                  setRuns(
+                    (await seedCache(c, demoRuns().map(sourceFromRun))).map(
+                      asRow,
+                    ),
+                  );
+                  setContext({ open: (id) => c.source(id) });
+                  setGpsPage(null);
+                  setAnalysis(null);
+                  setSource("サンプル（架空データ）");
+                  setDiagnostic(null);
+                  setPage(0);
+                })
+              }
             >
               サンプルを試す
             </button>
             <label className={`button primary ${busy ? "disabled" : ""}`}>
-              JSONを読み込む
+              JSON / NDJSONを読み込む
               <input
                 type="file"
-                accept=".json,application/json"
+                accept=".json,.ndjson,.jsonl,application/json"
                 disabled={busy}
                 onChange={(e) => {
                   const file = e.target.files?.[0];
                   e.target.value = "";
                   if (file)
                     void action(async () => {
-                      if (file.size > 50 * 1024 * 1024)
-                        throw new Error("ファイル上限は50MBです");
-                      const result = await parseReviewFile(
-                        await file.text(),
-                        browserDigest,
-                      );
-                      if (result.runs) {
-                        setRuns(result.runs);
-                        setSource("ローカルJSON");
+                      const c = localCache(),
+                        importedDiagnostic = await importPagedFile(
+                          file,
+                          c,
+                          setProgress,
+                        );
+                      if (!importedDiagnostic) {
+                        setRuns((await c.list()).map((h) => asRow(h.summary)));
+                        setContext({ open: (id) => c.source(id) });
+                        setGpsPage(null);
+                        setAnalysis(null);
+                        setSource("ローカルファイル");
                         setPage(0);
                       }
-                      setDiagnostic(result.diagnostic);
+                      setDiagnostic(importedDiagnostic);
                     });
                 }}
               />
@@ -430,12 +502,34 @@ export default function ReviewApp() {
         <div className="source-bar">
           <span className="status-dot" /> {source} · {runs.length}件（ごみ箱{" "}
           {runs.length - active.length}件）
-          <span>JSONはブラウザ内だけで処理 · 原本は読み取り専用</span>
+          <span>
+            集計はメタデータのみ · GPSは段階読込 · 取込はタブ専用IndexedDB内 ·
+            原本は読取専用
+          </span>
         </div>
         {busy && (
           <p role="status" className="notice">
             読み込み中…
           </p>
+        )}
+        {!!progress && <p role="status">{progress}</p>}
+        {runs.some((r) => r.error) && (
+          <p role="alert" className="error">
+            一部走行の検証に失敗しています。履歴は消去せず、対象Runのエラーを表示します。
+          </p>
+        )}
+        {["detail", "debugger"].includes(view) && selected && context && (
+          <PageInspector
+            key={`${source}:${selected.id}`}
+            id={selected.id}
+            context={context}
+            showMap={flags.map}
+            onGps={(id, page) => {
+              setGpsPage({ id, page });
+              setPoint(0);
+            }}
+            onAnalysis={(id, result) => setAnalysis({ id, result })}
+          />
         )}
         {error && (
           <p role="alert" className="error">
@@ -591,7 +685,7 @@ export default function ReviewApp() {
                     {localDate(selected.endedAt, zone)}
                   </p>
                   <small>
-                    保存距離 {km(selected.distanceMeters)} km · Run ID{" "}
+                    保存距離 {km(selected.originalDistanceMeters)} km · Run ID{" "}
                     {selected.id}
                   </small>
                 </div>
@@ -614,12 +708,16 @@ export default function ReviewApp() {
                   value={metrics.pace.kmPerHour?.toFixed(1) ?? "—"}
                   unit="km/h"
                 />
-                <Metric label="保存GPS点数" value={selected.points.length} />
+                <Metric label="保存GPS点数" value={selected.pointCount} />
               </div>
               {flags.map && (
                 <section className="panel">
                   <h2>GPS route</h2>
-                  <RouteMap run={selected} selectedIndex={point} />
+                  <RouteMap
+                    run={selected}
+                    selectedIndex={point}
+                    pageRange={range}
+                  />
                 </section>
               )}
               <section className="panel">
@@ -667,7 +765,9 @@ export default function ReviewApp() {
                     </p>
                   ))
                 ) : (
-                  <p>停止区間なし</p>
+                  <p>
+                    未解析です。段階解析ボタンで停止イベント・5分ラップを読み込めます。
+                  </p>
                 )}
                 <p>履歴補正・Apply / Undoは今回のWeb版では未実装です。</p>
               </section>
@@ -805,7 +905,7 @@ export default function ReviewApp() {
                 <>
                   <div className="metrics-grid">
                     <Metric label="Run ID" value={selected.id} />
-                    <Metric label="GPS点数" value={selected.points.length} />
+                    <Metric label="GPS点数" value={selected.pointCount} />
                     <Metric
                       label="buildHash（Run記録内）"
                       value={String(
@@ -828,7 +928,7 @@ export default function ReviewApp() {
                       : "ローカルのみ / 同期エラー記録なし"}
                   </p>
                   <label>
-                    元GPS点インデックス{" "}
+                    ページ内GPS点インデックス{" "}
                     <input
                       type="number"
                       min="0"
@@ -898,14 +998,20 @@ export default function ReviewApp() {
                     onSelect={setPoint}
                   />
                   {flags.map && (
-                    <RouteMap run={selected} selectedIndex={point} />
+                    <RouteMap
+                      run={selected}
+                      selectedIndex={point}
+                      pageRange={range}
+                    />
                   )}
                   <h3>保存イベント / 停止候補・取消・確定</h3>
                   <pre>
                     {JSON.stringify(
                       {
-                        events: selected.events ?? "データなし",
-                        diagnostics: selected.diagnostics ?? "データなし",
+                        events:
+                          "eventsページを明示読み込みしてください（未読込）",
+                        diagnostics:
+                          "diagnosticsページを明示読み込みしてください（未読込）",
                       },
                       null,
                       2,
@@ -917,7 +1023,7 @@ export default function ReviewApp() {
             {diagnostic && (
               <section className="panel">
                 <h2>取り込んだ診断JSON（GPS座標なしの場合、地図生成不可）</h2>
-                <pre>{JSON.stringify(diagnostic, null, 2)}</pre>
+                <pre>{JSON.stringify(diagnostic, null, 2).slice(0, 64000)}</pre>
               </section>
             )}
             {!selected && !diagnostic && (
@@ -957,7 +1063,7 @@ export default function ReviewApp() {
                 </select>
               </label>
               <p>
-                機能は初期状態OFF。設定だけをブラウザに保存し、走行データは保存しません。
+                機能は初期状態OFF。表示設定をブラウザに保存します。取り込んだ記録は下記のタブ専用IndexedDBに保管します。
               </p>
             </section>
             <section className="panel">
@@ -1033,27 +1139,30 @@ export default function ReviewApp() {
                         void action(async () => {
                           const expected = user.uid,
                             client = emulatorClient(),
-                            remote = firebaseTransport(client, expected),
+                            remote = firebasePagedTransport(client, expected),
                             manifests = await remote.list();
-                          const downloaded: RunRecord[] = [];
-                          for (const m of manifests)
-                            downloaded.push(
-                              await download(
-                                m,
-                                expected,
-                                remote,
-                                browserDigest,
-                              ),
-                            );
                           if (client.auth.currentUser?.uid !== expected)
                             throw new Error("アカウントが変更されました");
-                          setRuns(uniqueRuns(downloaded));
+                          setRuns(manifests.map((m) => asRow(m.summary)));
+                          setContext({
+                            open: async (id) => {
+                              const header = manifests.find((m) => m.id === id);
+                              if (!header)
+                                throw new Error("走行manifestが見つかりません");
+                              return openPaged(header, expected, remote);
+                            },
+                          });
+                          setGpsPage(null);
+                          setAnalysis(null);
+                          setProgress(
+                            `${manifests.length}件のメタデータ取得。GPSのダウンロードは0ページです`,
+                          );
                           setSource("Firebase Emulator");
                           setPage(0);
                         })
                       }
                     >
-                      クラウド履歴を読み込む
+                      クラウド履歴を読み込む（GPSなし）
                     </button>
                     <button
                       disabled={busy}
@@ -1078,18 +1187,28 @@ export default function ReviewApp() {
             <section className="panel">
               <h2>ローカルデータ</h2>
               <p>
+                大容量は分割NDJSON/JSONL（512MiBまで）を使用してください。旧JSONの一括解析は5MiBまでです。タブ専用のIndexedDBに保存し、原ファイルの変更・クラウド送信は行いません。タブ終了後も一時DBが残る場合があるため、不要になったら下のボタンで消去してください。
+              </p>
+              <p>
                 対応：バックアップJSON v1 / SQLiteバックアップ
                 v2（SHA-256検証）/ 単体RunRecord / 配列 / Auto Stop診断 schema
                 2。
               </p>
               <button
-                onClick={() => {
-                  setRuns([]);
-                  setDiagnostic(null);
-                  setSource("未読込");
-                }}
+                onClick={() =>
+                  void action(async () => {
+                    if (cache) await cache.dispose();
+                    setCache(null);
+                    setContext(null);
+                    setGpsPage(null);
+                    setAnalysis(null);
+                    setRuns([]);
+                    setDiagnostic(null);
+                    setSource("未読込");
+                  })
+                }
               >
-                ブラウザ内の読み込みデータを閉じる
+                ブラウザ内の一時データを閉じて消去
               </button>
             </section>
           </>

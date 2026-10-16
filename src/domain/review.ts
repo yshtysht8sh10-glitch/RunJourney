@@ -6,10 +6,16 @@ import {
   MAX_BACKUP_BYTES,
 } from "../utils/run-backup";
 import { analyzePace } from "../utils/pace-analysis";
+import type { RunSummary } from './pages';
+type ReviewInput = RunRecord | RunSummary;
+const projection = (run: ReviewInput) => 'kind' in run && run.kind === 'run-summary'
+  ? { distanceMeters: run.distanceMeters, activeRunningTime: run.activeRunningTime }
+  : runMetrics(run as RunRecord);
 
 // Pure shared projections. Original RunRecord, GPS and edit operations are never mutated.
-export function eligible(run: RunRecord) {
+export function eligible(run: ReviewInput) {
   return (
+    !('error' in run && run.error) &&
     run.trashedAt === undefined &&
     Number.isFinite(run.distanceMeters) &&
     run.distanceMeters >= 0 &&
@@ -17,12 +23,17 @@ export function eligible(run: RunRecord) {
     Date.parse(run.endedAt) >= Date.parse(run.startedAt)
   );
 }
-export function runMetrics(run: RunRecord) {
-  return effectiveRun(run, Date.parse(run.endedAt));
+export function runMetrics(run: ReviewInput): ReturnType<typeof effectiveRun> {
+  if ('kind' in run && run.kind === 'run-summary') return {
+    distanceMeters: run.distanceMeters, activeRunningTime: run.activeRunningTime, wallClockElapsed: run.wallClockElapsed,
+    autoStoppedDuration: NaN, breakDuration: NaN, pace: analyzePace(0, run.activeRunningTime, run.distanceMeters), intervals: [],
+    lap: () => { throw new Error('ページ解析が必要です'); }, laps: () => [],
+  };
+  return effectiveRun(run as RunRecord, Date.parse(run.endedAt));
 }
-export function statistics(runs: RunRecord[]) {
+export function statistics(runs: ReviewInput[]) {
   const active = runs.filter(eligible),
-    metrics = active.map(runMetrics);
+    metrics = active.map(projection);
   const distanceMeters = metrics.reduce((sum, m) => sum + m.distanceMeters, 0);
   const activeRunningTime = metrics.reduce(
     (sum, m) => sum + m.activeRunningTime,
@@ -50,11 +61,11 @@ export function shiftDay(day: string, delta: number) {
     .slice(0, 10);
 }
 // Cross-midnight runs belong to their START day, in the selected display timezone.
-export function dailyDistances(runs: RunRecord[], timeZone = "Asia/Tokyo") {
+export function dailyDistances(runs: ReviewInput[], timeZone = "Asia/Tokyo") {
   const days = new Map<string, number>();
   runs.filter(eligible).forEach((run) => {
     const day = dayKey(run.startedAt, timeZone);
-    days.set(day, (days.get(day) ?? 0) + runMetrics(run).distanceMeters);
+    days.set(day, (days.get(day) ?? 0) + projection(run).distanceMeters);
   });
   return days;
 }
@@ -86,7 +97,7 @@ export const JOURNEY = {
     { name: "月", kilometers: 384400, icon: "☾" },
   ],
 };
-export function journey(runs: RunRecord[], config = JOURNEY) {
+export function journey(runs: ReviewInput[], config = JOURNEY) {
   if (
     !Number.isFinite(config.multiplier) ||
     config.multiplier <= 0 ||
@@ -115,7 +126,7 @@ export function journey(runs: RunRecord[], config = JOURNEY) {
   };
 }
 export function streak(
-  runs: RunRecord[],
+  runs: ReviewInput[],
   options: { now?: number; timeZone?: string; thresholdMeters?: number } = {},
 ) {
   const {

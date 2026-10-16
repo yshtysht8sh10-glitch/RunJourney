@@ -10,6 +10,8 @@ Firebaseは今回ローカルEmulatorのみ対応です。`npm run sync:emulator
 
 構成、TaskMemo再利用調査、起動手順、検証結果、未完了事項は [Web / Cloud Analyzer実装報告](docs/web-cloud-analyzer.md) を参照してください。
 
+長時間走行はメタデータとGPSページを分離し、WebはNDJSONをストリーム取込、地図・診断・同期はページ単位で処理します。[長時間走行データ基盤・移行手順・負荷試験](docs/long-run-storage.md) を参照してください。再現は `npm run test:pages` / `npm run test:long`。実機24時間連続記録は未検証です。
+
 React Native / Expo SDK 57 / TypeScriptで実装しています。画面遷移にはExpo Routerを使用しています。
 
 ## Standalone Test APK（Android）

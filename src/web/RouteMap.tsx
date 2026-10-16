@@ -6,9 +6,11 @@ import "leaflet/dist/leaflet.css";
 export default function RouteMap({
   run,
   selectedIndex,
+  pageRange,
 }: {
-  run: RunRecord;
+  run: Pick<RunRecord, "points">;
   selectedIndex?: number;
+  pageRange?: { start: number; total: number; overview?: boolean };
 }) {
   const element = useRef<HTMLDivElement>(null),
     map = useRef<Leaflet.Map | null>(null),
@@ -71,18 +73,24 @@ export default function RouteMap({
         if (valid.length) {
           const start = valid[0],
             end = valid.at(-1)!;
-          L.circleMarker([start.latitude, start.longitude], {
-            color: "#4ad6b0",
-            radius: 8,
-          })
-            .addTo(instance)
-            .bindTooltip("START");
-          L.circleMarker([end.latitude, end.longitude], {
-            color: "#f0d174",
-            radius: 5,
-          })
-            .addTo(instance)
-            .bindTooltip("STOP");
+          if (!pageRange || pageRange.start === 0)
+            L.circleMarker([start.latitude, start.longitude], {
+              color: "#4ad6b0",
+              radius: 8,
+            })
+              .addTo(instance)
+              .bindTooltip("START");
+          if (
+            !pageRange ||
+            pageRange.overview ||
+            pageRange.start + run.points.length === pageRange.total
+          )
+            L.circleMarker([end.latitude, end.longitude], {
+              color: "#f0d174",
+              radius: 5,
+            })
+              .addTo(instance)
+              .bindTooltip("STOP");
           const bounds = L.latLngBounds(
             valid.map((p) => [p.latitude, p.longitude] as Leaflet.LatLngTuple),
           );
@@ -96,7 +104,7 @@ export default function RouteMap({
       map.current = null;
       selected.current = null;
     };
-  }, [run, tiles]);
+  }, [run, tiles, pageRange]);
   useEffect(() => {
     let disposed = false;
     void import("leaflet").then((L) => {
@@ -120,17 +128,25 @@ export default function RouteMap({
           fillOpacity: 1,
         })
           .addTo(map.current)
-          .bindTooltip(`GPS #${selectedIndex}`)
+          .bindTooltip(`GPS #${(pageRange?.start ?? 0) + (selectedIndex ?? 0)}`)
           .openTooltip();
     });
     return () => {
       disposed = true;
     };
-  }, [run, selectedIndex, tiles]);
+  }, [run, selectedIndex, tiles, pageRange]);
   return (
     <>
       <div className="map-tools">
-        <span>START ● → STOP ● · 保存GPS {run.points.length}点</span>
+        <span>
+          {pageRange?.overview
+            ? "保存点から抽出した全体概要"
+            : pageRange
+              ? run.points.length ? `GPSページ #${pageRange.start}–${pageRange.start + run.points.length - 1}` : "GPSは未読み込み"
+              : "START ● → STOP ●"}{" "}
+          · 表示 {run.points.length}点
+          {pageRange ? ` / 元 ${pageRange.total}点` : ""}
+        </span>
         <button onClick={() => setTiles((v) => !v)}>
           {tiles ? "背景地図をOFF" : "背景地図を読み込む"}
         </button>

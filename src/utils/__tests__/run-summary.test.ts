@@ -10,6 +10,7 @@ import RunSummary from '@/app/run-summary';
 import { StopButton } from '@/components/stop-button';
 import { ActiveRun } from '@/types/run';
 import { effectiveRun } from '@/utils/run-model';
+import { sourceFromRun } from '@/domain/pages';
 
 jest.mock('expo-router', () => ({ router: { replace: jest.fn() }, useLocalSearchParams: () => ({ id: 'summary' }),
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -90,9 +91,13 @@ test('failed STOP shows retry and only navigates after retry success', async () 
 });
 
 test('summary loading failure never reports successful persistence and reload is available', async () => {
-  jest.spyOn(RunRepository, 'getRun').mockRejectedValueOnce(new Error('read failure')).mockResolvedValueOnce({ ...draft(), endedAt: new Date(10000).toISOString() });
+  const source = sourceFromRun({ ...draft(), endedAt: new Date(10000).toISOString() });
+  const summary = await source.summary();
+  jest.spyOn(RunRepository, 'pagedSource').mockReturnValue({ ...source, summary: jest.fn().mockRejectedValueOnce(new Error('read failure')).mockResolvedValueOnce(summary) });
+  const fullRead = jest.spyOn(RunRepository, 'getRun');
   await act(async () => { tree = create(createElement(RunSummary)); });
   expect(tree!.root.findAllByProps({ testID: 'summary-saved' })).toHaveLength(0);
   await act(async () => { tree!.root.findByProps({ testID: 'summary-retry' }).props.onPress(); });
   expect(tree!.root.findByProps({ testID: 'summary-saved' }).props.children).toBe('履歴に保存しました');
+  expect(fullRead).not.toHaveBeenCalled();
 });
