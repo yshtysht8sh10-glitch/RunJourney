@@ -139,7 +139,9 @@ type Toggles = { map: boolean; journey: boolean; streak: boolean };
 export default function ReviewApp() {
   const params = useLocalSearchParams<{ view?: string; run?: string }>();
   const view = typeof params.view === "string" ? params.view : "dashboard";
-  useEffect(() => { document.title = `RunJourney · ${view}`; }, [view]);
+  useEffect(() => {
+    document.title = `RunJourney · ${view}`;
+  }, [view]);
   const [runs, setRuns] = useState<RunRecord[]>([]),
     [source, setSource] = useState("未読込"),
     [diagnostic, setDiagnostic] = useState<Record<string, unknown> | null>(

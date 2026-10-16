@@ -764,4 +764,6 @@ footer {
 .review-main {
   background: #11171b;
 }
-.review-main a { color: #8ad3be; }
+.review-main a {
+  color: #8ad3be;
+}

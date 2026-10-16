@@ -98,7 +98,9 @@ export default function RouteMap({
     };
   }, [run, tiles]);
   useEffect(() => {
+    let disposed = false;
     void import("leaflet").then((L) => {
+      if (disposed) return;
       selected.current?.remove();
       selected.current = null;
       const p =
@@ -121,7 +123,10 @@ export default function RouteMap({
           .bindTooltip(`GPS #${selectedIndex}`)
           .openTooltip();
     });
-  }, [run, selectedIndex]);
+    return () => {
+      disposed = true;
+    };
+  }, [run, selectedIndex, tiles]);
   return (
     <>
       <div className="map-tools">

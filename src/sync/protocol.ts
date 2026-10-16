@@ -85,8 +85,11 @@ export async function download(
   digest: Digest,
 ): Promise<RunRecord> {
   if (
-    typeof manifest.id !== 'string' || !manifest.id.trim() || manifest.id.length > 256 ||
-    typeof manifest.hash !== 'string' || !/^[0-9a-f]{64}$/.test(manifest.hash) ||
+    typeof manifest.id !== "string" ||
+    !manifest.id.trim() ||
+    manifest.id.length > 256 ||
+    typeof manifest.hash !== "string" ||
+    !/^[0-9a-f]{64}$/.test(manifest.hash) ||
     manifest.ownerUid !== uid ||
     manifest.schemaVersion !== 1 ||
     manifest.revision !== 1 ||

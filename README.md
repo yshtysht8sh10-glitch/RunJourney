@@ -1,6 +1,14 @@
 # RunJourney v0.1
 
-Android実機で、画面OFF中もGPS軌跡・距離・日時を記録する最小構成のランニング記録アプリです。記録と進行中データは端末内のAsyncStorageへ保存します。
+Android実機で、画面OFF中もGPS軌跡・距離・日時を記録するランニング記録アプリです。この開発ブランチでは記録と進行中データを端末内のSQLiteへ保存します。Production・安定Test v17の更新インストールには別途明示承認が必要です。
+
+## PC Web Review（#29）
+
+`npm run web` で起動します。「サンプルを試す」または「JSONを読み込む」から、Dashboard・履歴詳細・地図・Journey・Streak・診断を閲覧できます。地図/Journey/StreakはSettingsでONにしてください。Webでの走行計測・原GPSの編集は提供しません。
+
+Firebaseは今回ローカルEmulatorのみ対応です。`npm run sync:emulators` → 別ターミナルで `npm run sync:demo` により、架空SQLite記録を同期してWebで確認できます。本番接続・公開デプロイ・実走データの送信は行いません。
+
+構成、TaskMemo再利用調査、起動手順、検証結果、未完了事項は [Web / Cloud Analyzer実装報告](docs/web-cloud-analyzer.md) を参照してください。
 
 React Native / Expo SDK 57 / TypeScriptで実装しています。画面遷移にはExpo Routerを使用しています。
 

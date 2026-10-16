@@ -62,7 +62,8 @@
     "web:build": "expo export --platform web",
     "sync:emulators": "npx --yes firebase-tools@15.34.0 emulators:start --only auth,firestore --project demo-runjourney --config firebase.runjourney.json",
     "sync:demo": "node scripts/sync-demo.cjs",
-    "test:sync:emulator": "node --test scripts/sync-emulator.test.cjs"
+    "test:sync:emulator": "node --test scripts/sync-emulator.test.cjs",
+    "web:preview": "node scripts/serve-review.cjs"
   },
   "jest": {
     "preset": "jest-expo",
