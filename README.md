@@ -12,6 +12,8 @@ Firebaseは今回ローカルEmulatorのみ対応です。`npm run sync:emulator
 
 長時間走行はメタデータとGPSページを分離し、WebはNDJSONをストリーム取込、地図・診断・同期はページ単位で処理します。[長時間走行データ基盤・移行手順・負荷試験](docs/long-run-storage.md) を参照してください。再現は `npm run test:pages` / `npm run test:long`。実機24時間連続記録は未検証です。
 
+Streakは [週間目標・連続達成週数](docs/weekly-streak.md) がメインです（初期値は週4日）。日次連続記録は参考情報とし、毎日走ることを促しません。Settingsで週間目標・日次有効条件・週開始曜日を変更できます。
+
 React Native / Expo SDK 57 / TypeScriptで実装しています。画面遷移にはExpo Routerを使用しています。
 
 ## Standalone Test APK（Android）

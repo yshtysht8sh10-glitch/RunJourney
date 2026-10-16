@@ -1,3 +1,4 @@
+import { weeklyStreak, DEFAULT_WEEKLY_GOAL, validateWeeklyGoal, WeeklyGoal } from '../domain/weekly-streak';
 import { useEffect, useMemo, useState } from "react";
 import { Link, router, useLocalSearchParams } from "expo-router";
 import {
@@ -179,6 +180,9 @@ export default function ReviewApp() {
     setCache(next);
     return next;
   }
+  const [weeklyGoal, setWeeklyGoal] = useState<WeeklyGoal>(DEFAULT_WEEKLY_GOAL);
+  useEffect(() => { const timer = setTimeout(() => { try { const saved = localStorage.getItem('runjourney-weekly-goal-v1'); if (saved) setWeeklyGoal(validateWeeklyGoal(JSON.parse(saved))); } catch { /* keep defaults */ } }, 0); return () => clearTimeout(timer); }, []);
+  function updateWeeklyGoal(next: WeeklyGoal) { try { validateWeeklyGoal(next); localStorage.setItem('runjourney-weekly-goal-v1', JSON.stringify(next)); setWeeklyGoal(next); } catch { setError('週間目標を保存できませんでした'); } }
   const [period, setPeriod] = useState(30),
     [unit, setUnit] = useState<"day" | "week" | "month">("day"),
     [zone, setZone] = useState("Asia/Tokyo");
@@ -275,9 +279,10 @@ export default function ReviewApp() {
   );
   const trip = useMemo(() => journey(active), [active]),
     chain = useMemo(
-      () => streak(active, { timeZone: zone, now }),
-      [active, zone, now],
+      () => streak(active, { timeZone: zone, now, thresholdMeters: weeklyGoal.thresholdMeters }),
+      [active, zone, now, weeklyGoal.thresholdMeters],
     );
+  const weekly = useMemo(() => weeklyStreak(active, { now, timeZone: zone, goal: weeklyGoal }), [active, now, zone, weeklyGoal]);
   const groups = useMemo(
     () => groupedDistances(dailyDistances(filtered, zone), unit),
     [filtered, zone, unit],
@@ -323,7 +328,7 @@ export default function ReviewApp() {
       ? [{ id: "journey", name: "Journey", sub: "月までの旅路", icon: "☾" }]
       : []),
     ...(flags.streak
-      ? [{ id: "streak", name: "Streak", sub: "連続ランニング", icon: "✦" }]
+      ? [{ id: "streak", name: "Streak", sub: "週間目標・継続", icon: "✦" }]
       : []),
     { id: "debugger", name: "Diagnostics", sub: "デバッガ", icon: "⌁" },
     { id: "settings", name: "Settings", sub: "設定・クラウド", icon: "⚙" },
@@ -639,17 +644,15 @@ export default function ReviewApp() {
               )}
               {flags.streak && (
                 <section className="panel">
-                  <h2>✦ Streak</h2>
+                  <h2>✦ 週間Streak</h2>
                   <strong className="big">
-                    {chain.current}
-                    <small>日連続</small>
+                    {weekly.current}
+                    <small>週連続</small>
                   </strong>
                   <p>
-                    {chain.todayAchieved
-                      ? "今日の目標を達成しました！"
-                      : `今日の目標まで ${(chain.remainingMeters / 1000).toFixed(2)} km`}
+                    今週 {weekly.count}/{weekly.goal.days}日 · {weekly.thisWeekAchieved ? '今週達成。残りの日は休養しても記録に不利益はありません。' : '今週は進行中です。休養を含めて無理のないペースで。'}
                   </p>
-                  <p>最高記録 {chain.best}日</p>
+                  <p>最高記録 {weekly.best}週</p>
                 </section>
               )}
             </div>
@@ -832,45 +835,25 @@ export default function ReviewApp() {
             <>
               <section className="hero">
                 <div>
-                  <small>KEEP SHOWING UP</small>
-                  <div className="hero-number">
-                    {chain.current}
-                    <span>日連続</span>
-                  </div>
-                  <p>
-                    {chain.todayAchieved
-                      ? "今日も達成。おつかれさまでした。"
-                      : `今日はあと ${(chain.remainingMeters / 1000).toFixed(2)} km。`}
-                  </p>
+                  <small>RUN AT YOUR OWN PACE</small>
+                  <div className="hero-number">{weekly.current}<span>週連続達成</span></div>
+                  <p>今週 {weekly.count}/{weekly.goal.days}日 · {weekly.thisWeekAchieved ? '今週達成' : '今週は進行中'}</p>
+                  <p>休養を含めて、長く続ける。痛みや疲労がある日は休養を優先してください。</p>
                 </div>
                 <div className="streak-star">✦</div>
               </section>
               <div className="two-col">
                 <section className="panel">
-                  <h2>直近35日の達成カレンダー</h2>
-                  <div className="calendar">
-                    {chain.calendar.map((d) => (
-                      <div
-                        key={d.day}
-                        className={d.achieved ? "achieved" : ""}
-                        title={`${d.day}: ${km(d.meters)} km`}
-                      >
-                        <small>{d.day.slice(5)}</small>
-                        <b>{d.achieved ? "✓" : "·"}</b>
-                      </div>
-                    ))}
-                  </div>
+                  <h2>週間目標の達成カレンダー</h2>
+                  <p>✓ 達成走行日 / ○ 走行記録あり・条件未達 / · 未記録 / — これからの日。休養登録は未実装のため、未記録を休養と断定しません。</p>
+                  <div className="calendar">{weekly.calendar.map(d => <div key={d.day} className={d.state === 'achieved' ? 'achieved' : ''} title={`${d.day}: ${km(d.meters)} km / ${d.minutes.toFixed(1)}分`}><small>{d.day.slice(5)}</small><b>{d.state === 'achieved' ? '✓' : d.state === 'recorded' ? '○' : d.state === 'future' ? '—' : '·'}</b></div>)}</div>
                 </section>
                 <section className="panel">
-                  <Metric label="過去最高Streak" value={chain.best} unit="日" />
-                  <p>
-                    1日合計 {chain.thresholdMeters / 1000}{" "}
-                    km以上のEffective走行で達成。
-                  </p>
-                  <p>
-                    日付は{zone}
-                    。日を跨ぐ走行は開始日に全距離を計上。ごみ箱は除外。今日が未達成でも昨日までの連続記録を保持します。
-                  </p>
+                  <Metric label="過去最高週間Streak" value={weekly.best} unit="週" />
+                  <p>今週 {weekly.count}/{weekly.goal.days}日。進行中の週が未達でも、前週までの週間Streakを保持し、週終了時に確定します。</p>
+                  <p>同日のEffective走行を合算し、{weekly.goal.thresholdMeters / 1000}km以上{weekly.goal.thresholdMinutes > 0 ? `かつ実走${weekly.goal.thresholdMinutes}分以上` : ''}で1走行日。{zone}・{['日','月','火','水','木','金','土'][weekly.goal.weekStartsOn]}曜始まり。日跨ぎは開始日へ計上、ごみ箱は除外します。</p>
+                  <p>設定変更は過去の全履歴を現在の条件で再評価します。</p>
+                  <details><summary>参考：日次Streak（距離基準）</summary><p>現在 {chain.current}日 / 過去最高 {chain.best}日。日次記録を維持するために走る必要はありません。</p></details>
                 </section>
               </div>
             </>
@@ -1044,7 +1027,7 @@ export default function ReviewApp() {
                       ? "GPS地図"
                       : key === "journey"
                         ? "Journey（月までの旅路）"
-                        : "Streak（連続記録）"}
+                        : "Streak（週間目標・継続）"}
                   </span>
                   <input
                     type="checkbox"
@@ -1062,6 +1045,11 @@ export default function ReviewApp() {
                   <option>Europe/London</option>
                 </select>
               </label>
+              <label className="setting">週間目標の走行日数<select aria-label="週間目標の走行日数" value={weeklyGoal.days} onChange={e => updateWeeklyGoal({ ...weeklyGoal, days: Number(e.target.value) })}>{[1,2,3,4,5,6,7].map(n => <option key={n} value={n}>週{n}日</option>)}</select></label>
+              <label className="setting">週の開始曜日<select aria-label="週の開始曜日" value={weeklyGoal.weekStartsOn} onChange={e => updateWeeklyGoal({ ...weeklyGoal, weekStartsOn: Number(e.target.value) })}>{['日','月','火','水','木','金','土'].map((d,n) => <option key={n} value={n}>{d}曜日</option>)}</select></label>
+              <label className="setting">1日の最低合計距離<select aria-label="1日の最低合計距離" value={weeklyGoal.thresholdMeters} onChange={e => updateWeeklyGoal({ ...weeklyGoal, thresholdMeters: Number(e.target.value) })}>{[500,1000,2000,3000,5000].map(n => <option key={n} value={n}>{n/1000}km</option>)}</select></label>
+              <label className="setting">1日の最低実走時間<select aria-label="1日の最低実走時間" value={weeklyGoal.thresholdMinutes} onChange={e => updateWeeklyGoal({ ...weeklyGoal, thresholdMinutes: Number(e.target.value) })}>{[0,5,10,20,30].map(n => <option key={n} value={n}>{n ? n+'分（距離条件も必要）' : '追加条件なし'}</option>)}</select></label>
+              <p>週間目標の変更は過去の全履歴を再評価します。設定はこのブラウザ内だけに保存し、RunRecordと分離します。</p>
               <p>
                 機能は初期状態OFF。表示設定をブラウザに保存します。取り込んだ記録は下記のタブ専用IndexedDBに保管します。
               </p>
