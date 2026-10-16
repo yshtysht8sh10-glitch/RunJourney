@@ -14,9 +14,9 @@ export default function RunSummary() {
   useFocusEffect(useCallback(() => {
     let mounted = true;
     setRun(null); setError('');
-    RunRepository.getRuns().then(runs => {
+    RunRepository.getRun(id).then(savedRun => {
       if (!mounted) return;
-      const saved = runs.find(record => record.id === id) ?? null;
+      const saved = savedRun;
       setRun(saved); setError(saved ? '' : '記録を確認できませんでした。履歴を確認してください。');
     }).catch(() => mounted && setError('記録を読み込めませんでした。'));
     return () => { mounted = false; };

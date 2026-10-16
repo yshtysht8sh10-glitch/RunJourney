@@ -5,8 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { BuildInfo } from '@/components/build-info';
 import { RunService } from '@/services/run-service';
-import { effectiveRun } from '@/utils/run-model';
-import { RunRecord } from '@/types/run';
+import { RunHistoryItem } from '@/types/run';
 
 const dateFormatter = new Intl.DateTimeFormat('ja-JP', {
   year: 'numeric', month: '2-digit', day: '2-digit',
@@ -21,9 +20,15 @@ function formatRunDateTime(value: string | undefined) {
 }
 
 export default function HistoryScreen() {
-  const [runs, setRuns] = useState<RunRecord[]>([]);
+  const [runs, setRuns] = useState<RunHistoryItem[]>([]);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const load = useCallback(async () => setRuns(await RunService.getHistory()), []);
+  const [loadError, setLoadError] = useState('');
+  const load = useCallback(async () => {
+    try { const page = await RunService.getHistoryPage(); setRuns(page); setHasMore(page.length === 100); setLoadError(''); }
+    catch (error) { setLoadError(error instanceof Error ? error.message : '履歴を読み込めませんでした'); }
+  }, []);
 
   useFocusEffect(useCallback(() => { load().catch(() => undefined); }, [load]));
 
@@ -31,23 +36,33 @@ export default function HistoryScreen() {
     setRefreshing(true);
     try { await load(); } finally { setRefreshing(false); }
   };
+  const more = async () => {
+    if (!hasMore || loadingMore || refreshing || loadError) return;
+    setLoadingMore(true);
+    try { const page = await RunService.getHistoryPage(100,runs.length); setRuns(current => [...current,...page.filter(row => !current.some(r => r.id === row.id))]); setHasMore(page.length === 100); }
+    catch (error) { setLoadError(error instanceof Error ? error.message : '履歴を読み込めませんでした'); }
+    finally { setLoadingMore(false); }
+  };
 
   return (
     <View style={styles.background}>
       <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
         <Text style={styles.title}>履歴</Text>
+        {loadError ? <Text accessibilityRole="alert" style={styles.emptyText}>履歴の読み込みに失敗しました。{loadError}</Text> : null}
         <Pressable testID="open-trash" accessibilityRole="button" onPress={() => router.push('/trash')} style={{ paddingHorizontal: 24, paddingVertical: 14 }}><Text style={styles.date}>ごみ箱 ›</Text></Pressable>
         <View style={styles.buildInfo}><BuildInfo /></View>
         <FlatList
           data={runs}
           keyExtractor={(item) => item.id}
+          onEndReached={() => { void more(); }}
+          onEndReachedThreshold={0.5}
           contentContainerStyle={runs.length ? styles.list : styles.emptyList}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor="#E85D2A" />}
-          ListEmptyComponent={<View style={styles.empty}><Text style={styles.emptyTitle}>まだ記録がありません</Text><Text style={styles.emptyText}>最初のランニングを始めましょう。</Text></View>}
+          ListEmptyComponent={loadError ? null : <View style={styles.empty}><Text style={styles.emptyTitle}>まだ記録がありません</Text><Text style={styles.emptyText}>最初のランニングを始めましょう。</Text></View>}
           renderItem={({ item }) => {
             const started = formatRunDateTime(item.startedAt);
             const ended = formatRunDateTime(item.endedAt);
-            const effective = effectiveRun(item);
+            const effective = { ...item, pace: { kmPerHour: item.kmPerHour } };
             return (
               <Pressable accessibilityRole="button" accessibilityLabel="走行履歴の詳細" onPress={() => router.push({ pathname: '/run-detail', params: { id: item.id } })} style={styles.row}>
                 <View testID="history-when" style={styles.when}>

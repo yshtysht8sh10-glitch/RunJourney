@@ -4,7 +4,6 @@
   "version": "0.1.0",
   "dependencies": {
     "@expo/ui": "~57.0.20",
-    "@react-native-async-storage/async-storage": "2.2.0",
     "expo": "~57.0.25",
     "expo-application": "~57.0.3",
     "expo-clipboard": "~57.0.2",
@@ -22,6 +21,7 @@
     "expo-router": "~57.0.23",
     "expo-sharing": "~57.0.22",
     "expo-splash-screen": "~57.0.9",
+    "expo-sqlite": "~57.0.4",
     "expo-status-bar": "~57.0.1",
     "expo-symbols": "~57.0.3",
     "expo-system-ui": "~57.0.4",
@@ -61,7 +61,19 @@
     "preset": "jest-expo",
     "testMatch": [
       "**/__tests__/**/*.test.ts"
+    ],
+    "setupFilesAfterEnv": [
+      "<rootDir>/jest.setup.js"
     ]
   },
-  "private": true
+  "private": true,
+  "expo": {
+    "autolinking": {
+      "android": {
+        "exclude": [
+          "@react-native-async-storage/async-storage"
+        ]
+      }
+    }
+  }
 }

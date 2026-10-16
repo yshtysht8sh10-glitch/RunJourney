@@ -1,11 +1,9 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from '@/test/sqlite-fixture';
 import native from '../../../modules/run-announcer';
 import { VoiceAnnouncement } from '@/services/voice-announcement';
 import { ActiveRun } from '@/types/run';
 import { detectStop, effectiveDistance, transition } from '@/utils/run-model';
 import { Platform } from 'react-native';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-jest.mock('@react-native-async-storage/async-storage', () => require('@react-native-async-storage/async-storage/jest/async-storage-mock'));
 jest.mock('../../../modules/run-announcer', () => ({ __esModule: true, default: { start: jest.fn(), updateClock: jest.fn(), updateDistance: jest.fn(), transition: jest.fn(), updateAnnouncement: jest.fn(), stop: jest.fn(), test: jest.fn() } }));
 const minute = 60000;
 const base = (): ActiveRun => ({ id: 'v', startedAt: new Date(0).toISOString(), createdAt: '', updatedAt: '', distanceMeters: 1000, points: [], features: { autoStop: true, break: true }, events: [] });

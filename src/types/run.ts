@@ -29,6 +29,7 @@ export type RunState = 'RUNNING' | 'AUTO_STOP' | 'BREAK';
 export type RunEvent = { timestamp: number; state: RunState; source: 'sensor' | 'user'; confirmedAt?: number; reason?: string };
 
 export type ActiveRun = Omit<RunRecord, 'endedAt' | 'trashedAt'> & { endedAt?: string };
+export type RunHistoryItem = { id: string; startedAt: string; endedAt: string; distanceMeters: number; activeRunningTime: number; kmPerHour: number | null };
 
 export const StopReason = {
   SPEED_TOO_HIGH: 'SPEED_TOO_HIGH', DISPLACEMENT_TOO_LARGE: 'DISPLACEMENT_TOO_LARGE',

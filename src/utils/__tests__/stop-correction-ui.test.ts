@@ -7,13 +7,13 @@ jest.mock('expo-router', () => ({ router: { replace: jest.fn(), push: jest.fn() 
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   useFocusEffect: (callback: () => void) => require('react').useEffect(callback, [callback]) }));
 jest.mock('@/utils/build', () => ({ isStandaloneTest: () => false }));
-jest.mock('@/repositories/run-repository', () => ({ RunRepository: { getRuns: jest.fn(), setStopInclusion: jest.fn() } }));
+jest.mock('@/repositories/run-repository', () => ({ RunRepository: { getRun: jest.fn(), setStopInclusion: jest.fn() } }));
 let tree: ReactTestRenderer;
 afterEach(() => { if (tree) act(() => tree.unmount()); jest.clearAllMocks(); });
 test('History Detail displays stop type/duration and both correction actions after save', async () => {
   const run: RunRecord = { id: 'ui', startedAt: new Date(0).toISOString(), endedAt: new Date(20000).toISOString(), createdAt: '', updatedAt: '', points: [], distanceMeters: 0,
     events: [{ timestamp: 5000, state: 'AUTO_STOP', source: 'sensor' }, { timestamp: 10000, state: 'RUNNING', source: 'sensor' }] };
-  jest.mocked(RunRepository.getRuns).mockResolvedValue([run]);
+  jest.mocked(RunRepository.getRun).mockResolvedValue(run);
   jest.mocked(RunRepository.setStopInclusion).mockResolvedValue({ ...run, stopOverrides: { '0:5000:AUTO_STOP': { included: true, updatedAt: '' } } });
   await act(async () => { tree = create(createElement(RunDetail)); });
   const before = JSON.stringify(tree.toJSON());

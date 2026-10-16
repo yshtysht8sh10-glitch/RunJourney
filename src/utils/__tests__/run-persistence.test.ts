@@ -1,10 +1,8 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from '@/test/sqlite-fixture';
 import { RunRepository } from '@/repositories/run-repository';
 import { RunSettings } from '@/repositories/run-settings';
 import { ActiveRun } from '@/types/run';
 import { effectiveRun, stateOf, timeModel } from '@/utils/run-model';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-jest.mock('@react-native-async-storage/async-storage', () => require('@react-native-async-storage/async-storage/jest/async-storage-mock'));
 beforeEach(async () => { await AsyncStorage.clear(); });
 test('saved STOP total matches history laps when GPS spans START/STOP; raw fixes survive', async () => {
   const points = [0, 10000, 20000].map((timestamp, index) => ({ timestamp, latitude: 35 + index * 20 / 111195, longitude: 139, accuracy: 5 }));

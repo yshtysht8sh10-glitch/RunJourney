@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { act, create, ReactTestRenderer } from 'react-test-renderer';
 import { Alert, Text } from 'react-native';
 import { router } from 'expo-router';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from '@/test/sqlite-fixture';
 import RunDetail from '@/app/run-detail';
 import TrashScreen from '@/app/trash';
 import HistoryScreen from '@/app/history';
@@ -13,10 +13,11 @@ jest.mock('expo-router', () => ({ router: { replace: jest.fn(), push: jest.fn() 
   useFocusEffect: (callback: () => void) => require('react').useEffect(callback, [callback]) }));
 jest.mock('@/utils/build', () => ({ isStandaloneTest: () => false }));
 jest.mock('@/components/build-info', () => ({ BuildInfo: () => null }));
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-jest.mock('@/services/run-service', () => ({ RunService: { getHistory: () => require('@/repositories/run-repository').RunRepository.getRuns() } }));
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-jest.mock('@react-native-async-storage/async-storage', () => require('@react-native-async-storage/async-storage/jest/async-storage-mock'));
+jest.mock('@/services/run-service', () => ({ RunService: { getHistoryPage: async () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const rows = await require('@/repositories/run-repository').RunRepository.getHistoryPage();
+  return rows.map((row: {id:string;started_at:string;ended_at:string;effective_distance:number;effective_time:number}) => ({id:row.id,startedAt:row.started_at,endedAt:row.ended_at,distanceMeters:row.effective_distance,activeRunningTime:row.effective_time,kmPerHour:row.effective_time>0 && row.effective_distance>0 ? row.effective_distance/row.effective_time*3600:null}));
+} } }));
 let tree: ReactTestRenderer;
 const original = { id: 'ui', startedAt: new Date(0).toISOString(), endedAt: new Date(18000).toISOString(), createdAt: '', updatedAt: '', points: [], distanceMeters: 0 };
 beforeEach(async () => { await AsyncStorage.clear(); jest.spyOn(Alert, 'alert').mockImplementation(() => undefined); });

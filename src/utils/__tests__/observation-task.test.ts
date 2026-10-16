@@ -1,12 +1,10 @@
 import * as TaskManager from 'expo-task-manager';
 import * as Location from 'expo-location';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from '@/test/sqlite-fixture';
 import { RunRepository } from '@/repositories/run-repository';
 import { RunService } from '@/services/run-service';
 import { isStandaloneTest } from '@/utils/build';
 import { ActiveRun } from '@/types/run';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-jest.mock('@react-native-async-storage/async-storage', () => require('@react-native-async-storage/async-storage/jest/async-storage-mock'));
 jest.mock('@/utils/build', () => ({ isStandaloneTest: jest.fn(() => true) }));
 jest.mock('@/services/voice-announcement', () => ({ VoiceAnnouncement: { restore: jest.fn(), updateDistance: jest.fn(), updateRun: jest.fn() } }));
 jest.mock('expo-task-manager', () => ({ isTaskDefined: () => false, defineTask: jest.fn() }));

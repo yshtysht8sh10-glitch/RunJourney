@@ -1,6 +1,7 @@
+import { injectFault } from '@/test/native-driver';
 import { createElement } from 'react';
 import { act, create, ReactTestRenderer } from 'react-test-renderer';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from '@/test/sqlite-fixture';
 import { router } from 'expo-router';
 import { RunRepository } from '@/repositories/run-repository';
 import { RunService } from '@/services/run-service';
@@ -15,8 +16,6 @@ jest.mock('expo-router', () => ({ router: { replace: jest.fn() }, useLocalSearch
   useFocusEffect: (callback: () => void) => require('react').useEffect(callback, [callback]) }));
 jest.mock('@/components/build-info', () => ({ BuildInfo: () => null }));
 jest.mock('@/services/run-service', () => ({ RunService: { restoreActiveRun: jest.fn(), getActiveRun: jest.fn(), stopRun: jest.fn() } }));
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-jest.mock('@react-native-async-storage/async-storage', () => require('@react-native-async-storage/async-storage/jest/async-storage-mock'));
 const draft = (): ActiveRun => ({ id: 'summary', startedAt: new Date(0).toISOString(), createdAt: '', updatedAt: '', distanceMeters: 40,
   features: { autoStop: true, break: true }, points: [0, 5000, 10000].map((timestamp, i) => ({ timestamp, latitude: 35 + i * 20 / 111195, longitude: 139, accuracy: 5 })) });
 let tree: ReactTestRenderer | undefined;
@@ -43,8 +42,7 @@ test('history write failure keeps STOP snapshot, retry retains end time, raw GPS
   const old = { ...draft(), id: 'old', endedAt: new Date(10000).toISOString() };
   await AsyncStorage.setItem('@runjourney/runs/v1', JSON.stringify([old]));
   await RunRepository.saveActiveRun(draft());
-  const write = jest.mocked(AsyncStorage.multiSet).getMockImplementation()!;
-  jest.spyOn(AsyncStorage, 'multiSet').mockImplementationOnce(write).mockRejectedValueOnce(new Error('disk full'));
+  let failed = false; injectFault(sql => { if (!failed && sql.startsWith('DELETE FROM active_run')) { failed = true; throw new Error('disk full'); } });
   await expect(RunRepository.finishActiveRun(new Date(10000).toISOString())).rejects.toThrow('disk full');
   expect((await RunRepository.getActiveRun())?.endedAt).toBe(new Date(10000).toISOString());
   await RunRepository.appendActivePoints([{ timestamp: 20000, latitude: 36, longitude: 139, accuracy: 5 }]);
@@ -56,10 +54,10 @@ test('history write failure keeps STOP snapshot, retry retains end time, raw GPS
 
 test('cleanup failure can retry without changing or duplicating the saved record', async () => {
   await RunRepository.saveActiveRun(draft());
-  jest.spyOn(AsyncStorage, 'removeItem').mockRejectedValueOnce(new Error('cleanup failed'));
+  let failed = false; injectFault(sql => { if (!failed && sql.startsWith('DELETE FROM active_run')) { failed = true; throw new Error('cleanup failed'); } });
   await expect(RunRepository.finishActiveRun(new Date(10000).toISOString())).rejects.toThrow();
-  const first = (await RunRepository.getRuns())[0];
-  expect(await RunRepository.finishActiveRun(new Date(60000).toISOString())).toEqual(first);
+  expect(await RunRepository.getRuns()).toEqual([]); // completed + pointer cleanup roll back together
+  const first = await RunRepository.finishActiveRun(new Date(60000).toISOString());
   expect(await RunRepository.getRuns()).toEqual([first]);
 });
 
@@ -92,7 +90,7 @@ test('failed STOP shows retry and only navigates after retry success', async () 
 });
 
 test('summary loading failure never reports successful persistence and reload is available', async () => {
-  jest.spyOn(RunRepository, 'getRuns').mockRejectedValueOnce(new Error('read failure')).mockResolvedValueOnce([{ ...draft(), endedAt: new Date(10000).toISOString() }]);
+  jest.spyOn(RunRepository, 'getRun').mockRejectedValueOnce(new Error('read failure')).mockResolvedValueOnce({ ...draft(), endedAt: new Date(10000).toISOString() });
   await act(async () => { tree = create(createElement(RunSummary)); });
   expect(tree!.root.findAllByProps({ testID: 'summary-saved' })).toHaveLength(0);
   await act(async () => { tree!.root.findByProps({ testID: 'summary-retry' }).props.onPress(); });

@@ -5,8 +5,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { RunRepository } from '@/repositories/run-repository';
 import { exportBackup, pickBackup } from '@/services/run-export';
 import { Backup, previewImport } from '@/utils/run-backup';
+import { SqlSnapshot } from '@/repositories/sqlite-store';
 
-type Preview = ReturnType<typeof previewImport> & { name: string; backup: Backup };
+type Preview = ReturnType<typeof previewImport> & { name: string; backup: Backup; snapshot?: SqlSnapshot };
 export default function DataTransfer() {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [busy, setBusy] = useState(false);
@@ -30,7 +31,10 @@ export default function DataTransfer() {
       { text: '追加する', onPress: () => perform(async () => {
         // Only the preview-approved additions may be committed; a record deleted
         // after preview must not turn a skipped duplicate into an unexpected restore.
-        const result = await RunRepository.importRuns(preview.additions);
+        const result = preview.snapshot
+          ? await RunRepository.restoreSnapshot({ ...preview.snapshot, runs: preview.additions,
+            protectedIds: preview.snapshot.protectedIds?.filter(id => preview.additions.some(run => run.id === id) || preview.snapshot?.draft?.id === id) })
+          : await RunRepository.importRuns(preview.additions);
         setPreview(null);
         Alert.alert('Import完了', `${result.added}件を追加しました\n${result.skipped + preview.duplicates}件の重複をスキップしました`, [{ text: '履歴を見る', onPress: () => router.push('/history') }, { text: 'OK' }]);
       }) },
@@ -49,6 +53,7 @@ export default function DataTransfer() {
       <Text style={styles.text}>ファイル：{preview.name}{'\n'}記録数：{preview.total}件{'\n'}新規：{preview.additions.length}件{'\n'}重複のためスキップ：{preview.duplicates}件{'\n'}ごみ箱（ファイル内）：{preview.trash}件{'\n'}Import対象：{preview.additions.length}件</Text>
       {preview.oldest !== null && <Text style={styles.text}>最古：{new Date(preview.oldest).toLocaleDateString('ja-JP')}{'\n'}最新：{new Date(preview.newest!).toLocaleDateString('ja-JP')}</Text>}
       <Text style={styles.note}>まだ保存していません。既存データは上書きしません。ごみ箱の状態と移動日時を保持します。7日を過ぎたごみ箱の記録は、次の通常履歴・ごみ箱表示時に削除されます。</Text>
+      {preview.snapshot && <Text style={styles.note}>SHA-256検証済みSQLiteバックアップ。draft {preview.snapshot.draft ? '1件' : 'なし'}と設定も復元します。既存draftとの衝突時は全体を中止し、既存設定を優先します。</Text>}
       <Pressable testID="backup-confirm" accessibilityRole="button" disabled={busy} style={styles.button} onPress={confirm}><Text style={styles.text}>確認してImport</Text></Pressable>
       <Pressable testID="backup-cancel" accessibilityRole="button" disabled={busy} style={styles.button} onPress={() => setPreview(null)}><Text style={styles.text}>キャンセル</Text></Pressable>
     </>}

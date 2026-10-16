@@ -15,10 +15,11 @@ function getGitCommitHash() {
 
 module.exports = ({ config }) => ({
   ...config,
-  plugins: [...(config.plugins || []), 'expo-sharing', './plugins/with-android-build-variants'],
+  plugins: [...(config.plugins || []), 'expo-sharing', 'expo-sqlite', './plugins/with-android-build-variants'],
   extra: {
     ...config.extra,
-    buildGitHash: getGitCommitHash(),
+    buildGitHash: `${getGitCommitHash()}+sqlite-v17`,
     buildId: process.env.EAS_BUILD_ID || 'local',
+    persistenceSchema: 'sqlite-v1',
   },
 });

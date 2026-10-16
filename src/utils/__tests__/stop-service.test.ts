@@ -1,4 +1,4 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from '@/test/sqlite-fixture';
 import * as Location from 'expo-location';
 import { RunService } from '@/services/run-service';
 import { RunRepository } from '@/repositories/run-repository';
@@ -6,8 +6,6 @@ import { ActiveRun } from '@/types/run';
 jest.mock('@/tasks/location-task', () => ({ LOCATION_TASK_NAME: 'test-location' }));
 jest.mock('@/services/voice-announcement', () => ({ VoiceAnnouncement: { stop: jest.fn(), restore: jest.fn() } }));
 jest.mock('expo-location', () => ({ Accuracy: { High: 4 }, ActivityType: { Fitness: 3 }, hasStartedLocationUpdatesAsync: jest.fn(), stopLocationUpdatesAsync: jest.fn(), startLocationUpdatesAsync: jest.fn(), getForegroundPermissionsAsync: jest.fn() }));
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-jest.mock('@react-native-async-storage/async-storage', () => require('@react-native-async-storage/async-storage/jest/async-storage-mock'));
 const draft = (): ActiveRun => ({ id: 'service', startedAt: new Date(0).toISOString(), createdAt: '', updatedAt: '', distanceMeters: 0, points: [] });
 beforeEach(async () => { await AsyncStorage.clear(); jest.clearAllMocks(); await RunRepository.saveActiveRun(draft()); jest.mocked(Location.hasStartedLocationUpdatesAsync).mockResolvedValue(true); });
 afterEach(() => jest.restoreAllMocks());

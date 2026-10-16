@@ -1,4 +1,4 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import SettingsStorage from '@/repositories/storage';
 import { Platform } from 'react-native';
 
 import { ActiveRun } from '@/types/run';
@@ -22,12 +22,12 @@ export const VoiceAnnouncement = {
   diagnostics() { return nativeAnnouncer()?.diagnostics?.() ?? null; },
   async items(): Promise<VoiceItems> {
     try {
-      const stored = await AsyncStorage.getItem(ITEMS_KEY);
+      const stored = await SettingsStorage.getItem(ITEMS_KEY);
       return stored ? { ...DEFAULT_VOICE_ITEMS, ...JSON.parse(stored) } : DEFAULT_VOICE_ITEMS;
     } catch { return DEFAULT_VOICE_ITEMS; }
   },
   async setItems(items: VoiceItems): Promise<void> {
-    await AsyncStorage.setItem(ITEMS_KEY, JSON.stringify(items));
+    await SettingsStorage.setItem(ITEMS_KEY, JSON.stringify(items));
   },
   async test(): Promise<void> {
     const items = await this.items();
@@ -35,10 +35,10 @@ export const VoiceAnnouncement = {
     nativeAnnouncer()?.test(formatAnnouncement(20 * 60_000, 3200, lap, items));
   },
   async enabled(): Promise<boolean> {
-    return (await AsyncStorage.getItem(SETTING_KEY)) === 'on';
+    return (await SettingsStorage.getItem(SETTING_KEY)) === 'on';
   },
   async setEnabled(enabled: boolean, activeRun: ActiveRun | null): Promise<void> {
-    await AsyncStorage.setItem(SETTING_KEY, enabled ? 'on' : 'off');
+    await SettingsStorage.setItem(SETTING_KEY, enabled ? 'on' : 'off');
     if (enabled && activeRun) this.start(activeRun);
     else nativeAnnouncer()?.stop();
   },

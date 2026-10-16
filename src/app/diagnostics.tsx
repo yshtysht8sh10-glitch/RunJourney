@@ -19,9 +19,10 @@ export default function Diagnostics() {
   const load = useCallback(async () => {
     if (!isStandaloneTest()) return;
     try {
-      const [active, runs, storedSettings] = await Promise.all([RunRepository.getActiveRun(), RunRepository.getRuns(), RunSettings.get()]);
-      setRun(id ? runs.find(r => r.id === id) ?? null : latestDiagnosticRun(active, runs));
-      setSettings(storedSettings); setError('');
+      const [active, page, storedSettings] = await Promise.all([RunRepository.getActiveRun(), RunRepository.getHistoryPage(1), RunSettings.get()]);
+      const saved = id ? await RunRepository.getRun(id) : page.length ? await RunRepository.getRun(page[0].id) : null;
+      setRun(id ? saved : latestDiagnosticRun(active, saved ? [saved] : []));
+      setSettings(storedSettings); setError(await RunRepository.getStorageWarning() ?? '');
     } catch { setError('診断情報を読み込めませんでした'); }
   }, [id]);
   useFocusEffect(useCallback(() => { void load(); }, [load]));
@@ -39,6 +40,7 @@ export default function Diagnostics() {
     <Text style={styles.title}>Auto Stop Diagnostics</Text>
     {!isStandaloneTest() ? <Text style={styles.text}>Standalone Test版専用です。</Text> : <>
       <Pressable accessibilityRole="button" onPress={load} style={styles.button}><Text style={styles.text}>最新情報に更新</Text></Pressable>
+      {!!error && <Text accessibilityRole="alert" style={styles.text}>{error}</Text>}
       {!report ? <Text style={styles.text}>{error || '記録がありません'}</Text> : <>
         <Text style={styles.text}>Run snapshot: Auto Stop {report.featuresSnapshot.autoStop ? 'ON' : 'OFF'} / Break {report.featuresSnapshot.break ? 'ON' : 'OFF'}</Text>
         <Text style={styles.text}>保存GPS {report.rawPointCount}件 / 保存イベント {report.actualEvents.length}件</Text>

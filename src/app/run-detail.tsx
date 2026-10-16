@@ -15,7 +15,7 @@ export default function RunDetail() {
   const [error, setError] = useState('');
   useFocusEffect(useCallback(() => {
     let mounted = true;
-    RunRepository.getRuns().then(runs => { if (mounted) { const found = runs.find(r => r.id === id) ?? null; setRun(found); setError(found ? '' : '記録が見つかりません'); } }).catch(() => mounted && setError('履歴を読み込めませんでした'));
+    RunRepository.getRun(id).then(savedRun => { if (mounted) { const found = savedRun?.trashedAt == null ? savedRun : null; setRun(found); setError(found ? '' : '記録が見つかりません'); } }).catch(() => mounted && setError('履歴を読み込めませんでした'));
     return () => { mounted = false; };
   }, [id]));
   const effective = run ? effectiveRun(run) : null;

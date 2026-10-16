@@ -5,7 +5,7 @@ import * as Application from 'expo-application';
 
 import { RunRepository } from '@/repositories/run-repository';
 import { LOCATION_TASK_NAME } from '@/tasks/location-task';
-import { ActiveRun, RunRecord } from '@/types/run';
+import { ActiveRun, RunHistoryItem, RunRecord } from '@/types/run';
 import { RunSettings } from '@/repositories/run-settings';
 import { VoiceAnnouncement } from '@/services/voice-announcement';
 import { isStandaloneTest } from '@/utils/build';
@@ -92,7 +92,8 @@ export const RunService = {
       await VoiceAnnouncement.restore(active);
       return active;
     } catch (error) {
-      await RunRepository.clearActiveRun();
+      // START was durably committed. Preserve it if GPS/voice startup fails;
+      // a restart/retry must not erase a run that may already have received fixes.
       throw error;
     }
   },
@@ -124,6 +125,12 @@ export const RunService = {
 
   getHistory(): Promise<RunRecord[]> {
     return RunRepository.getRuns();
+  },
+  async getHistoryPage(limit = 100, offset = 0): Promise<RunHistoryItem[]> {
+    return (await RunRepository.getHistoryPage(limit, offset)).map(row => ({
+      id: row.id, startedAt: row.started_at, endedAt: row.ended_at!, distanceMeters: row.effective_distance,
+      activeRunningTime: row.effective_time, kmPerHour: row.effective_time > 0 && row.effective_distance > 0 ? row.effective_distance / row.effective_time * 3600 : null,
+    }));
   },
 
   async breakRun() {

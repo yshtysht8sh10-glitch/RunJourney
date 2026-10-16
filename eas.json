@@ -1,8 +1,28 @@
 {
-  "cli": { "version": ">= 16.0.0" },
+  "cli": {
+    "version": ">= 16.0.0"
+  },
   "build": {
-    "development": { "developmentClient": true, "distribution": "internal" },
-    "preview": { "distribution": "internal", "android": { "buildType": "apk" } },
-    "production": {}
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal"
+    },
+    "preview": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "production": {},
+    "sqliteTest": {
+      "distribution": "internal",
+      "environment": "preview",
+      "node": "22.13.1",
+      "android": {
+        "withoutCredentials": true,
+        "gradleCommand": ":app:assembleStandaloneTest",
+        "applicationArchivePath": "android/app/build/outputs/apk/standaloneTest/*.apk"
+      }
+    }
   }
 }
