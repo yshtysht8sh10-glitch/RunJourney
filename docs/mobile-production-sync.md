@@ -33,3 +33,11 @@ EAS preview環境へ専用Firebase Web公開SDK構成を設定。秘密鍵やユ
 - このPCのReactテスト・SQLite/Firebase統合試験・APK生成は、Android実機でのGPS/ネットワーク/TLS接続・24時間記録を保証しない。
 
 公式資料: [SDK57](https://docs.expo.dev/versions/v57.0.0/)、[EAS build profile](https://docs.expo.dev/eas/json/)、[EAS環境変数](https://docs.expo.dev/eas/environment-variables/)。
+
+## この追加開発の検証
+
+- Jest全体300件成功後、RUN完了導線で対象を1件に絞るテストを追加して成功（合計301件）。スマホ画面の明示送信、エラー記録の選択不可、認証失敗、連打抑止、キューインスタンスの共有と接続先/所有者分離を含む。
+- lint・型チェック・Web export成功。フォーマット後も関連12件・lint・型チェック成功。
+- `node scripts/production-sync-smoke.cjs --synthetic-only --sqlite-source` 成功。隔離したPC SQLiteの合成241点とSQLite保存のキューを使い、実インターネット上の本番Firebaseへ送信した。途中失敗時の未公開、キュー再構成後の再送、Web用ページリーダーでの全点一致、別UID拒否、SQLite内原記録不変を確認。検証用Authアカウントだけ削除し、immutable合成レコードは検証専用UID配下に残す。
+- 実ユーザーのGPSや実機DBは使用していない。PC SQLite/Node実SDKは、Android上のFirebase実行を代替する証明ではない。
+- EAS build: [533c52bb-5911-4bb0-80b6-7776b670008c](https://expo.dev/accounts/yshtysht8sh10/projects/RunJourney/builds/533c52bb-5911-4bb0-80b6-7776b670008c)、ソース `a707fd8`。以後の差分は同期画面/関連ソースの整形、テスト、PCスモーク、文書のみ。

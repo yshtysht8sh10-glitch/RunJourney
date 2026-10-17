@@ -12,7 +12,7 @@ import { ActiveRun } from '@/types/run';
 import { effectiveRun } from '@/utils/run-model';
 import { sourceFromRun } from '@/domain/pages';
 
-jest.mock('expo-router', () => ({ router: { replace: jest.fn() }, useLocalSearchParams: () => ({ id: 'summary' }),
+jest.mock('expo-router', () => ({ router: { replace: jest.fn(), push: jest.fn() }, useLocalSearchParams: () => ({ id: 'summary' }),
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   useFocusEffect: (callback: () => void) => require('react').useEffect(callback, [callback]) }));
 jest.mock('@/components/build-info', () => ({ BuildInfo: () => null }));
@@ -33,6 +33,8 @@ test.each(['RUNNING', 'AUTO_STOP', 'BREAK'] as const)('%s STOP saves then render
   expect(tree!.root.findByProps({ testID: 'summary-time' }).props.children.join('')).toBe(`0分${String(effective.activeRunningTime / 1000).padStart(2, '0')}秒`);
   expect(tree!.root.findByProps({ testID: 'summary-speed' }).props.children.join('')).toBe(`平均速度：${effective.pace.kmPerHour?.toFixed(2) ?? '—'} km/h`);
   expect(tree!.root.findByProps({ testID: 'summary-saved' }).props.children).toBe('履歴に保存しました');
+  act(() => tree!.root.findByProps({ testID: 'summary-sync' }).props.onPress());
+  expect(router.push).toHaveBeenLastCalledWith({ pathname: './cloud-sync', params: { runId: 'summary' } });
   act(() => tree!.root.findByProps({ testID: 'summary-history' }).props.onPress());
   expect(router.replace).toHaveBeenLastCalledWith('/history');
   act(() => tree!.root.findByProps({ testID: 'summary-home' }).props.onPress());
