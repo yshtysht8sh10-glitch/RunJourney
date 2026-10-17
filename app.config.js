@@ -13,7 +13,16 @@ function getGitCommitHash() {
   }
 }
 
-module.exports = ({ config }) => ({
+module.exports = ({ config }) => {
+  let cloudSyncProject = null;
+  if (process.env.RUNJOURNEY_REQUIRE_CLOUD === '1') {
+    const cloud = JSON.parse(process.env.EXPO_PUBLIC_RUNJOURNEY_FIREBASE_CONFIG || '{}');
+    if (cloud.projectId !== 'runjourney-ysht-2026' || !cloud.apiKey || !cloud.appId?.includes(':web:') || cloud.authDomain !== `${cloud.projectId}.firebaseapp.com`) {
+      throw new Error('Cloud Sync APK requires the dedicated production Firebase Web configuration');
+    }
+    cloudSyncProject = cloud.projectId;
+  }
+  return ({
   ...config,
   plugins: [...(config.plugins || []), 'expo-sharing', 'expo-sqlite', './plugins/with-android-build-variants'],
   extra: {
@@ -21,5 +30,7 @@ module.exports = ({ config }) => ({
     buildGitHash: `${getGitCommitHash()}+cloud-sync-v18`,
     buildId: process.env.EAS_BUILD_ID || 'local',
     persistenceSchema: 'sqlite-v2',
+    cloudSyncProject,
   },
-});
+  });
+};

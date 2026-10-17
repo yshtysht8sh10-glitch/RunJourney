@@ -49,6 +49,8 @@ npm run prepare:v17 -- --input "$env:USERPROFILE\Downloads\backup-copy.json" --o
 
 ## Nativeから直接送る場合
 
+後続のスマホ側の操作・EAS対応版・実機適用条件は [mobile-production-sync.md](mobile-production-sync.md) を参照。
+
 同期対応コードにも、本番FirebaseとEmulatorの選択・送信先表示・所有者別キューを実装した。新規ビルドの識別はTest versionCode18 / `cloud-sync-v18` / SQLite schema2とし、v17と誤認する表示を修正した。ProductionのversionCodeは変更していない。
 
 **この作業ではAPK生成・実機インストールを行っていない。既存v17のバイナリへ同期ボタンが自動で追加されるわけではない。** 実機から直接送信するには新しい同期対応ビルドが必要で、その起動時にschema2への移行も走る。安定v17への更新は、事前バックアップ・隔離コピーでの移行/復旧確認・実機適用の明示承認を経て別途行う。今すぐv17実走データを同期する方法は上記のバックアップ経由。

@@ -38,6 +38,7 @@ export default function RunSummary() {
       <Text style={styles.label}>開始：{new Date(run.startedAt).toLocaleString('ja-JP')}</Text>
       <Text style={styles.label}>終了：{new Date(run.endedAt).toLocaleString('ja-JP')}</Text>
       <Text testID="summary-saved" style={styles.saved}>履歴に保存しました</Text>
+      <Pressable testID="summary-sync" accessibilityRole="button" style={styles.button} onPress={() => router.push({ pathname: './cloud-sync', params: { runId: run.id } })}><Text style={styles.buttonText}>このRUNをクラウド同期</Text></Pressable>
     </> : <>
       <Text accessibilityRole={error ? 'alert' : undefined} style={styles.text}>{error || '保存した記録を読み込み中…'}</Text>
       {!!error && <Pressable testID="summary-retry" accessibilityRole="button" style={styles.button} onPress={() => setAttempt(value => value + 1)}><Text style={styles.text}>再読み込み</Text></Pressable>}
