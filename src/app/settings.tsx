@@ -53,7 +53,7 @@ export default function SettingsScreen() {
   };
 
   return <View style={styles.background}><SafeAreaView style={styles.container}><ScrollView>
-    <Pressable onPress={() => router.push('./cloud-sync')} accessibilityRole="button"><Text style={{ color: '#A4D8B5', paddingVertical: 16 }}>Cloud Sync（開発用Emulator・手動同期）</Text></Pressable>
+    <Pressable onPress={() => router.push('./cloud-sync')} accessibilityRole="button"><Text style={{ color: '#A4D8B5', paddingVertical: 16 }}>Cloud Sync（本番Firebase・手動同期）</Text></Pressable>
     <Text style={styles.title}>設定</Text>
     <Pressable accessibilityRole="button" onPress={() => router.push('./data-transfer')} style={styles.testButton}><Text style={styles.label}>データ / Export・Import</Text></Pressable>
     <Text style={styles.section}>走行中の機能（次のSTARTから適用）</Text>

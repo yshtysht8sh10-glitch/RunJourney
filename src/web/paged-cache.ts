@@ -16,17 +16,19 @@ import {
 } from "../sync/paged-protocol";
 import { parseReviewFile } from "../domain/review";
 
-// A tab-specific local IndexedDB, never a cloud cache. React keeps metadata and
-// at most one GPS page. Original files are never modified or uploaded.
+// Local page staging. Default names are tab-specific viewers; BackupSync uses
+// an account/project-scoped persistent name and sends only on explicit action.
 export class BrowserPageCache implements PagedRemote {
   private opening: Promise<IDBDatabase>;
-  readonly name = `runjourney-review-${crypto.randomUUID()}`;
-  constructor() {
+  readonly name: string;
+  constructor(name = `runjourney-review-${crypto.randomUUID()}`) {
+    this.name = name;
     this.opening = new Promise((resolve, reject) => {
-      const request = indexedDB.open(this.name, 1);
+      const request = indexedDB.open(this.name, 2);
       request.onupgradeneeded = () => {
-        request.result.createObjectStore("runs");
-        request.result.createObjectStore("blobs");
+        for (const store of ["runs", "blobs", "queues"]) {
+          if (!request.result.objectStoreNames.contains(store)) request.result.createObjectStore(store);
+        }
       };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
@@ -58,6 +60,10 @@ export class BrowserPageCache implements PagedRemote {
   getBlob(hash: string) {
     return this.getValue<string>("blobs", hash);
   }
+  queueStore(uid: string) {
+    return { load: () => this.getValue<string>("queues", uid), save: (value: string) => this.put("queues", uid, value) };
+  }
+  async close() { (await this.opening).close(); }
   async putBlob(hash: string, data: string) {
     if (hashText(data) !== hash) throw new Error("ローカルページhash不一致");
     const prior = await this.getBlob(hash);
@@ -107,7 +113,7 @@ export async function importPagedFile(
 ) {
   if (file.size > 512 * 1024 * 1024)
     throw new Error("分割ファイル上限は512MiBです");
-  if (!file.name.endsWith(".ndjson") && !file.name.endsWith(".jsonl")) {
+  if (!file.name.toLowerCase().endsWith(".ndjson") && !file.name.toLowerCase().endsWith(".jsonl")) {
     if (file.size > 5 * 1024 * 1024)
       throw new Error(
         "従来JSONの一括解析上限は5MiBです。大きい記録にはページ形式NDJSONを使用してください",

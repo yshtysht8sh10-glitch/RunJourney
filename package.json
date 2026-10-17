@@ -66,7 +66,8 @@
     "test:sync:emulator": "node --test scripts/sync-emulator.test.cjs",
     "web:preview": "node scripts/serve-review.cjs",
     "test:pages": "node --test scripts/paged-storage.test.cjs",
-    "test:long": "node --test scripts/long-run.test.cjs"
+    "test:long": "node --test scripts/long-run.test.cjs",
+    "prepare:v17": "node scripts/prepare-v17.cjs"
   },
   "jest": {
     "preset": "jest-expo",

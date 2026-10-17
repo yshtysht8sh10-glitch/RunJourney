@@ -1,3 +1,5 @@
+import BackupSync from './BackupSync';
+import { CloudMode, configuredFirebase } from '../sync/firebase-config';
 import { weeklyStreak, DEFAULT_WEEKLY_GOAL, validateWeeklyGoal, WeeklyGoal } from '../domain/weekly-streak';
 import { useEffect, useMemo, useState } from "react";
 import { Link, router, useLocalSearchParams } from "expo-router";
@@ -30,7 +32,7 @@ import {
 } from "../domain/review";
 import { demoRuns } from "./demo";
 import RouteMap from "./RouteMap";
-import { emulatorClient, firebasePagedTransport } from "../sync/firebase";
+import { syncClient, firebasePagedTransport } from "../sync/firebase";
 import { openPaged } from "../sync/paged-protocol";
 import { calculateDistance } from "../utils/distance";
 import "./review.css";
@@ -195,10 +197,16 @@ export default function ReviewApp() {
     [busy, setBusy] = useState(false),
     [page, setPage] = useState(0),
     [point, setPoint] = useState(0);
+  const [syncMode, setSyncMode] = useState<CloudMode>('production');
   const [user, setUser] = useState<User | null>(null),
     [connected, setConnected] = useState(false),
     [email, setEmail] = useState(""),
     [password, setPassword] = useState("");
+  const userUid = user?.uid;
+  const uploadRemote = useMemo(() => connected && userUid ? firebasePagedTransport(syncClient(syncMode), userUid) : null, [connected, userUid, syncMode]);
+  let productionProject = '未設定';
+  try { productionProject = configuredFirebase().projectId; } catch { /* Connect reports configuration error. */ }
+  const destination = syncMode === 'production' ? `本番Firebase: ${productionProject}` : 'PC内Emulator: demo-runjourney';
   const [now, setNow] = useState(() => Date.now());
   const today = dayKey(now, zone);
   useEffect(() => {
@@ -224,14 +232,17 @@ export default function ReviewApp() {
   }, []);
   useEffect(() => {
     if (!connected) return;
-    return onAuthStateChanged(emulatorClient().auth, (next) => {
+    let previousUid: string | undefined;
+    return onAuthStateChanged(syncClient(syncMode).auth, (next) => {
       setUser(next);
-      if (!next) {
+      if (!next || (previousUid && previousUid !== next.uid)) {
         setRuns([]);
+        setContext(null); setGpsPage(null); setAnalysis(null);
         setSource("未読込");
       }
+      previousUid = next?.uid;
     });
-  }, [connected]);
+  }, [connected, syncMode]);
   function toggle(key: keyof Toggles) {
     const next = { ...flags, [key]: !flags[key] };
     setFlags(next);
@@ -376,7 +387,7 @@ export default function ReviewApp() {
                 <td>{m.pace.kmPerHour?.toFixed(1) ?? "—"} km/h</td>
                 <td>
                   <span className="pill">
-                    {source === "Firebase Emulator"
+                    {source.startsWith("Firebase")
                       ? "検証済み"
                       : "ローカルのみ"}
                   </span>
@@ -906,7 +917,7 @@ export default function ReviewApp() {
                   </div>
                   <p>
                     同期状態：
-                    {source === "Firebase Emulator"
+                    {source.startsWith("Firebase")
                       ? "SHA-256・GPS点数検証済み / schemaVersion 1"
                       : "ローカルのみ / 同期エラー記録なし"}
                   </p>
@@ -1055,19 +1066,20 @@ export default function ReviewApp() {
               </p>
             </section>
             <section className="panel">
-              <h2>Firebase Emulator · 認証とクラウド閲覧</h2>
+              <h2>Firebase · 本番同期とクラウド閲覧</h2>
+              <label className="setting">同期先<select aria-label="同期先" value={syncMode} disabled={connected} onChange={e => setSyncMode(e.target.value as CloudMode)}><option value="production">インターネット経由の本番Firebase</option><option value="emulator">PC内Emulator（検証用）</option></select></label>
+              <p>{destination}</p>
               <p>
-                ローカル専用 demo-runjourney / Auth :9099 / Firestore
-                :8080。本番Firebaseへの接続は無効です。
+                本番はRunJourney専用プロジェクトへ接続します。Emulatorを選んだ場合はPC内Auth :9099 / Firestore :8080だけを使用します。
               </p>
               {!connected ? (
                 <button
-                  onClick={() => {
-                    emulatorClient();
+                  onClick={() => void action(async () => {
+                    syncClient(syncMode);
                     setConnected(true);
-                  }}
+                  })}
                 >
-                  Emulatorに接続
+                  {syncMode === 'production' ? '本番Firebaseに接続' : 'Emulatorに接続'}
                 </button>
               ) : !user ? (
                 <form
@@ -1076,7 +1088,7 @@ export default function ReviewApp() {
                     e.preventDefault();
                     void action(async () => {
                       await signInWithEmailAndPassword(
-                        emulatorClient().auth,
+                        syncClient(syncMode).auth,
                         email,
                         password,
                       );
@@ -1086,7 +1098,7 @@ export default function ReviewApp() {
                   <input
                     type="email"
                     aria-label="メールアドレス"
-                    placeholder="demo@example.test"
+                    placeholder={syncMode === 'production' ? 'RunJourney用メールアドレス' : 'runner@example.test'}
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     required
@@ -1100,6 +1112,7 @@ export default function ReviewApp() {
                     onChange={(e) => setPassword(e.target.value)}
                     required
                   />
+                  <p>初回はRunJourney用のメールアドレスとパスワードを決め、アカウントを作成してください。</p>
                   <button disabled={busy}>ログイン</button>
                   <button
                     type="button"
@@ -1107,14 +1120,14 @@ export default function ReviewApp() {
                     onClick={() =>
                       void action(async () => {
                         await createUserWithEmailAndPassword(
-                          emulatorClient().auth,
+                          syncClient(syncMode).auth,
                           email,
                           password,
                         );
                       })
                     }
                   >
-                    テストアカウント作成
+                    {syncMode === 'production' ? 'RunJourneyアカウントを作成' : 'テストアカウント作成'}
                   </button>
                 </form>
               ) : (
@@ -1126,7 +1139,7 @@ export default function ReviewApp() {
                       onClick={() =>
                         void action(async () => {
                           const expected = user.uid,
-                            client = emulatorClient(),
+                            client = syncClient(syncMode),
                             remote = firebasePagedTransport(client, expected),
                             manifests = await remote.list();
                           if (client.auth.currentUser?.uid !== expected)
@@ -1145,7 +1158,7 @@ export default function ReviewApp() {
                           setProgress(
                             `${manifests.length}件のメタデータ取得。GPSのダウンロードは0ページです`,
                           );
-                          setSource("Firebase Emulator");
+                          setSource(syncMode === 'production' ? `Firebase 本番 (${productionProject})` : "Firebase Emulator");
                           setPage(0);
                         })
                       }
@@ -1156,9 +1169,10 @@ export default function ReviewApp() {
                       disabled={busy}
                       onClick={() =>
                         void action(async () => {
-                          await signOut(emulatorClient().auth);
+                          await signOut(syncClient(syncMode).auth);
                           setRuns([]);
                           setSource("未読込");
+                          setUser(null); setConnected(false); setPassword('');
                         })
                       }
                     >
@@ -1168,14 +1182,14 @@ export default function ReviewApp() {
                 </>
               )}
               <p>
-                Webは閲覧専用。Nativeからの送信は専用のCloud
-                Sync画面でプレビュー後に実行します。
+                Webで原GPSを編集しません。実走バックアップの同期は下の専用画面で対象と送信先を確認して実行します。Nativeにも手動同期画面を用意しています。
               </p>
             </section>
+            {userUid && uploadRemote && <BackupSync key={`${syncMode}:${userUid}`} uid={`${syncMode}:${syncMode === 'production' ? productionProject : 'demo-runjourney'}:${userUid}`} ownerUid={userUid} destination={destination} remote={uploadRemote} />}
             <section className="panel">
               <h2>ローカルデータ</h2>
               <p>
-                大容量は分割NDJSON/JSONL（512MiBまで）を使用してください。旧JSONの一括解析は5MiBまでです。タブ専用のIndexedDBに保存し、原ファイルの変更・クラウド送信は行いません。タブ終了後も一時DBが残る場合があるため、不要になったら下のボタンで消去してください。
+                閲覧用の取り込みは分割NDJSON/JSONL（512MiBまで）、旧JSONは5MiBまでです。タブ専用のIndexedDBへ保存し、原ファイルの変更・自動送信は行いません。本番への送信は上の同期用画面から明示操作した場合だけ行います。不要な閲覧用コピーは下のボタンで消去できます。
               </p>
               <p>
                 対応：バックアップJSON v1 / SQLiteバックアップ

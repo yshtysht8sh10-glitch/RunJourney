@@ -18,8 +18,8 @@ module.exports = ({ config }) => ({
   plugins: [...(config.plugins || []), 'expo-sharing', 'expo-sqlite', './plugins/with-android-build-variants'],
   extra: {
     ...config.extra,
-    buildGitHash: `${getGitCommitHash()}+sqlite-v17`,
+    buildGitHash: `${getGitCommitHash()}+cloud-sync-v18`,
     buildId: process.env.EAS_BUILD_ID || 'local',
-    persistenceSchema: 'sqlite-v1',
+    persistenceSchema: 'sqlite-v2',
   },
 });

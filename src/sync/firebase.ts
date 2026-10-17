@@ -12,6 +12,18 @@ import {
 import { Manifest, SyncConflict, Transport } from "./protocol";
 import type { PagedRemote, PublishedRun } from "./paged-protocol";
 import { hashText } from "../domain/pages";
+import { configuredFirebase, CloudMode } from './firebase-config';
+
+export function productionClient() {
+  const config = configuredFirebase(), name = `runjourney-production-${config.projectId}`;
+  const existing = getApps().find(app => app.name === name);
+  if (existing && ['projectId','apiKey','appId','authDomain'].some(key => existing.options[key as keyof typeof existing.options] !== config[key as keyof typeof config])) throw new Error('本番Firebase設定が変更されました。再起動してください');
+  const app = existing ?? initializeApp(config, name);
+  return { auth: getAuth(app), db: getFirestore(app) };
+}
+export function syncClient(mode: CloudMode, host = '127.0.0.1') {
+  return mode === 'production' ? productionClient() : emulatorClient(host);
+}
 
 // Deliberately emulator-only for this phase. No production project configuration is read.
 export function emulatorClient(host = "127.0.0.1") {

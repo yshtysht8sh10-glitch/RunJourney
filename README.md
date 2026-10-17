@@ -6,7 +6,9 @@ Android実機で、画面OFF中もGPS軌跡・距離・日時を記録するラ�
 
 `npm run web` で起動します。「サンプルを試す」または「JSONを読み込む」から、Dashboard・履歴詳細・地図・Journey・Streak・診断を閲覧できます。地図/Journey/StreakはSettingsでONにしてください。Webでの走行計測・原GPSの編集は提供しません。
 
-Firebaseは今回ローカルEmulatorのみ対応です。`npm run sync:emulators` → 別ターミナルで `npm run sync:demo` により、架空SQLite記録を同期してWebで確認できます。本番接続・公開デプロイ・実走データの送信は行いません。
+Firebaseは本番プロジェクトとローカルEmulatorを明示的に切り替えられます。**安定v17を更新せず、バックアップのコピーをPCから本番同期できます。** [実走データの本番同期手順](docs/production-sync.md) を参照してください。取り込みだけでは送信せず、送信先・対象を確認して実行します。実機への更新は行っていません。
+
+Emulatorの架空データは `npm run sync:emulators` → 別ターミナルで `npm run sync:demo`。本番とは別のアカウント・保存先です。
 
 構成、TaskMemo再利用調査、起動手順、検証結果、未完了事項は [Web / Cloud Analyzer実装報告](docs/web-cloud-analyzer.md) を参照してください。
 

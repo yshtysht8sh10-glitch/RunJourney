@@ -1,3 +1,4 @@
+import { CloudMode, configuredFirebase } from '../sync/firebase-config';
 import { useState } from "react";
 import { router } from "expo-router";
 import {
@@ -14,7 +15,7 @@ import {
   signInWithEmailAndPassword,
   signOut,
 } from "firebase/auth";
-import { emulatorClient, firebasePagedTransport } from "../sync/firebase";
+import { syncClient, firebasePagedTransport } from "../sync/firebase";
 import { PagedSyncQueue } from "../sync/paged-protocol";
 import { RunRepository } from "../repositories/run-repository";
 import Storage from "../repositories/storage";
@@ -22,6 +23,7 @@ import { RunSummary } from "../domain/pages";
 
 // Separate opt-in screen. Recording/STOP and production data paths never depend on sync.
 export default function CloudSyncScreen() {
+  const [mode, setMode] = useState<CloudMode>('production');
   const [email, setEmail] = useState(""),
     [password, setPassword] = useState(""),
     [host, setHost] = useState("127.0.0.1");
@@ -44,12 +46,12 @@ export default function CloudSyncScreen() {
     }
   }
   async function login(create: boolean) {
-    const client = emulatorClient(host);
+    const client = syncClient(mode, host);
     const credential = await (create
       ? createUserWithEmailAndPassword(client.auth, email, password)
       : signInWithEmailAndPassword(client.auth, email, password));
     const owner = credential.user.uid,
-      key = `@runjourney/sync/paged-v2/emulator/${owner}`;
+      key = `@runjourney/sync/paged-v2/${mode}/${client.auth.app.options.projectId}/${owner}`;
     const next = new PagedSyncQueue(
       owner,
       {
@@ -65,7 +67,7 @@ export default function CloudSyncScreen() {
     setUid(owner);
     setPreview([]);
     setMessage(
-      "Emulatorにログインしました。送信前に対象履歴を選択してください",
+      `${mode === 'production' ? '本番Firebase' : 'Emulator'}にログインしました。送信前に対象履歴を選択してください`,
     );
   }
   const button = (title: string, onPress: () => void) => (
@@ -73,16 +75,19 @@ export default function CloudSyncScreen() {
       <Text style={styles.text}>{title}</Text>
     </Pressable>
   );
+  let project = '未設定';
+  try { project = configuredFirebase().projectId; } catch { /* Login reports config errors. */ }
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>Cloud Sync / 開発用</Text>
+      <Text style={styles.title}>Cloud Sync / 手動同期</Text>
       <Text style={styles.text}>
-        Native SQLite → Firebase Emulator →
-        Web。ローカル専用・手動同期です。本番アカウントへ接続できません。記録・STOP処理に依存しません。
+        Native SQLite → Firebase → Web。GPS・日時・診断情報を送信します。記録・STOP処理は同期を待ちません。
       </Text>
+      <Text style={styles.text}>送信先：{mode === 'production' ? `本番Firebase / ${project}` : `PC内Emulator / ${host}`}</Text>
+      {!uid && <>{button('本番Firebaseを選択', () => setMode('production'))}{button('PC内Emulatorを選択', () => setMode('emulator'))}</>}
       {!uid ? (
         <>
-          <Text style={styles.text}>
+          {mode === 'emulator' && <><Text style={styles.text}>
             Emulatorホスト（Android Emulatorは10.0.2.2）
           </Text>
           <TextInput
@@ -91,7 +96,7 @@ export default function CloudSyncScreen() {
             onChangeText={setHost}
             autoCapitalize="none"
             accessibilityLabel="Emulatorホスト"
-          />
+          /></>}
           <TextInput
             style={styles.input}
             placeholder="メールアドレス"
@@ -111,7 +116,7 @@ export default function CloudSyncScreen() {
           />
           {button("ログイン", () => void work(() => login(false)))}
           {button(
-            "Emulatorテストアカウント作成",
+            mode === 'production' ? 'RunJourneyアカウント作成' : 'Emulatorテストアカウント作成',
             () => void work(() => login(true)),
           )}
         </>
@@ -140,7 +145,7 @@ export default function CloudSyncScreen() {
           </Text>
           {preview.length > 0 &&
             button(
-              "表示した履歴をEmulator送信キューへ登録",
+              '表示した履歴を送信キューへ登録',
               () =>
                 void work(async () => {
                   for (const run of preview) await queue!.enqueue(run.id);
@@ -172,9 +177,10 @@ export default function CloudSyncScreen() {
             "ログアウト（保留キューは所有者別に保持）",
             () =>
               void work(async () => {
-                await signOut(emulatorClient(host).auth);
+                await signOut(syncClient(mode, host).auth);
                 setQueue(null);
                 setUid("");
+                setPassword('');
                 setEntries([]);
                 setPreview([]);
               }),
