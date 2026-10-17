@@ -41,3 +41,23 @@ EAS preview環境へ専用Firebase Web公開SDK構成を設定。秘密鍵やユ
 - `node scripts/production-sync-smoke.cjs --synthetic-only --sqlite-source` 成功。隔離したPC SQLiteの合成241点とSQLite保存のキューを使い、実インターネット上の本番Firebaseへ送信した。途中失敗時の未公開、キュー再構成後の再送、Web用ページリーダーでの全点一致、別UID拒否、SQLite内原記録不変を確認。検証用Authアカウントだけ削除し、immutable合成レコードは検証専用UID配下に残す。
 - 実ユーザーのGPSや実機DBは使用していない。PC SQLite/Node実SDKは、Android上のFirebase実行を代替する証明ではない。
 - EAS build: [533c52bb-5911-4bb0-80b6-7776b670008c](https://expo.dev/accounts/yshtysht8sh10/projects/RunJourney/builds/533c52bb-5911-4bb0-80b6-7776b670008c)、ソース `a707fd8`。以後の差分は同期画面/関連ソースの整形、テスト、PCスモーク、文書のみ。
+
+## 完成APKの照合結果
+
+EAS buildはFINISHED。PCへダウンロードしてaapt/apksignerとZIP内config/JS bundleを検査した。
+
+| 項目 | 実測値 |
+| --- | --- |
+| PCファイル | `artifacts/web-review/runjourney-test-v18-cloud-sync.apk`（Git対象外） |
+| package / versionCode | `app.runjourney.mobile.test` / **18** |
+| debuggable | false（JavaScript同梱） |
+| 署名証明書SHA-256 | `fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c` |
+| APK SHA-256 | `654aa612ecb44b977477362052e99b308d70653fd7b19077b6b9217aef7ae8ad` |
+| サイズ | 112,390,335 bytes |
+| buildGitHash / schema | `a707fd8+cloud-sync-v18` / `sqlite-v2` |
+| Firebase | configの`cloudSyncProject`と同梱JSの両方で `runjourney-ysht-2026` を照合 |
+| 実機適用 | 未実施 |
+
+署名は既存Test用debug.keystoreと、過去v17の記録された証明書に一致した。EAS画面のappBuildVersionはapp.json由来の6だが、Test variantが上書きした**APKの実manifestは18**である。ProductionのpackageへインストールするAPKではない。
+
+このPCにはAndroid emulator/system imageがなく、Android上でのログイン・TLS・GPS・画面操作は未検証。APK生成とPC実SDK試験を実機試験成功として扱わない。元の「実機DBの移行は行わない」指示に従い、適用承認と最新バックアップの保全前にインストールしない。
