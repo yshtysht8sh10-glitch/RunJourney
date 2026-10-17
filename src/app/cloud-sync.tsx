@@ -70,7 +70,7 @@ export default function CloudSyncScreen() {
       `${mode === 'production' ? '本番Firebase' : 'Emulator'}にログインしました。送信前に対象履歴を選択してください`,
     );
   }
-  
+
   let project = '未設定';
   try { project = configuredFirebase().projectId; } catch { /* Login reports config errors. */ }
   return (

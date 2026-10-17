@@ -15,7 +15,9 @@ function getGitCommitHash() {
 
 module.exports = ({ config }) => {
   let cloudSyncProject = null;
-  if (process.env.RUNJOURNEY_REQUIRE_CLOUD === '1') {
+  // EAS first reads local config before fetching its remote environment.
+  // Enforce the requirement on the builder, and locally when config is supplied.
+  if (process.env.RUNJOURNEY_REQUIRE_CLOUD === '1' && (process.env.EXPO_PUBLIC_RUNJOURNEY_FIREBASE_CONFIG || process.env.EAS_BUILD === 'true')) {
     const cloud = JSON.parse(process.env.EXPO_PUBLIC_RUNJOURNEY_FIREBASE_CONFIG || '{}');
     if (cloud.projectId !== 'runjourney-ysht-2026' || !cloud.apiKey || !cloud.appId?.includes(':web:') || cloud.authDomain !== `${cloud.projectId}.firebaseapp.com`) {
       throw new Error('Cloud Sync APK requires the dedicated production Firebase Web configuration');
