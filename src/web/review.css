@@ -56,7 +56,12 @@ a:hover {
 }
 .review-shell {
   display: flex;
-  min-height: 100vh;
+  /* Expo Router keeps body fixed; this screen owns its vertical scrolling. */
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 .sidebar {
   width: 236px;
