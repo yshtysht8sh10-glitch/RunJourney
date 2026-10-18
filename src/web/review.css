@@ -428,6 +428,27 @@ td {
   border-bottom: 1px solid #2d3a36;
   font-variant-numeric: tabular-nums;
 }
+.run-sort-heading {
+  padding: 0 12px;
+}
+.run-sort-button {
+  min-height: 44px;
+  padding: 10px 0;
+  width: 100%;
+  justify-content: flex-start;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+}
+.run-sort-button:hover,
+th[aria-sort="ascending"] .run-sort-button,
+th[aria-sort="descending"] .run-sort-button {
+  background: transparent;
+  color: #8ad3be;
+}
 tr:hover {
   background: #20312b;
 }

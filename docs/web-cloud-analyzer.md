@@ -154,6 +154,14 @@ Firebase用環境変数・秘密鍵・実アカウントは不要。`firebase.ru
 2. 本番利用へ進む際、RunJourney専用Firebaseプロジェクト、認証、Storage/課金、保持・削除ポリシーを決める。設定や実走データ初回大量送信は本人の明示承認後。
 3. Native側を検証する際、安定Test v17を守る別の開発ビルド・端末での導入方法を承認する。実機への更新は今回未実施。
 
+## 履歴テーブルの並べ替え（2026-10-18追記）
+
+DashboardのRecent runsと走行履歴は、各項目名をクリックすると昇順・降順を切り替える。初期表示は走行日時の新しい順。選択列は矢印とaria-sortで示し、キーボード操作にも対応する。
+
+日時・距離・時間・ペース・時速は表示文字列ではなく元の数値で比較する。算出できない値は常に末尾。同値は走行日時とRun IDで順序を安定させる。全件を並べ替えてから50件単位で表示し、変更時は1ページ目へ戻す。GPS点列は読み込まない。
+
+専用自動テスト7件、lint、型チェック、Webビルドが成功。実際に同期した18件で各数値列・日時列の両方向とキーボード操作をブラウザー確認した。
+
 ## 参照した一次資料
 
 - [Expo SDK 57](https://docs.expo.dev/versions/v57.0.0/)、[LLM向け索引](https://docs.expo.dev/llms.txt)、[platform別module](https://docs.expo.dev/router/advanced/platform-specific-modules/)、[Metro resolver](https://docs.expo.dev/guides/customizing-metro/)

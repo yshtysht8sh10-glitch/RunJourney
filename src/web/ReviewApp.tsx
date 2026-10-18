@@ -1,4 +1,5 @@
 import BackupSync from './BackupSync';
+import { DEFAULT_RUN_SORT, nextRunSort, RUN_COLUMNS, RunSort, sortRunRows } from './run-sort';
 import { CloudMode, configuredFirebase } from '../sync/firebase-config';
 import { weeklyStreak, DEFAULT_WEEKLY_GOAL, validateWeeklyGoal, WeeklyGoal } from '../domain/weekly-streak';
 import { useEffect, useMemo, useState } from "react";
@@ -264,7 +265,7 @@ export default function ReviewApp() {
     }
   }
   const active = useMemo(
-    () => runs.filter((r) => r.trashedAt === undefined),
+    () => sortRunRows(runs.filter((r) => r.trashedAt === undefined), DEFAULT_RUN_SORT, ''),
     [runs],
   );
   const filtered = useMemo(
@@ -275,6 +276,9 @@ export default function ReviewApp() {
       }),
     [active, zone, today, period],
   );
+  const [runSort, setRunSort] = useState<RunSort>(DEFAULT_RUN_SORT);
+  const syncLabel = source.startsWith('Firebase') ? '検証済み' : 'ローカルのみ';
+  const sortedRuns = useMemo(() => sortRunRows(filtered, runSort, syncLabel), [filtered, runSort, syncLabel]);
   const stats = useMemo(() => statistics(filtered), [filtered]),
     all = useMemo(() => statistics(active), [active]);
   const month = useMemo(
@@ -349,22 +353,17 @@ export default function ReviewApp() {
       <table>
         <thead>
           <tr>
-            {[
-              "走行日 / Run ID",
-              "終了日時",
-              "総走行距離",
-              "実走時間",
-              "全経過時間",
-              "平均ペース",
-              "平均時速",
-              "同期状態",
-            ].map((s) => (
-              <th key={s}>{s}</th>
+            {RUN_COLUMNS.map(({ key, label }) => (
+              <th key={key} className="run-sort-heading" scope="col" aria-sort={runSort.key === key ? (runSort.direction === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                <button className="run-sort-button" aria-label={`${label}で並べ替え`} title={`${label}：クリックで${nextRunSort(runSort, key).direction === 'asc' ? '昇順' : '降順'}`} onClick={() => { setRunSort(current => nextRunSort(current, key)); setPage(0); }}>
+                  {label}<span aria-hidden="true">{runSort.key === key ? (runSort.direction === 'asc' ? '↑' : '↓') : '↕'}</span>
+                </button>
+              </th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {filtered.slice(page * 50, page * 50 + 50).map((run) => {
+          {sortedRuns.slice(page * 50, page * 50 + 50).map((run) => {
             const m = runMetrics(run);
             return (
               <tr key={run.id}>
