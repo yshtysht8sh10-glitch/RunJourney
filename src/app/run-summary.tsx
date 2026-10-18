@@ -3,27 +3,28 @@ import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { RunRepository } from '@/repositories/run-repository';
-import { RunRecord } from '@/types/run';
-import { effectiveRun } from '@/utils/run-model';
+import { RunSummary as SavedRunSummary } from '@/domain/pages';
+import { runMetrics } from '@/domain/review';
 
 export default function RunSummary() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const [run, setRun] = useState<RunRecord | null>(null);
+  const [run, setRun] = useState<SavedRunSummary | null>(null);
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
   useFocusEffect(useCallback(() => {
     let mounted = true;
     setRun(null); setError('');
-    RunRepository.getRuns().then(runs => {
+    RunRepository.pagedSource(id).summary().then(savedRun => {
       if (!mounted) return;
-      const saved = runs.find(record => record.id === id) ?? null;
+      if (savedRun.error) throw new Error(savedRun.error);
+      const saved = savedRun;
       setRun(saved); setError(saved ? '' : '記録を確認できませんでした。履歴を確認してください。');
     }).catch(() => mounted && setError('記録を読み込めませんでした。'));
     return () => { mounted = false; };
   // A retry deliberately re-runs the focused read, even when the ID is unchanged.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, attempt]));
-  const effective = run ? effectiveRun(run) : null;
+  const effective = run ? runMetrics(run) : null;
   const seconds = effective?.pace.secondsPerKm;
   return <SafeAreaView style={styles.screen}><ScrollView contentContainerStyle={styles.content}>
     <Text style={styles.title}>本日のRUN完了！</Text>
@@ -37,6 +38,7 @@ export default function RunSummary() {
       <Text style={styles.label}>開始：{new Date(run.startedAt).toLocaleString('ja-JP')}</Text>
       <Text style={styles.label}>終了：{new Date(run.endedAt).toLocaleString('ja-JP')}</Text>
       <Text testID="summary-saved" style={styles.saved}>履歴に保存しました</Text>
+      <Pressable testID="summary-sync" accessibilityRole="button" style={styles.button} onPress={() => router.push({ pathname: './cloud-sync', params: { runId: run.id } })}><Text style={styles.buttonText}>このRUNをクラウド同期</Text></Pressable>
     </> : <>
       <Text accessibilityRole={error ? 'alert' : undefined} style={styles.text}>{error || '保存した記録を読み込み中…'}</Text>
       {!!error && <Pressable testID="summary-retry" accessibilityRole="button" style={styles.button} onPress={() => setAttempt(value => value + 1)}><Text style={styles.text}>再読み込み</Text></Pressable>}

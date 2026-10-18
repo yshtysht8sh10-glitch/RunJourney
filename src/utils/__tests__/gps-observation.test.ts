@@ -1,12 +1,11 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { injectFault, trace } from '@/test/native-driver';
+import AsyncStorage from '@/test/sqlite-fixture';
 import { RollingObservationBuffer, GpsPersistenceGate, RawLocationObservation, GpsObservationSession, observationDiagnosticSummary } from '@/utils/gps-observation';
 import { RunRepository } from '@/repositories/run-repository';
 import { ActiveRun } from '@/types/run';
 import { effectiveRun } from '@/utils/run-model';
 import { diagnosticReport } from '@/utils/auto-stop-diagnostics';
 import { parseBackup, serializeBackup } from '@/utils/run-backup';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-jest.mock('@react-native-async-storage/async-storage', () => require('@react-native-async-storage/async-storage/jest/async-storage-mock'));
 const raw = (timestamp: number, speed: number | null = 2, accuracy: number | null = 5): RawLocationObservation => ({ timestamp, receivedAt: timestamp + 10,
   latitude: 35 + timestamp / 500 / 111195, longitude: 139, speed, accuracy });
 const base = (): ActiveRun => ({ id: 'observations', startedAt: new Date(0).toISOString(), points: [], distanceMeters: 0, createdAt: '', updatedAt: '',
@@ -58,10 +57,9 @@ test('whole-run interval distributions, batch/gap/accuracy/speed metadata, witho
 });
 test('1s observations persist 5s edges; total, laps and speed match the previous 5s input path', async () => {
   await RunRepository.saveActiveRun(base());
-  const writes = jest.spyOn(AsyncStorage, 'setItem');
-  writes.mockClear();
+  trace.length = 0;
   for (let time = 0; time <= 30000; time += 1000) await RunRepository.appendActiveObservations([raw(time)], 'active');
-  expect(writes.mock.calls.filter(([key]) => key === '@runjourney/active-run/v1')).toHaveLength(7);
+  expect(trace.filter(sql => sql.startsWith('UPDATE runs SET status='))).toHaveLength(7);
   expect((await RunRepository.getRecentObservations(10000, 30000)).map(p => p.timestamp)).toEqual(Array.from({ length: 11 }, (_, i) => 20000 + i * 1000));
   const high = (await RunRepository.finishActiveRun(new Date(30000).toISOString()))!;
   expect(high.points.map(p => p.timestamp)).toEqual([0, 5000, 10000, 15000, 20000, 25000, 30000]);
@@ -96,6 +94,7 @@ test('restart restores gate and aggregates but resets RAM; drops duplicate/stale
   expect(active.diagnostics!.counts.GPS_OBS_COUNT).toBe(3);
   expect(active.diagnostics!.counts.GPS_OBS_SEGMENTS).toBe(2);
   expect(active.diagnostics!.counts.GPS_OBS_STALE_OR_INVALID).toBe(2);
+  await RunRepository.clearActiveRun();
   await RunRepository.saveActiveRun({ ...base(), startedAt: new Date(5000).toISOString() });
   await RunRepository.appendActiveObservations([raw(0), raw(5000)]);
   expect((await RunRepository.getActiveRun())!.points.map(p => p.timestamp)).toEqual([5000]);
@@ -115,7 +114,7 @@ test('shared Auto Stop confirms after 5s, raw onset survives; manual Break canno
 });
 test('failed checkpoint retries without losing selected points', async () => {
   await RunRepository.saveActiveRun(base());
-  jest.spyOn(AsyncStorage, 'setItem').mockRejectedValueOnce(new Error('disk full'));
+  let failed = false; injectFault(sql => { if (!failed && sql.startsWith('INSERT INTO gps_points')) { failed = true; throw new Error('disk full'); } });
   await expect(RunRepository.appendActiveObservations([raw(0)])).rejects.toThrow('disk full');
   await RunRepository.appendActiveObservations([raw(1000)]);
   const stored = JSON.parse((await AsyncStorage.getItem('@runjourney/active-run/v1'))!);
@@ -136,7 +135,7 @@ test('30 minute 1s stream remains approximately 360 persisted points with bounde
 test('failed STOP save retains its flushed tail for a successful retry without duplicates', async () => {
   await RunRepository.saveActiveRun(base());
   await RunRepository.appendActiveObservations([raw(0), raw(1000), raw(2000)]);
-  jest.spyOn(AsyncStorage, 'multiSet').mockRejectedValueOnce(new Error('disk full'));
+  let failed = false; injectFault(sql => { if (!failed && sql.startsWith('DELETE FROM active_run')) { failed = true; throw new Error('disk full'); } });
   await expect(RunRepository.finishActiveRun(new Date(2500).toISOString())).rejects.toThrow('disk full');
   const saved = (await RunRepository.finishActiveRun(new Date(2500).toISOString()))!;
   expect(saved.points.map(p => p.timestamp)).toEqual([0, 2000]);

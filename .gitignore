@@ -42,6 +42,10 @@ yarn-error.*
 
 # typescript
 *.tsbuildinfo
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+/artifacts/web-review/
 
 example
 

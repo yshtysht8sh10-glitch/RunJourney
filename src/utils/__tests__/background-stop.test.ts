@@ -1,10 +1,8 @@
 import * as TaskManager from 'expo-task-manager';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from '@/test/sqlite-fixture';
 import { RunRepository } from '@/repositories/run-repository';
 import { VoiceAnnouncement } from '@/services/voice-announcement';
 import '@/tasks/location-task';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-jest.mock('@react-native-async-storage/async-storage', () => require('@react-native-async-storage/async-storage/jest/async-storage-mock'));
 jest.mock('expo-task-manager', () => ({ isTaskDefined: () => false, defineTask: jest.fn() }));
 jest.mock('@/services/voice-announcement', () => ({ VoiceAnnouncement: { updateDistance: jest.fn(), updateRun: jest.fn() } }));
 beforeEach(async () => { await AsyncStorage.clear(); jest.mocked(VoiceAnnouncement.updateRun).mockClear(); });

@@ -1,0 +1,120 @@
+/// <reference types="node" />
+/* Node filesystem exercises repository/restart paths; native file commits are tested separately on PC Android. */
+/* eslint-disable @typescript-eslint/no-require-imports */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { RunRepository } from '@/repositories/run-repository';
+import { RunService } from '@/services/run-service';
+import Storage from '@/repositories/storage';
+import { ActiveRun } from '@/types/run';
+
+let mockDirectory = '';
+let mockFailWriteKey: string | null = null;
+let mockFailRemove = false;
+let mockUuid = 0;
+jest.mock('@/repositories/storage', () => jest.requireActual('@/repositories/storage.android'));
+jest.mock('expo-modules-core', () => {
+  const fs = require('node:fs'); const path = require('node:path');
+  const actual = jest.requireActual('expo-modules-core');
+  return { ...actual, requireNativeModule: (name: string) => name !== 'RunJourneyIsolatedStorage' ? actual.requireNativeModule(name) : ({
+  async getItem(key: string) {
+    const file = path.join(mockDirectory, Buffer.from(key).toString('hex'));
+    return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+  },
+  async setItem(key: string, value: string) {
+    if (mockFailWriteKey === key) throw new Error('simulated disk full');
+    fs.writeFileSync(path.join(mockDirectory, Buffer.from(key).toString('hex')), value);
+  },
+  async removeItem(key: string) {
+    if (mockFailRemove) { mockFailRemove = false; throw new Error('simulated interruption after history commit'); }
+    fs.rmSync(path.join(mockDirectory, Buffer.from(key).toString('hex')), { force: true });
+  },
+}) }; });
+jest.mock('expo-application', () => ({ applicationId: 'app.runjourney.mobile.test' }));
+jest.mock('expo-crypto', () => ({ randomUUID: () => `00000000-0000-4000-8000-${String(++mockUuid).padStart(12, '0')}` }));
+jest.mock('expo-task-manager', () => ({ isTaskDefined: () => true, isAvailableAsync: async () => true }));
+jest.mock('expo-location', () => ({ Accuracy: { High: 4 }, ActivityType: { Fitness: 3 }, PermissionStatus: { GRANTED: 'granted' },
+  hasServicesEnabledAsync: async () => true, isBackgroundLocationAvailableAsync: async () => true,
+  requestForegroundPermissionsAsync: async () => ({ status: 'granted' }), requestBackgroundPermissionsAsync: async () => ({ status: 'granted' }),
+  getForegroundPermissionsAsync: async () => ({ status: 'granted' }), getBackgroundPermissionsAsync: async () => ({ status: 'granted' }),
+  hasStartedLocationUpdatesAsync: async () => false, startLocationUpdatesAsync: async () => undefined, stopLocationUpdatesAsync: async () => undefined,
+}));
+jest.mock('@/services/voice-announcement', () => ({ VoiceAnnouncement: { restore: async () => undefined, stop: () => undefined } }));
+
+const HISTORY = '@runjourney/runs/v1', DRAFT = '@runjourney/active-run/v1';
+beforeEach(() => { mockDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'rj-recovery-test-')); mockFailWriteKey = null; mockFailRemove = false; });
+afterEach(async () => { mockFailWriteKey = null; mockFailRemove = false; await RunRepository.clearActiveRun();
+  if (!mockDirectory.startsWith(path.join(os.tmpdir(), 'rj-recovery-test-'))) throw new Error('Unexpected test path');
+  fs.rmSync(mockDirectory, { recursive: true, force: true }); });
+
+test('START STOP saves, restart restores, and new IDs use a namespace distinct from old UUIDs', async () => {
+  const started = await RunService.startRun();
+  expect(started.id).toMatch(/^isolated-file-v1-/);
+  expect(`${started.id}:0`.split(':')).toHaveLength(2); // Existing native voice event-key contract.
+  const raw = [{ latitude: 35, longitude: 139, timestamp: Date.parse(started.startedAt) + 5000, accuracy: 5 }];
+  await RunRepository.appendActivePoints(raw);
+  const saved = await RunService.stopRun();
+  expect(saved!.points).toEqual(raw);
+  let restarted!: typeof RunRepository;
+  jest.isolateModules(() => { restarted = jest.requireActual('@/repositories/run-repository').RunRepository; });
+  expect(await restarted.getActiveRun()).toBeNull();
+  expect((await restarted.getRuns()).map(run => run.id)).toEqual([started.id]);
+  expect((await restarted.getRuns())[0].points).toEqual(raw);
+  expect((await RunService.startRun()).id).not.toBe(started.id);
+});
+
+test('history write failure preserves frozen draft across restart and retry does not add wait time', async () => {
+  await RunService.startRun();
+  mockFailWriteKey = HISTORY;
+  await expect(RunService.stopRun()).rejects.toThrow('disk full');
+  const frozen = JSON.parse((await Storage.getItem(DRAFT))!) as ActiveRun;
+  expect(frozen.endedAt).toBeTruthy();
+  mockFailWriteKey = null;
+  let restarted!: typeof RunRepository;
+  jest.isolateModules(() => { restarted = jest.requireActual('@/repositories/run-repository').RunRepository; });
+  expect((await restarted.getActiveRun())!.endedAt).toBe(frozen.endedAt);
+  await restarted.finishActiveRun('2099-01-01T00:00:00Z');
+  expect((await restarted.getRuns())[0].endedAt).toBe(frozen.endedAt);
+  expect(await restarted.finishActiveRun('2099-01-01T00:00:00Z')).toBeNull();
+  expect(await restarted.getRuns()).toHaveLength(1);
+});
+
+test('interruption after history commit retries idempotently', async () => {
+  const started = await RunService.startRun();
+  mockFailRemove = true;
+  await expect(RunService.stopRun()).rejects.toThrow('after history commit');
+  const first = await Storage.getItem(HISTORY);
+  await RunService.stopRun();
+  expect(await Storage.getItem(HISTORY)).toBe(first);
+  expect((await RunRepository.getRuns()).filter(run => run.id === started.id)).toHaveLength(1);
+});
+
+test('large 23-record history and ended draft are ignored; protected bytes never change', async () => {
+  const history = JSON.stringify(Array.from({ length: 23 }, (_, index) => ({ id: `old-${index}`, raw: '庭先🏃'.repeat(10000) })));
+  expect(Buffer.byteLength(history)).toBeGreaterThan(2 * 1024 * 1024);
+  const old = path.join(mockDirectory, 'RKStorage'); fs.writeFileSync(old, history);
+  const oldDraft = path.join(mockDirectory, 'legacy-ended-draft'); fs.writeFileSync(oldDraft, '{"id":"legacy","endedAt":"2026-10-09"}');
+  expect(await RunRepository.getRuns()).toEqual([]);
+  expect(await RunService.restoreActiveRun()).toBeNull();
+  await RunService.startRun(); await RunService.stopRun();
+  expect(fs.readFileSync(old, 'utf8')).toBe(history);
+  expect(fs.readFileSync(oldDraft, 'utf8')).toBe('{"id":"legacy","endedAt":"2026-10-09"}');
+});
+
+test('new-store history over 2MiB persists and bad JSON propagates instead of looking empty', async () => {
+  const started = await RunService.startRun();
+  await RunRepository.saveActiveRun({ ...started, extraForTest: '診断🏃'.repeat(500000) } as ActiveRun);
+  await RunService.stopRun();
+  expect(Buffer.byteLength((await Storage.getItem(HISTORY))!)).toBeGreaterThan(2 * 1024 * 1024);
+  expect(await RunRepository.getRuns()).toHaveLength(1);
+  await Storage.setItem(HISTORY, '{broken');
+  await expect(RunRepository.getRuns()).rejects.toThrow();
+  await Storage.setItem(DRAFT, '{broken');
+  await expect(RunService.startRun()).rejects.toThrow();
+  expect(await Storage.getItem(DRAFT)).toBe('{broken');
+});
+
+test('import is blocked in recovery mode', async () => {
+  await expect(RunRepository.importRuns([])).rejects.toThrow('Import');
+});

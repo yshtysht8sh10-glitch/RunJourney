@@ -1,9 +1,7 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from '@/test/sqlite-fixture';
 import { RunRepository } from '@/repositories/run-repository';
 import { RunRecord } from '@/types/run';
 import { effectiveDistance, effectiveRun, stopIntervals } from '@/utils/run-model';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-jest.mock('@react-native-async-storage/async-storage', () => require('@react-native-async-storage/async-storage/jest/async-storage-mock'));
 const p = (timestamp: number, meters: number) => ({ timestamp, latitude: 35 + meters / 111195, longitude: 139, accuracy: 5, speed: 2 });
 const record = (kind: 'AUTO_STOP' | 'BREAK' = 'AUTO_STOP'): RunRecord => ({ id: 'edit', startedAt: new Date(0).toISOString(), endedAt: new Date(40000).toISOString(), createdAt: 'original', updatedAt: 'original', distanceMeters: 40,
   events: [{ state: kind, timestamp: 10000, source: 'sensor', confirmedAt: 15000 }, { state: 'RUNNING', timestamp: 25000, source: 'sensor', confirmedAt: 30000 }],

@@ -12,9 +12,9 @@ export default function RunRecovery() {
   const [run, setRun] = useState<RunRecord | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState('');
   useFocusEffect(useCallback(() => {
     let mounted = true;
-    RunRepository.getBackupRuns().then(runs => {
+    RunRepository.getRun(id).then(savedRun => {
       if (!mounted) return;
-      const found = runs.find(r => r.id === id && r.trashedAt == null);
+      const found = savedRun?.trashedAt == null ? savedRun : null;
       setRun(found ?? null); if (!found) setError('記録が見つかりません');
     }).catch(() => mounted && setError('記録を読み込めませんでした'));
     return () => { mounted = false; };

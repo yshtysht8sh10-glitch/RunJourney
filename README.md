@@ -1,6 +1,20 @@
 # RunJourney v0.1
 
-Android実機で、画面OFF中もGPS軌跡・距離・日時を記録する最小構成のランニング記録アプリです。記録と進行中データは端末内のAsyncStorageへ保存します。
+Android実機で、画面OFF中もGPS軌跡・距離・日時を記録するランニング記録アプリです。この開発ブランチでは記録と進行中データを端末内のSQLiteへ保存します。Production・安定Test v17の更新インストールには別途明示承認が必要です。
+
+## PC Web Review（#29）
+
+`npm run web` で起動します。「サンプルを試す」または「JSONを読み込む」から、Dashboard・履歴詳細・地図・Journey・Streak・診断を閲覧できます。地図/Journey/StreakはSettingsでONにしてください。Webでの走行計測・原GPSの編集は提供しません。
+
+Firebaseは本番プロジェクトとローカルEmulatorを明示的に切り替えられます。**安定v17を更新せず、バックアップのコピーをPCから本番同期できます。** [実走データの本番同期手順](docs/production-sync.md) を参照してください。取り込みだけでは送信せず、送信先・対象を確認して実行します。実機への更新は行っていません。
+
+Emulatorの架空データは `npm run sync:emulators` → 別ターミナルで `npm run sync:demo`。本番とは別のアカウント・保存先です。
+
+構成、TaskMemo再利用調査、起動手順、検証結果、未完了事項は [Web / Cloud Analyzer実装報告](docs/web-cloud-analyzer.md) を参照してください。
+
+長時間走行はメタデータとGPSページを分離し、WebはNDJSONをストリーム取込、地図・診断・同期はページ単位で処理します。[長時間走行データ基盤・移行手順・負荷試験](docs/long-run-storage.md) を参照してください。再現は `npm run test:pages` / `npm run test:long`。実機24時間連続記録は未検証です。
+
+Streakは [週間目標・連続達成週数](docs/weekly-streak.md) がメインです（初期値は週4日）。日次連続記録は参考情報とし、毎日走ることを促しません。Settingsで週間目標・日次有効条件・週開始曜日を変更できます。
 
 React Native / Expo SDK 57 / TypeScriptで実装しています。画面遷移にはExpo Routerを使用しています。
 

@@ -1,6 +1,7 @@
+import { injectFault } from '@/test/native-driver';
 import { createElement } from 'react';
 import { act, create, ReactTestRenderer } from 'react-test-renderer';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from '@/test/sqlite-fixture';
 import { router } from 'expo-router';
 import { RunRepository } from '@/repositories/run-repository';
 import { RunService } from '@/services/run-service';
@@ -9,14 +10,13 @@ import RunSummary from '@/app/run-summary';
 import { StopButton } from '@/components/stop-button';
 import { ActiveRun } from '@/types/run';
 import { effectiveRun } from '@/utils/run-model';
+import { sourceFromRun } from '@/domain/pages';
 
-jest.mock('expo-router', () => ({ router: { replace: jest.fn() }, useLocalSearchParams: () => ({ id: 'summary' }),
+jest.mock('expo-router', () => ({ router: { replace: jest.fn(), push: jest.fn() }, useLocalSearchParams: () => ({ id: 'summary' }),
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   useFocusEffect: (callback: () => void) => require('react').useEffect(callback, [callback]) }));
 jest.mock('@/components/build-info', () => ({ BuildInfo: () => null }));
 jest.mock('@/services/run-service', () => ({ RunService: { restoreActiveRun: jest.fn(), getActiveRun: jest.fn(), stopRun: jest.fn() } }));
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-jest.mock('@react-native-async-storage/async-storage', () => require('@react-native-async-storage/async-storage/jest/async-storage-mock'));
 const draft = (): ActiveRun => ({ id: 'summary', startedAt: new Date(0).toISOString(), createdAt: '', updatedAt: '', distanceMeters: 40,
   features: { autoStop: true, break: true }, points: [0, 5000, 10000].map((timestamp, i) => ({ timestamp, latitude: 35 + i * 20 / 111195, longitude: 139, accuracy: 5 })) });
 let tree: ReactTestRenderer | undefined;
@@ -33,6 +33,8 @@ test.each(['RUNNING', 'AUTO_STOP', 'BREAK'] as const)('%s STOP saves then render
   expect(tree!.root.findByProps({ testID: 'summary-time' }).props.children.join('')).toBe(`0分${String(effective.activeRunningTime / 1000).padStart(2, '0')}秒`);
   expect(tree!.root.findByProps({ testID: 'summary-speed' }).props.children.join('')).toBe(`平均速度：${effective.pace.kmPerHour?.toFixed(2) ?? '—'} km/h`);
   expect(tree!.root.findByProps({ testID: 'summary-saved' }).props.children).toBe('履歴に保存しました');
+  act(() => tree!.root.findByProps({ testID: 'summary-sync' }).props.onPress());
+  expect(router.push).toHaveBeenLastCalledWith({ pathname: './cloud-sync', params: { runId: 'summary' } });
   act(() => tree!.root.findByProps({ testID: 'summary-history' }).props.onPress());
   expect(router.replace).toHaveBeenLastCalledWith('/history');
   act(() => tree!.root.findByProps({ testID: 'summary-home' }).props.onPress());
@@ -43,8 +45,7 @@ test('history write failure keeps STOP snapshot, retry retains end time, raw GPS
   const old = { ...draft(), id: 'old', endedAt: new Date(10000).toISOString() };
   await AsyncStorage.setItem('@runjourney/runs/v1', JSON.stringify([old]));
   await RunRepository.saveActiveRun(draft());
-  const write = jest.mocked(AsyncStorage.multiSet).getMockImplementation()!;
-  jest.spyOn(AsyncStorage, 'multiSet').mockImplementationOnce(write).mockRejectedValueOnce(new Error('disk full'));
+  let failed = false; injectFault(sql => { if (!failed && sql.startsWith('DELETE FROM active_run')) { failed = true; throw new Error('disk full'); } });
   await expect(RunRepository.finishActiveRun(new Date(10000).toISOString())).rejects.toThrow('disk full');
   expect((await RunRepository.getActiveRun())?.endedAt).toBe(new Date(10000).toISOString());
   await RunRepository.appendActivePoints([{ timestamp: 20000, latitude: 36, longitude: 139, accuracy: 5 }]);
@@ -56,10 +57,10 @@ test('history write failure keeps STOP snapshot, retry retains end time, raw GPS
 
 test('cleanup failure can retry without changing or duplicating the saved record', async () => {
   await RunRepository.saveActiveRun(draft());
-  jest.spyOn(AsyncStorage, 'removeItem').mockRejectedValueOnce(new Error('cleanup failed'));
+  let failed = false; injectFault(sql => { if (!failed && sql.startsWith('DELETE FROM active_run')) { failed = true; throw new Error('cleanup failed'); } });
   await expect(RunRepository.finishActiveRun(new Date(10000).toISOString())).rejects.toThrow();
-  const first = (await RunRepository.getRuns())[0];
-  expect(await RunRepository.finishActiveRun(new Date(60000).toISOString())).toEqual(first);
+  expect(await RunRepository.getRuns()).toEqual([]); // completed + pointer cleanup roll back together
+  const first = await RunRepository.finishActiveRun(new Date(60000).toISOString());
   expect(await RunRepository.getRuns()).toEqual([first]);
 });
 
@@ -92,9 +93,13 @@ test('failed STOP shows retry and only navigates after retry success', async () 
 });
 
 test('summary loading failure never reports successful persistence and reload is available', async () => {
-  jest.spyOn(RunRepository, 'getRuns').mockRejectedValueOnce(new Error('read failure')).mockResolvedValueOnce([{ ...draft(), endedAt: new Date(10000).toISOString() }]);
+  const source = sourceFromRun({ ...draft(), endedAt: new Date(10000).toISOString() });
+  const summary = await source.summary();
+  jest.spyOn(RunRepository, 'pagedSource').mockReturnValue({ ...source, summary: jest.fn().mockRejectedValueOnce(new Error('read failure')).mockResolvedValueOnce(summary) });
+  const fullRead = jest.spyOn(RunRepository, 'getRun');
   await act(async () => { tree = create(createElement(RunSummary)); });
   expect(tree!.root.findAllByProps({ testID: 'summary-saved' })).toHaveLength(0);
   await act(async () => { tree!.root.findByProps({ testID: 'summary-retry' }).props.onPress(); });
   expect(tree!.root.findByProps({ testID: 'summary-saved' }).props.children).toBe('履歴に保存しました');
+  expect(fullRead).not.toHaveBeenCalled();
 });

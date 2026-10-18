@@ -7,15 +7,25 @@ import { RunRecord } from '@/types/run';
 import { effectiveRun } from '@/utils/run-model';
 import { isStandaloneTest } from '@/utils/build';
 import { exportAnalysis } from '@/services/run-export';
+import { RunSummary } from '@/domain/pages';
+import NativeRunPages from '@/components/native-run-pages';
 
 export default function RunDetail() {
+  const { id } = useLocalSearchParams<{ id: string }>();
+  const [summary,setSummary]=useState<RunSummary|null>(null),[error,setError]=useState('');
+  useFocusEffect(useCallback(()=>{let mounted=true;RunRepository.pagedSource(id).summary().then(value=>{if(value.error)throw new Error(value.error);if(mounted){setSummary(value);setError('');}}).catch(e=>{if(mounted)setError(`履歴メタデータを読み込めませんでした: ${String(e)}`);});return()=>{mounted=false;};},[id]));
+  if(error)return <SafeAreaView style={styles.screen}><Text style={styles.text}>{error} 原本は保持されています。</Text><Pressable onPress={()=>router.replace('/history')}><Text style={styles.text}>履歴へ戻る</Text></Pressable></SafeAreaView>;
+  if(!summary||summary.id!==id)return <SafeAreaView style={styles.screen}><Text style={styles.text}>メタデータを確認中…</Text></SafeAreaView>;
+  return summary.pointCount>2048 ? <NativeRunPages summary={summary}/> : <LegacyRunDetail/>;
+}
+function LegacyRunDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const [run, setRun] = useState<RunRecord | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   useFocusEffect(useCallback(() => {
     let mounted = true;
-    RunRepository.getRuns().then(runs => { if (mounted) { const found = runs.find(r => r.id === id) ?? null; setRun(found); setError(found ? '' : '記録が見つかりません'); } }).catch(() => mounted && setError('履歴を読み込めませんでした'));
+    RunRepository.getRun(id).then(savedRun => { if (mounted) { const found = savedRun?.trashedAt == null ? savedRun : null; setRun(found); setError(found ? '' : '記録が見つかりません'); } }).catch(() => mounted && setError('履歴を読み込めませんでした'));
     return () => { mounted = false; };
   }, [id]));
   const effective = run ? effectiveRun(run) : null;

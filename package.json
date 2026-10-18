@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "dependencies": {
     "@expo/ui": "~57.0.20",
-    "@react-native-async-storage/async-storage": "2.2.0",
+    "@noble/hashes": "1.8.0",
     "expo": "~57.0.25",
     "expo-application": "~57.0.3",
     "expo-clipboard": "~57.0.2",
@@ -22,11 +22,14 @@
     "expo-router": "~57.0.23",
     "expo-sharing": "~57.0.22",
     "expo-splash-screen": "~57.0.9",
+    "expo-sqlite": "~57.0.4",
     "expo-status-bar": "~57.0.1",
     "expo-symbols": "~57.0.3",
     "expo-system-ui": "~57.0.4",
     "expo-task-manager": "~57.0.20",
     "expo-web-browser": "~57.0.3",
+    "firebase": "12.4.0",
+    "leaflet": "^1.9.4",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-native": "0.86.3",
@@ -39,6 +42,7 @@
   },
   "devDependencies": {
     "@types/jest": "29.5.14",
+    "@types/leaflet": "^1.9.22",
     "@types/react": "~19.2.2",
     "eslint": "^9.0.0",
     "eslint-config-expo": "~57.0.2",
@@ -55,13 +59,33 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
-    "test": "jest --runInBand"
+    "test": "jest --runInBand",
+    "web:build": "expo export --platform web",
+    "sync:emulators": "npx --yes firebase-tools@15.34.0 emulators:start --only auth,firestore --project demo-runjourney --config firebase.runjourney.json",
+    "sync:demo": "node scripts/sync-demo.cjs",
+    "test:sync:emulator": "node --test scripts/sync-emulator.test.cjs",
+    "web:preview": "node scripts/serve-review.cjs",
+    "test:pages": "node --test scripts/paged-storage.test.cjs",
+    "test:long": "node --test scripts/long-run.test.cjs",
+    "prepare:v17": "node scripts/prepare-v17.cjs"
   },
   "jest": {
     "preset": "jest-expo",
     "testMatch": [
       "**/__tests__/**/*.test.ts"
+    ],
+    "setupFilesAfterEnv": [
+      "<rootDir>/jest.setup.js"
     ]
   },
-  "private": true
+  "private": true,
+  "expo": {
+    "autolinking": {
+      "android": {
+        "exclude": [
+          "@react-native-async-storage/async-storage"
+        ]
+      }
+    }
+  }
 }

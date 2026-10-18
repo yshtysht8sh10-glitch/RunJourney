@@ -10,6 +10,8 @@ module.exports = function withAndroidBuildVariants(config) {
     }
 
     let source = mod.modResults.contents;
+    // Test recovery baseline supports Android API26 and later.
+    source = source.replace(/minSdkVersion rootProject.ext.minSdkVersion/g, 'minSdkVersion 26');
     if (!DEBUG_BUILD_TYPE.test(source) || !RELEASE_BUILD_TYPE.test(source)) {
       throw new Error('Could not find Android debug/release buildTypes');
     }
@@ -36,13 +38,13 @@ module.exports = function withAndroidBuildVariants(config) {
       );
     }
 
-    source = source.replace(/output.versionCodeOverride = \d+/g, 'output.versionCodeOverride = 14');
-    if (!source.includes('output.versionCodeOverride = 14')) {
+    source = source.replace(/output.versionCodeOverride = \d+/g, 'output.versionCodeOverride = 18');
+    if (!source.includes('output.versionCodeOverride = 18')) {
       source += `
 // Increment only Standalone Test; production retains its configured version.
 android.applicationVariants.all { variant ->
     if (variant.buildType.name == 'standaloneTest') {
-        variant.outputs.all { output -> output.versionCodeOverride = 14 }
+        variant.outputs.all { output -> output.versionCodeOverride = 18 }
     }
 }
 `;
