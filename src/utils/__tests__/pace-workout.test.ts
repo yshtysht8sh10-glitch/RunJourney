@@ -2,6 +2,7 @@ import { advancePaceWorkout, classifyPace, createPaceWorkout, DEFAULT_PACE_SETTI
   segmentReached, steadyWorkout, targetPaceSeconds, targetTimeSeconds, validPaceSettings, validWorkout, windowPace } from '@/domain/pace-workout';
 import { ActiveRun } from '@/types/run';
 import { transition } from '@/utils/run-model';
+import * as paceAnalysis from '@/utils/pace-analysis';
 
 const settings = { ...DEFAULT_PACE_SETTINGS, enabled: true, voice: true, voiceIntervalSec: 60 };
 const segment = steadyWorkout(settings).segments[0];
@@ -144,6 +145,19 @@ test('new runtime session defers evaluation even when persisted old GPS window e
   const r = { ...step(step(run(), 30000, 450), 60000, 450), id: 'restarted-runtime' };
   const restored = safelyAdvancePaceWorkout(r, 90000);
   expect(restored.paceWorkout?.status).toBe('UNKNOWN'); expect(restored.paceWorkout?.notice).toBeUndefined();
+});
+test('a thrown add-on calculation preserves the identical GPS record and distance', () => {
+  let r = { ...step(run(), 30000), id: 'fault-isolated' };
+  r = safelyAdvancePaceWorkout(r, 60000);
+  r = step(r, 90000);
+  // Set up a due evaluation using valid, recently collected fixes.
+  r.paceWorkout!.evaluatedAt = 60000;
+  const warning = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+  const analysis = jest.spyOn(paceAnalysis, 'analyzePoints').mockImplementationOnce(() => { throw new Error('synthetic pace failure'); });
+  try {
+    expect(safelyAdvancePaceWorkout(r, 90000)).toBe(r);
+    expect(warning).toHaveBeenCalledWith('Pace workout skipped; GPS record retained', expect.any(Error));
+  } finally { analysis.mockRestore(); warning.mockRestore(); }
 });
 test('unknown interval storage remains bounded during a 24 hour synthetic workout', () => {
   let r = run();

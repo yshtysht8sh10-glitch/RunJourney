@@ -74,12 +74,15 @@ Phase 2では現在区間indexと区間開始時の実走距離・実走時間�
 
 ## 検証
 
-- `npm test -- --silent`: 39 suites / 367 tests passed（新規59件）。
+- `npm test -- --silent`: 40 suites / 370 tests passed（新規62件）。隔離Application IDの生成と判定例外の隔離を含む。
 - `npm run lint`、`npm run typecheck`: passed。
 - `npm run test:pages`: 7件passed。
 - `npm run test:long`: 5件passed（30分×11、10h、12h、24h@5s、24h@1s）。合成データ・ローカルfixtureのみ。
 - `npx expo-doctor`: 20/21。既存SDK57依存12個のパッチ版が現在の推奨より古いため失敗。今回依存変更はしていない。
-- Web/Android exportとEAS隔離APKの結果はPR/作業報告へ記録する。
+- `npm run web:build` / `npx expo export --platform android --output-dir .expo-export-check/pace-android`: passed。
+  既存の@noble/hashesのexports解決、Web LeafletのCSS画像importに警告が出るが、export自体は成功。
+- EAS隔離APK: [ビルド結果](https://expo.dev/accounts/yshtysht8sh10/projects/RunJourney/builds/5ed4c1d2-20e4-40f7-a2c4-770a924a30c3)。ソースは `8c27ece`。結果はPR/作業報告へ記録する。
+- [Draft PR #35](https://github.com/yshtysht8sh10-glitch/RunJourney/pull/35)。追加テスト以外の実装コードはAPKソースと同じ。
 
 ## 安全な実機テスト
 
