@@ -39,6 +39,7 @@ Androidの既存RunAnnouncerService、TTSキュー、Audio Focusを使用。
 ペース走の音声設定は#6の定期通知とは独立する。Android以外では画面案内を提供する。
 通常の状態変更・ラップを優先し、ペース音声は発話中・キュー待ち・直前発話から20秒以内・ラップ境界付近では捨てる。
 期限20秒の案内をキューに蓄積しない。native側でもキーを重複排除。音声OFF・停止・休憩中は保留案内を無効化する。
+定期通知OFFでペース案内だけを使う場合も、最大30秒のWake Lockを保持して画面OFF中の発話を支える。サービス終了で解放する。
 設定された60〜600秒の最小間隔で警告し、ON_TARGET内は沈黙。警告後に戻ったときに一度だけ復帰案内。
 目標到達は音声間隔の例外だが、競合時は音声を捨て、画面上の到達表示を保持する。
 発話失敗はcatchし、GPS保存へ伝播させない。既存バイナリに新bridgeがなければ音声呼出しを省略する。
@@ -56,7 +57,7 @@ Androidの既存RunAnnouncerService、TTSキュー、Audio Focusを使用。
 通知用の連続判定待ちでも、ペースを計算できた窓は有効評価として集計する。これは移動窓による推定で、全GPS瞬間の分類ではない。
 判定保留は時刻範囲と理由を保持。連続する同じ理由は統合し、128区間を上限にし、それ以降の件数と合計時間は保持する。
 保留区間の表示時刻は壁時計の範囲で、unknown集計時間はその範囲に含まれる実走時間のみ。
-任意メタデータは48KiBの文字数上限で保護する。GPS点列をここへ複製しない。
+任意メタデータはJSONで48×1024文字の上限を設けて保護する。GPS点列をここへ複製しない。
 
 平均ペース・1kmラップは既存effective clock/edgesを使う。ラップ境界は距離に比例して時刻を補間する。
 ページ解析は最大128行＋前ページ最後の1点を保持し、巨大GPSを新たに一括読み出ししない。
@@ -81,8 +82,10 @@ Phase 2では現在区間indexと区間開始時の実走距離・実走時間�
 - `npx expo-doctor`: 20/21。既存SDK57依存12個のパッチ版が現在の推奨より古いため失敗。今回依存変更はしていない。
 - `npm run web:build` / `npx expo export --platform android --output-dir .expo-export-check/pace-android`: passed。
   既存の@noble/hashesのexports解決、Web LeafletのCSS画像importに警告が出るが、export自体は成功。
-- EAS隔離APK: [ビルド結果](https://expo.dev/accounts/yshtysht8sh10/projects/RunJourney/builds/5ed4c1d2-20e4-40f7-a2c4-770a924a30c3)。ソースは `8c27ece`。結果はPR/作業報告へ記録する。
-- [Draft PR #35](https://github.com/yshtysht8sh10-glitch/RunJourney/pull/35)。追加テスト以外の実装コードはAPKソースと同じ。
+- EAS隔離APK: [ビルド成功](https://expo.dev/accounts/yshtysht8sh10/projects/RunJourney/builds/57debe25-45f5-4337-8693-be9e1ff38391)。ソースは `49e1fd2`。Gradle `assemblePaceWorkout` は12分50秒で成功。初回ビルドはWake Lock補強に伴い取り消した。
+- 完成APKをPC上で検査し、`app.runjourney.mobile.pace` / `RunJourney Pace` / versionCode 6 / minSDK 26 / targetSDK 36 / 4 ABIを確認。`apksigner verify` 成功。実機へはインストールしていない。
+- [隔離APK](https://expo.dev/artifacts/eas/S3PiWOfdtEmxB6SYfsBbJoNJsMbpVewSeFhDVU6E_PI.apk) SHA-256: `EBFD004959CA738E8A2DB9C033C7B668B7A7640B0528E0F5E81BFD2EB2563238`。
+- [Draft PR #35](https://github.com/yshtysht8sh10-glitch/RunJourney/pull/35)。実装コードはAPKソースと同じ。
 
 ## 安全な実機テスト
 
