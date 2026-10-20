@@ -95,6 +95,14 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       .setContentText("走行中の時間・距離・ペースを案内します")
       .setOngoing(true).build()
     startForeground(607, notification)
+    // Workout-only speech also needs a bounded wake lock while the screen is off.
+    // A periodic START upgrades any previous temporary lock to the running lock.
+    if (wakeLock?.isHeld != true || intent?.action == ACTION_START) {
+      wakeLock?.let { if (it.isHeld) it.release() }
+      wakeLock = (getSystemService(Context.POWER_SERVICE) as PowerManager)
+        .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "RunJourney:VoiceAnnouncements")
+        .apply { if (preferences.getBoolean("running", false)) acquire() else acquire(30_000) }
+    }
     if (testing) {
       val message = intent?.getStringExtra("message") ?: ""
       if (workout) {
@@ -106,11 +114,6 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
         if (ready) speak(message) else pendingTests.add(message)
       }
       if (!preferences.getBoolean("running", false)) return START_NOT_STICKY
-    }
-    if (wakeLock?.isHeld != true) {
-      wakeLock = (getSystemService(Context.POWER_SERVICE) as PowerManager)
-        .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "RunJourney:VoiceAnnouncements")
-        .apply { acquire() }
     }
     handler.removeCallbacks(tick)
     handler.post(tick)
