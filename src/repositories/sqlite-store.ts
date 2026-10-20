@@ -2,6 +2,7 @@ import type { ActiveRun, RunRecord } from '../types/run';
 import { effectiveRun } from '../utils/run-model';
 import { PAGE_SCHEMA, migratePageIndex, stampRow } from './paged-store';
 import { hashText, PAGE_ROWS, StreamKind } from '../domain/pages';
+import { safePaceMetadata } from '../domain/pace-workout';
 
 export interface SqlConnection {
   execAsync(sql: string): Promise<void>;
@@ -141,6 +142,11 @@ export class SqliteStore {
     const flags = (metadata as { _sqlitePresence: { events: boolean; diagnostics: boolean; points: number; eventCount: number } })._sqlitePresence;
     if (!flags || flags.points !== pointRows.length || flags.eventCount !== events.length) throw new Error(`GPS/イベント件数不一致: ${id}`);
     delete (run as unknown as Record<string, unknown>)._sqlitePresence;
+    if (run.paceWorkout !== undefined) {
+      const pace = safePaceMetadata(run.paceWorkout);
+      if (pace) run.paceWorkout = pace;
+      else delete run.paceWorkout;
+    }
     if (flags.events) run.events = events.map(row => JSON.parse(row.payload));
     if (diagnostics !== undefined) run.diagnostics = diagnostics as ActiveRun['diagnostics'];
     if (run.id !== header.id || run.startedAt !== header.started_at || (run.endedAt ?? null) !== header.ended_at || run.distanceMeters !== header.distance)
@@ -150,7 +156,9 @@ export class SqliteStore {
   async writeRun(run: ActiveRun, status: 'draft' | 'completed', preserveDiagnostics = false) {
     const [existing] = await this.db.getAllAsync<Header>('SELECT * FROM runs WHERE id=?', run.id);
     if (existing?.status === 'completed' && (status === 'draft' || existing.started_at !== run.startedAt || existing.ended_at !== run.endedAt || existing.distance !== run.distanceMeters)) throw new Error('確定済み走行の元の値を上書きできません');
-    const { points, events, diagnostics, recovery, stopOverrides, ...metadata } = run;
+    const { points, events, diagnostics, recovery, stopOverrides, paceWorkout, ...coreMetadata } = run;
+    const pace = safePaceMetadata(paceWorkout);
+    const metadata = { ...coreMetadata, ...(pace ? { paceWorkout: pace } : {}) };
     if ('_sqlitePresence' in metadata) throw new Error('予約されたメタデータ名です');
     const effective = effectiveRun(run);
     if (!existing) await this.db.runAsync('INSERT INTO runs(id,status,started_at,ended_at,distance,trashed_at,effective_distance,effective_time,position) VALUES(?,?,?,?,?,?,?,?,(SELECT coalesce(max(position),0)+1 FROM runs))', run.id, 'draft', run.startedAt, run.endedAt ?? null, run.distanceMeters, (run as RunRecord).trashedAt ?? null, effective.distanceMeters, effective.activeRunningTime);

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { router } from 'expo-router';
-import { Alert, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { PaceWorkoutCard } from '@/components/pace-workout-card';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { StopButton } from '@/components/stop-button';
@@ -104,7 +105,7 @@ export default function RunScreen() {
       <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
         <Text style={styles.brand}>RUNJOURNEY</Text>
         <BuildInfo />
-        <View style={styles.content}>
+        <ScrollView contentContainerStyle={styles.content}>
           {activeRun ? (
             <>
               <Text style={styles.eyebrow}>{stateOf(activeRun).replace('_', ' ')}</Text>
@@ -113,6 +114,7 @@ export default function RunScreen() {
               <Text style={styles.elapsed}>{formatElapsed(time!.activeRunningTime)}</Text>
               <Text style={styles.status}>{stateOf(activeRun) === 'AUTO_STOP' ? '停止しています。走り出すと自動再開' : stateOf(activeRun) === 'BREAK' ? `休憩中 ${formatElapsed(time!.breakDuration)}` : pace ? `${Math.floor(pace / 60)}:${String(Math.floor(pace % 60)).padStart(2, '0')} /km` : 'GPSを記録中'}</Text>
               {activeRun.features?.break && !activeRun.endedAt && <Pressable accessibilityRole="button" disabled={busy} onPress={changeState} style={{ width: '100%', minHeight: 64, borderRadius: 16, backgroundColor: '#33424C', alignItems: 'center', justifyContent: 'center', marginBottom: 20 }}><Text style={styles.startButtonText}>{stateOf(activeRun) === 'BREAK' ? '再 開' : '休 憩'}</Text></Pressable>}
+              <PaceWorkoutCard run={activeRun} now={now} />
               {saveError || activeRun.endedAt ? <View style={{ width: '100%' }}>
                 <Text accessibilityRole="alert" style={styles.description}>{saveError || '終了した記録の保存が未完了です。'}</Text>
                 <Pressable testID="retry-save" accessibilityRole="button" disabled={busy} onPress={stop} style={styles.startButton}><Text style={styles.startButtonText}>{busy ? '保存中…' : '保存を再試行'}</Text></Pressable>
@@ -127,7 +129,7 @@ export default function RunScreen() {
               </Pressable>
             </>
           )}
-        </View>
+        </ScrollView>
       </SafeAreaView>
     </View>
   );
@@ -137,7 +139,7 @@ const styles = StyleSheet.create({
   background: { flex: 1, backgroundColor: '#111418' },
   container: { flex: 1, paddingHorizontal: 24 },
   brand: { color: '#E85D2A', fontSize: 15, fontWeight: '800', letterSpacing: 2.5, marginTop: 14 },
-  content: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 50 },
+  content: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 16, paddingBottom: 50 },
   eyebrow: { color: '#E85D2A', fontSize: 16, fontWeight: '800', letterSpacing: 4, marginBottom: 24 },
   distance: { color: '#F5F2EB', fontSize: 92, fontWeight: '200', letterSpacing: -5, lineHeight: 100 },
   unit: { color: '#A6A7A9', fontSize: 24, fontWeight: '500', marginTop: -4 },

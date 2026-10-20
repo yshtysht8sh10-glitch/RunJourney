@@ -23,6 +23,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   companion object {
     const val ACTION_START = "app.runjourney.announcer.START"
     const val ACTION_TEST = "app.runjourney.announcer.TEST"
+    const val ACTION_WORKOUT = "app.runjourney.announcer.WORKOUT"
     const val PREFS = "runjourney-announcer"
     private const val CHANNEL = "runjourney-voice"
     private const val TAG = "RunAnnouncer"
@@ -32,6 +33,8 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   private var tts: TextToSpeech? = null
   private var ready = false
   private var speaking = false
+  private var lastSpeechAt = 0L
+  private var pendingWorkout: Pair<String, Long>? = null
   private val messages = java.util.ArrayDeque<String>()
   private var wakeLock: PowerManager.WakeLock? = null
   private var focusRequest: AudioFocusRequest? = null
@@ -71,7 +74,8 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    val testing = intent?.action == ACTION_TEST
+    val workout = intent?.action == ACTION_WORKOUT
+    val testing = intent?.action == ACTION_TEST || workout
     if (intent?.action == ACTION_START) {
       val started = intent.getLongExtra("startedAtMs", System.currentTimeMillis())
       val previous = preferences.getLong("startedAtMs", 0)
@@ -88,18 +92,28 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     val notification = Notification.Builder(this, CHANNEL)
       .setSmallIcon(applicationInfo.icon)
       .setContentTitle("RunJourney 音声通知中")
-      .setContentText("走行中、5分ごとに時間と距離を読み上げます")
+      .setContentText("走行中の時間・距離・ペースを案内します")
       .setOngoing(true).build()
     startForeground(607, notification)
-    if (testing) {
-      val message = intent?.getStringExtra("message") ?: ""
-      if (ready) speak(message) else pendingTests.add(message)
-      if (!preferences.getBoolean("running", false)) return START_NOT_STICKY
-    }
-    if (wakeLock?.isHeld != true) {
+    // Workout-only speech also needs a bounded wake lock while the screen is off.
+    // A periodic START upgrades any previous temporary lock to the running lock.
+    if (wakeLock?.isHeld != true || intent?.action == ACTION_START) {
+      wakeLock?.let { if (it.isHeld) it.release() }
       wakeLock = (getSystemService(Context.POWER_SERVICE) as PowerManager)
         .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "RunJourney:VoiceAnnouncements")
-        .apply { acquire() }
+        .apply { if (preferences.getBoolean("running", false)) acquire() else acquire(30_000) }
+    }
+    if (testing) {
+      val message = intent?.getStringExtra("message") ?: ""
+      if (workout) {
+        pendingWorkout = message to (intent?.getLongExtra("expiresAt", 0) ?: 0)
+        if (ready) deliverWorkout()
+      } else {
+        // Stops/transitions and periodic laps take priority over guidance.
+        pendingWorkout = null
+        if (ready) speak(message) else pendingTests.add(message)
+      }
+      if (!preferences.getBoolean("running", false)) return START_NOT_STICKY
     }
     handler.removeCallbacks(tick)
     handler.post(tick)
@@ -112,6 +126,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       tts?.language = Locale.JAPANESE
       pendingTests.forEach { speak(it) }
       pendingTests.clear()
+      deliverWorkout()
     }
     else {
       Log.e(TAG, "Japanese TTS initialization failed: $status")
@@ -122,8 +137,23 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
 
   private fun speak(message: String) {
     if (message.isBlank()) return
+    pendingWorkout = null
     messages.add(message)
     speakNext()
+  }
+
+  private fun deliverWorkout() {
+    val pending = pendingWorkout ?: return
+    pendingWorkout = null
+    val now = System.currentTimeMillis()
+    val interval = preferences.getLong("intervalMs", 300_000).coerceAtLeast(1_000)
+    val active = preferences.getLong("activeMs", 0) +
+      if (preferences.getBoolean("paused", false)) 0 else (now - preferences.getLong("clockUpdatedMs", now)).coerceAtLeast(0)
+    val lapDueSoon = preferences.getBoolean("running", false) &&
+      (interval - active % interval <= 20_000 || active / interval > preferences.getInt("lastAnnouncement", 0))
+    if (preferences.getBoolean("workoutAllowed", false) && now <= pending.second &&
+      !speaking && messages.isEmpty() && !lapDueSoon && now - lastSpeechAt >= 20_000) speak(pending.first)
+    else if (!speaking && messages.isEmpty()) finishTest()
   }
 
   private fun speakNext() {
@@ -141,6 +171,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     }
     focusRequest = request
     speaking = true
+    lastSpeechAt = System.currentTimeMillis()
     tts?.setAudioAttributes(attributes)
     tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
       override fun onStart(utteranceId: String?) {
@@ -154,6 +185,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   }
 
   private fun finishUtterance(status: String) {
+    lastSpeechAt = System.currentTimeMillis()
     preferences.edit().putString("ttsStatus", status).apply()
     releaseFocus()
     speaking = false

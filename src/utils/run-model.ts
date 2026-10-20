@@ -97,7 +97,7 @@ export function effectiveDistance(run: DistanceRun) { return effectiveEdges(run)
 
 // Filter edges in raw GPS time, then place them on the shared effective clock.
 // Every lap/total uses these same edges, including interpolated lap boundaries.
-function effectiveEdges(run: DistanceRun, now?: number) {
+export function effectiveEdges(run: DistanceRun, now?: number) {
   const points = effectivePoints(run), start = Date.parse(run.startedAt);
   const end = run.endedAt ? Date.parse(run.endedAt) : now ?? points.at(-1)?.timestamp ?? start;
   if (!Number.isFinite(start) || !Number.isFinite(end)) return [];

@@ -10,6 +10,7 @@ import { ActiveRun, LocationPoint, RunRecord, RunState } from '@/types/run';
 import { detectStop, effectiveDistance, recordDiagnostic, stateOf, stopIntervals, transition } from '@/utils/run-model';
 import { validateRuns } from '@/utils/run-backup';
 import { GpsObservationSession, incrementObservationCount, RawLocationObservation } from '@/utils/gps-observation';
+import { safelyAdvancePaceWorkout } from '@/domain/pace-workout';
 
 
 let operationQueue: Promise<unknown> = Promise.resolve();
@@ -152,6 +153,7 @@ export const RunRepository = {
       active = { ...active, points: [...active.points, ...persisted], updatedAt: new Date().toISOString() };
       if (persisted.length || (active.events?.length ?? 0) !== previousEventCount) {
         active.distanceMeters = effectiveDistance(active);
+        active = safelyAdvancePaceWorkout(active, incoming.at(-1)?.point.timestamp ?? Date.now());
         observationSession.needsCheckpoint = true;
       }
       observationSession.active = active;
@@ -179,12 +181,13 @@ export const RunRepository = {
       const merged = [...active.points, ...incoming]
         .sort((a, b) => a.timestamp - b.timestamp);
       for (const point of incoming.sort((a, b) => a.timestamp - b.timestamp).filter(p => p.timestamp >= (active.points.at(-1)?.timestamp ?? Date.parse(active.startedAt)))) active = detectStop(active, point, 'live-persisted');
-      const updated: ActiveRun = {
+      let updated: ActiveRun = {
         ...active,
         points: merged,
         distanceMeters: effectiveDistance({ ...active, points: merged }),
         updatedAt: new Date().toISOString(),
       };
+      updated = safelyAdvancePaceWorkout(updated, incoming.at(-1)?.timestamp ?? Date.now());
       await (await database()).saveDraft(updated);
       return updated;
     });
@@ -199,6 +202,7 @@ export const RunRepository = {
       let run = transition(original, state, timestamp, 'user');
       if (stateOf(run) !== stateOf(original)) run = recordDiagnostic(run, { timestamp, state: stateOf(run), decision: 'RESET', reason: 'STATE_CHANGED' });
       if (observationSession) run.distanceMeters = effectiveDistance(run);
+      run = safelyAdvancePaceWorkout(run, timestamp, true);
       await (await database()).saveDraft(run);
       if (observationSession) observationSession.active = run;
       return run;
@@ -212,7 +216,7 @@ export const RunRepository = {
 
       const draft: ActiveRun = observationSession?.active ?? stored;
       endedAt = draft.endedAt ?? endedAt;
-      const active = flushObservation(draft, Date.parse(endedAt));
+      const active = safelyAdvancePaceWorkout(flushObservation(draft, Date.parse(endedAt)), Date.parse(endedAt), true);
       const record: RunRecord = {
         ...active,
         detector: active.detector ? { ...active.detector, window: undefined } : undefined,
