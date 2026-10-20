@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { RunRepository } from '@/repositories/run-repository';
 import { RunSummary as SavedRunSummary } from '@/domain/pages';
 import { runMetrics } from '@/domain/review';
+import PaceWorkoutReport from '@/components/pace-workout-report';
 
 export default function RunSummary() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -38,6 +39,7 @@ export default function RunSummary() {
       <Text style={styles.label}>開始：{new Date(run.startedAt).toLocaleString('ja-JP')}</Text>
       <Text style={styles.label}>終了：{new Date(run.endedAt).toLocaleString('ja-JP')}</Text>
       <Text testID="summary-saved" style={styles.saved}>履歴に保存しました</Text>
+      <PaceWorkoutReport key={run.id} runId={run.id} />
       <Pressable testID="summary-sync" accessibilityRole="button" style={styles.button} onPress={() => router.push({ pathname: './cloud-sync', params: { runId: run.id } })}><Text style={styles.buttonText}>このRUNをクラウド同期</Text></Pressable>
     </> : <>
       <Text accessibilityRole={error ? 'alert' : undefined} style={styles.text}>{error || '保存した記録を読み込み中…'}</Text>

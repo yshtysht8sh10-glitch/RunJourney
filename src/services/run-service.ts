@@ -1,7 +1,6 @@
 import * as Crypto from 'expo-crypto';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
-import * as Application from 'expo-application';
 
 import { RunRepository } from '@/repositories/run-repository';
 import { LOCATION_TASK_NAME } from '@/tasks/location-task';
@@ -9,6 +8,8 @@ import { ActiveRun, RunHistoryItem, RunRecord } from '@/types/run';
 import { RunSettings } from '@/repositories/run-settings';
 import { VoiceAnnouncement } from '@/services/voice-announcement';
 import { isStandaloneTest } from '@/utils/build';
+import { PaceSettingsRepository } from '@/repositories/pace-settings';
+import { createPaceWorkout } from '@/domain/pace-workout';
 
 const trackingOptions: Location.LocationTaskOptions = {
   accuracy: Location.Accuracy.High,
@@ -75,14 +76,19 @@ export const RunService = {
     }
 
     const now = new Date().toISOString();
+    // Guidance must never prevent START if its preferences are unavailable.
+    let paceWorkout: ActiveRun['paceWorkout'];
+    try { paceWorkout = createPaceWorkout(await PaceSettingsRepository.get(), Date.parse(now)); }
+    catch (error) { console.warn('Pace settings unavailable', error); }
     const active: ActiveRun = {
       id: Crypto.randomUUID(),
       startedAt: now,
       distanceMeters: 0,
       points: [],
+      ...(paceWorkout ? { paceWorkout } : {}),
       features: await RunSettings.get(),
       events: [],
-      ...(Application.applicationId === 'app.runjourney.mobile.test' ? { diagnostics: { entries: [], counts: {}, processed: 0 } } : {}),
+      ...(isStandaloneTest() ? { diagnostics: { entries: [], counts: {}, processed: 0 } } : {}),
       createdAt: now,
       updatedAt: now,
     };

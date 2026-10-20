@@ -9,6 +9,7 @@ import { isStandaloneTest } from '@/utils/build';
 import { exportAnalysis } from '@/services/run-export';
 import { RunSummary } from '@/domain/pages';
 import NativeRunPages from '@/components/native-run-pages';
+import PaceWorkoutReport from '@/components/pace-workout-report';
 
 export default function RunDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -60,6 +61,7 @@ function LegacyRunDetail() {
       <Text style={styles.metric}>{(effective.distanceMeters / 1000).toFixed(2)} km · {pace(effective.pace.secondsPerKm)}</Text>
       <Text style={styles.text}>実走 {duration(effective.activeRunningTime)} / 全経過 {duration(effective.wallClockElapsed)}</Text>
       <Text style={styles.text}>GPSポイント {run.points.length}件</Text>
+      <PaceWorkoutReport key={run.id} runId={run.id} />
       <Text style={styles.note}>Analysis Exportには正確な緯度経度は含まれません。走行日時・活動情報は含まれます。</Text>
       <Pressable testID="analysis-export" accessibilityRole="button" disabled={busy} style={styles.button} onPress={async () => {
         if (busy) return;

@@ -1,11 +1,8 @@
 import { PagedRunSource, iteratePages } from "./pages";
 import { ActiveRun, LocationPoint, RunEvent } from "../types/run";
-import { effectiveRun, stopIntervals } from "../utils/run-model";
+import { effectiveEdges, effectiveRun, stopIntervals } from "../utils/run-model";
 import { analyzePace, timeLapRanges } from "../utils/pace-analysis";
-export async function pagedLapAnalysis(
-  source: PagedRunSource,
-  progress?: (points: number) => void,
-) {
+async function readAnalysisControl(source: PagedRunSource) {
   const summary = await source.summary();
   async function text(kind: "metadata" | "operations") {
     let result = "";
@@ -44,6 +41,13 @@ export async function pagedLapAnalysis(
     points: [],
     distanceMeters: summary.originalDistanceMeters,
   } as ActiveRun;
+  return { summary, control };
+}
+export async function pagedLapAnalysis(
+  source: PagedRunSource,
+  progress?: (points: number) => void,
+) {
+  const { summary, control } = await readAnalysisControl(source);
   const ranges = timeLapRanges(summary.activeRunningTime),
     distances = ranges.map(() => 0);
   let previous: LocationPoint | undefined;
@@ -62,4 +66,31 @@ export async function pagedLapAnalysis(
     laps: ranges.map((r, i) => analyzePace(r.startMs, r.endMs, distances[i])),
     intervals: stopIntervals(control, Date.parse(summary.endedAt)),
   };
+}
+
+/** Distance laps share exactly the core effective edges; retain one page + one boundary fix. */
+export async function pagedDistanceLaps(source: PagedRunSource, meters = 1000) {
+  if (!Number.isFinite(meters) || meters < 100) throw new Error('ラップ距離が不正です');
+  const { summary, control } = await readAnalysisControl(source);
+  const laps: ReturnType<typeof analyzePace>[] = [];
+  let previous: LocationPoint | undefined;
+  let pendingDistance = 0, lapStart = 0;
+  for await (const page of iteratePages(source, 'gps')) {
+    const points = page.items as LocationPoint[];
+    for (const edge of effectiveEdges({ ...control, points: previous ? [previous, ...points] : points }, Date.parse(summary.endedAt))) {
+      let remaining = edge.distanceMeters;
+      let cursor = edge.startMs;
+      while (pendingDistance + remaining >= meters) {
+        const used = meters - pendingDistance;
+        const end = cursor + (edge.endMs - cursor) * used / remaining;
+        laps.push(analyzePace(lapStart, end, meters));
+        if (laps.length > 2000) throw new Error('ラップ上限2000件のため解析を保留します');
+        lapStart = end; cursor = end; remaining -= used; pendingDistance = 0;
+      }
+      pendingDistance += remaining;
+    }
+    previous = points.at(-1);
+  }
+  if (pendingDistance > 0) laps.push(analyzePace(lapStart, summary.activeRunningTime, pendingDistance));
+  return laps;
 }

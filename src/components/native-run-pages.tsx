@@ -6,6 +6,7 @@ import { RunPage, RunSummary, StreamKind, STREAMS } from "../domain/pages";
 import { exportPagedRun } from "../services/paged-export";
 import { pagedLapAnalysis } from "../domain/paged-analysis";
 import { analyzePace } from "../utils/pace-analysis";
+import PaceWorkoutReport from './pace-workout-report';
 export default function NativeRunPages({ summary }: { summary: RunSummary }) {
   const [page, setPage] = useState<RunPage | null>(null),
     [busy, setBusy] = useState(false),
@@ -35,6 +36,7 @@ export default function NativeRunPages({ summary }: { summary: RunSummary }) {
   return (
     <ScrollView contentContainerStyle={styles.screen}>
       <Text style={styles.title}>長時間走行のページ詳細</Text>
+      <PaceWorkoutReport key={summary.id} runId={summary.id} lazy />
       <Text style={styles.distance}>
         {(summary.distanceMeters / 1000).toFixed(2)} km
       </Text>

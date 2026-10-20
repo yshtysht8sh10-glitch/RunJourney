@@ -2,9 +2,10 @@ import SettingsStorage from '@/repositories/storage';
 import { Platform } from 'react-native';
 
 import { ActiveRun } from '@/types/run';
-import { announcementClock, completedLapAnalysis } from '@/utils/run-model';
+import { announcementClock, completedLapAnalysis, stateOf } from '@/utils/run-model';
 import { analyzePace, DEFAULT_LAP_MS } from '@/utils/pace-analysis';
 import { DEFAULT_VOICE_ITEMS, formatAnnouncement, VoiceItems } from '@/utils/voice-format';
+import { validPaceState } from '@/domain/pace-workout';
 
 const SETTING_KEY = '@runjourney/voice-announcement/v1';
 // Keep the trigger separate from the UI so distance and other intervals can be added later.
@@ -59,6 +60,14 @@ export const VoiceAnnouncement = {
     void this.updateRun(run);
   },
   async updateRun(run: ActiveRun): Promise<void> {
+    // Independent of #6's periodic switch, but uses its one native TTS queue.
+    // Old binaries without this optional bridge keep recording normally.
+    try {
+      const s = run.paceWorkout;
+      const allowed = validPaceState(s) && s.voice && !run.endedAt && stateOf(run) === 'RUNNING';
+      const notice = validPaceState(s) ? s.notice : undefined;
+      nativeAnnouncer()?.updateWorkout?.(notice?.key ?? '', notice?.message ?? '', (notice?.at ?? 0) + 20_000, allowed);
+    } catch (error) { console.warn('Pace voice update failed; recording continues', error); }
     try {
       if (!(await this.enabled())) return;
       const clock = announcementClock(run);

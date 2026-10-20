@@ -8,6 +8,8 @@ export type LocationPoint = {
 };
 
 export type RunRecord = {
+  /** Optional bounded guidance metadata; GPS/history remain valid if absent. */
+  paceWorkout?: import('../domain/pace-workout').PaceWorkoutState;
   id: string;
   startedAt: string;
   endedAt: string;

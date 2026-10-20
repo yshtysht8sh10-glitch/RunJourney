@@ -9,6 +9,21 @@ class RunAnnouncerModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("RunAnnouncer")
 
+    Function("updateWorkout") { key: String, message: String, expiresAt: Double, allowed: Boolean ->
+      val context = requireNotNull(appContext.reactContext)
+      val prefs = context.getSharedPreferences(RunAnnouncerService.PREFS, 0)
+      prefs.edit().putBoolean("workoutAllowed", allowed).apply()
+      if (allowed && message.isNotBlank() && expiresAt > System.currentTimeMillis() && prefs.getString("workoutKey", "") != key) {
+        prefs.edit().putString("workoutKey", key).apply()
+        val intent = Intent(context, RunAnnouncerService::class.java).apply {
+          action = RunAnnouncerService.ACTION_WORKOUT
+          putExtra("message", message)
+          putExtra("expiresAt", expiresAt.toLong())
+        }
+        if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)
+      }
+    }
+
     Function("start") { startedAtMs: Double, intervalMs: Double ->
       val context = requireNotNull(appContext.reactContext)
       val intent = Intent(context, RunAnnouncerService::class.java).apply {
@@ -71,7 +86,7 @@ class RunAnnouncerModule : Module() {
 
     Function("stop") {
       val context = requireNotNull(appContext.reactContext)
-      context.getSharedPreferences(RunAnnouncerService.PREFS, 0).edit().putBoolean("running", false).apply()
+      context.getSharedPreferences(RunAnnouncerService.PREFS, 0).edit().putBoolean("running", false).putBoolean("workoutAllowed", false).apply()
       context.stopService(Intent(context, RunAnnouncerService::class.java))
     }
   }

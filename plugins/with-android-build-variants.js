@@ -38,6 +38,17 @@ module.exports = function withAndroidBuildVariants(config) {
       );
     }
 
+    if (!/paceWorkout\s*\{/.test(source)) {
+      source = source.replace(RELEASE_BUILD_TYPE,
+        `$1paceWorkout {
+            initWith release
+            applicationIdSuffix '.pace'
+            signingConfig signingConfigs.debug
+            matchingFallbacks = ['release']
+            resValue "string", "app_name", "RunJourney Pace"
+        }$1$2`);
+    }
+
     source = source.replace(/output.versionCodeOverride = \d+/g, 'output.versionCodeOverride = 18');
     if (!source.includes('output.versionCodeOverride = 18')) {
       source += `
