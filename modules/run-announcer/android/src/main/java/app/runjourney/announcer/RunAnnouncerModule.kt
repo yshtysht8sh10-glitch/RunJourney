@@ -2,7 +2,7 @@ package app.runjourney.announcer
 
 import android.content.Intent
 import android.os.Build
-import org.json.JSONArray
+import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
@@ -10,11 +10,8 @@ class RunAnnouncerModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("RunAnnouncer")
 
-    Function("voiceLog") {
-      val prefs = requireNotNull(appContext.reactContext).getSharedPreferences("runjourney-voice-debug", 0)
-      val entries = JSONArray(prefs.getString("entries", "[]"))
-      val kept = (0 until entries.length()).map { entries.getJSONObject(it) }.filter { System.currentTimeMillis() - it.optLong("loggedAt") <= 7L * 86400000 }
-      JSONArray(kept).toString()
+    AsyncFunction("voiceLog") { limit: Int, promise: Promise ->
+      VoiceLogStorage.read(requireNotNull(appContext.reactContext), limit, promise)
     }
     Function("notifyBatch") { payload: String ->
       val context = requireNotNull(appContext.reactContext)

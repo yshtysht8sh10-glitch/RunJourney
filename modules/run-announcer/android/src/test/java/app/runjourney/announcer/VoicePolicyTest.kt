@@ -17,10 +17,4 @@ class VoicePolicyTest {
     assertEquals("QUEUE_LIMIT", reason("AUTO_RESUME_CONFIRMED", size = 16))
     assertEquals("OBSERVATION_ONLY", reason("STOP_CANDIDATE_CANCELLED", empty = true))
   }
-  @Test fun logsBoundByCountAndUtf8Bytes() {
-    assertEquals(88, VoicePolicy.retainedStart(List(600) { 10 }))
-    assertEquals(1, VoicePolicy.retainedStart(listOf(700000, 700000)))
-    assertEquals(1, VoicePolicy.retainedStart(listOf(1048577)))
-    assertEquals(0, VoicePolicy.retainedStart(emptyList()))
-  }
 }

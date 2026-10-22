@@ -51,19 +51,10 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
 
   private fun audit(n: JSONObject, status: String) {
     try {
-      val entries = JSONArray(debugPrefs.getString("entries", "[]"))
       val now = System.currentTimeMillis()
       val record = JSONObject(n.toString()).put("status", status).put("loggedAt", now)
       if (!record.has("startedAt")) record.put("startedAt", JSONObject.NULL)
-      val retained = mutableListOf<JSONObject>()
-      for (i in 0 until entries.length()) {
-        val e = entries.getJSONObject(i)
-        if (now - e.optLong("loggedAt") <= 7L * 86400000) retained.add(e)
-      }
-      retained.add(record)
-      val drop = VoicePolicy.retainedStart(retained.map { it.toString().toByteArray(Charsets.UTF_8).size })
-      repeat(drop) { retained.removeAt(0) }
-      debugPrefs.edit().putString("entries", JSONArray(retained).toString()).apply()
+      VoiceLogStorage.append(applicationContext, record.toString(), now)
     } catch (e: Exception) { Log.w(TAG, "Voice audit unavailable", e) }
   }
 

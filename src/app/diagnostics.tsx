@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import Constants from 'expo-constants';
@@ -19,10 +19,12 @@ export default function Diagnostics() {
   const [settings, setSettings] = useState({ autoStop: false, break: false });
   const [error, setError] = useState('');
   const [voiceLog, setVoiceLog] = useState('[]');
+  const [exportingVoice, setExportingVoice] = useState(false);
+  const voiceExportLock = useRef(false);
   const load = useCallback(async () => {
     if (!isStandaloneTest()) return;
     try {
-      setVoiceLog(VoiceAnnouncement.debugLog());
+      setVoiceLog(await VoiceAnnouncement.debugLog());
       const [active, page, storedSettings] = await Promise.all([RunRepository.getActiveRun(), RunRepository.getHistoryPage(1), RunSettings.get()]);
       const saved = id ? await RunRepository.getRun(id) : page.length ? await RunRepository.getRun(page[0].id) : null;
       setRun(id ? saved : latestDiagnosticRun(active, saved ? [saved] : []));
@@ -39,13 +41,22 @@ export default function Diagnostics() {
     latestEntries: (report.actualDiagnostics?.entries ?? report.currentReplay.diagnostics?.entries ?? []).slice(-20) }, null, 2) : '';
   const copy = async () => { try { await Clipboard.setStringAsync(payload); Alert.alert('コピーしました', 'この会話へ貼り付けてください。'); } catch (err) { Alert.alert('コピーできませんでした', String(err)); } };
   const share = async () => { try { await Share.share({ message: payload, title: 'RunJourney Auto Stop Diagnostics' }); } catch (err) { Alert.alert('共有できませんでした', String(err)); } };
+  const exportVoice = async () => {
+    if (voiceExportLock.current) return;
+    voiceExportLock.current = true; setExportingVoice(true);
+    try {
+      const full = await VoiceAnnouncement.debugLog(20000);
+      await exportVoiceLog(JSON.stringify({ version: 1, entries: JSON.parse(full), verification: verifyVoiceLog(full) }));
+    } catch (e) { Alert.alert('出力できませんでした', String(e)); }
+    finally { voiceExportLock.current = false; setExportingVoice(false); }
+  };
   return <SafeAreaView style={styles.screen}><ScrollView contentContainerStyle={styles.content}>
     <Pressable onPress={() => id ? router.replace({ pathname: '/run-detail', params: { id } }) : router.replace('/settings')} style={styles.button}><Text style={styles.text}>‹ 戻る</Text></Pressable>
     <Text style={styles.title}>Auto Stop Diagnostics</Text>
     {!isStandaloneTest() ? <Text style={styles.text}>Standalone Test版専用です。</Text> : <>
       <Pressable accessibilityRole="button" onPress={load} style={styles.button}><Text style={styles.text}>最新情報に更新</Text></Pressable>
-      <Text style={styles.text}>音声デバッグログ（端末内・最大512イベント / 1MB / 7日）</Text>
-      <Pressable accessibilityRole="button" style={styles.button} onPress={() => exportVoiceLog(JSON.stringify({ version: 1, entries: JSON.parse(voiceLog), verification: verifyVoiceLog(voiceLog) }, null, 2)).catch(e => Alert.alert('出力できませんでした', String(e)))}><Text style={styles.text}>音声ログ JSONをExport</Text></Pressable>
+      <Text style={styles.text}>音声デバッグログ（端末内・最大20,000イベント / 20MB / 7日）</Text>
+      <Pressable accessibilityRole="button" disabled={exportingVoice} style={styles.button} onPress={exportVoice}><Text style={styles.text}>{exportingVoice ? '音声ログを出力中…' : '音声ログ JSONをExport'}</Text></Pressable>
       <Text selectable style={styles.log}>{JSON.stringify(JSON.parse(voiceLog).slice(-12), null, 2)}</Text>
       {!!error && <Text accessibilityRole="alert" style={styles.text}>{error}</Text>}
       {!report ? <Text style={styles.text}>{error || '記録がありません'}</Text> : <>

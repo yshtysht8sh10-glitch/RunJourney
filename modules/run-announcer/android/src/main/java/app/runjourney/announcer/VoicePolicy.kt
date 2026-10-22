@@ -12,9 +12,4 @@ internal object VoicePolicy {
     size >= 16 -> "QUEUE_LIMIT"
     else -> "QUEUED"
   }
-  fun retainedStart(sizes: List<Int>, maxCount: Int = 512, maxBytes: Int = 1024 * 1024): Int {
-    var start = 0; var bytes = sizes.sum()
-    while (sizes.size - start > maxCount || bytes > maxBytes) { bytes -= sizes[start]; start++ }
-    return start
-  }
 }

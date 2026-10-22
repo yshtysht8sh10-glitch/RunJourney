@@ -23,7 +23,7 @@ function nativeAnnouncer() {
 }
 
 export const VoiceAnnouncement = {
-  debugLog() { return nativeAnnouncer()?.voiceLog?.() ?? '[]'; },
+  async debugLog(limit = 12): Promise<string> { return await nativeAnnouncer()?.voiceLog?.(limit) ?? '[]'; },
   diagnostics() { return nativeAnnouncer()?.diagnostics?.() ?? null; },
   async items(): Promise<VoiceItems> {
     try {
