@@ -209,6 +209,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       pendingTests.clear()
       deliverWorkout()
       speakNext()
+      if (!speaking && messages.isEmpty()) finishTest()
     }
     else {
       Log.e(TAG, "Japanese TTS initialization failed: $status")
