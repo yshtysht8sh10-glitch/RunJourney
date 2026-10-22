@@ -63,3 +63,27 @@ Exportのverificationは保存済み入力からラップ時間・ラップ/累�
 EAS cloudSyncTest profileを使用。build/署名照合/ADB install -r/更新後Backup比較の結果を追記する。Production `app.runjourney.mobile` と隔離版 `app.runjourney.mobile.pace` は更新しない。Testのアンインストール/データ削除は行わない。
 
 追加検証: 停止中/JS復帰時も完了済み通知の期限が伸びないことを検証。実走時計→壁時計を最初の到達時刻で逆算し、停止による期限更新を防止。既読5分通知のGPS再解析も省略。
+
+## 実データの追加調査（読み取り専用）
+
+最新バックアップのペース走（681点/停止再開20イベント）を、旧windowPaceと修正後の関数で比較。旧計算が有効だった556窓のうち、修正後は停止末尾等の3窓を保留した。停止イベント近傍の1例は307秒/kmであり、「異常に遅い」という過去の申告そのものはこの比較で立証できなかった。当時の発話ログがないため根本原因の断定はしない。私有分析JSONはバックアップフォルダ内に保管し、位置情報はPRに含めない。
+
+追加のSQLite実装テスト13件も成功。EAS buildソースはd0bb6dd（元実装10cdadc、期限修正25ab803、初期化後のidle service終了修正d0bb6dd）。先行ビルド25ab803は取り消し、最終ソースのAPKのみ導入する。
+
+## EAS・インストール結果
+
+- EAS成功: https://expo.dev/accounts/yshtysht8sh10/projects/RunJourney/builds/ee656ee9-bf49-45be-99c2-a2b7a5581b77
+- profile cloudSyncTest、実装ソースd0bb6dd。APK内app.configもd0bb6dd+cloud-sync-v18を確認。
+- 実APK manifest: app.runjourney.mobile.test / versionCode18 / minSdk26。EASの設定上のappIdentifierはベースIDだが、実APKで更新対象IDを照合済み。
+- APK署名SHA-256は更新前と一致: fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c。
+- APK SHA-256: 1455a1a5706bd9a2f7575c67a6b2beaf69936a26b21389195127e023f8c423d2。112,437,559 bytes。
+- 私有保全フォルダのrunjourney-test-voice-d0bb6dd.apkに保存。Hermes bundleに新しい停止予告/停止確定文、貯金フィールド、音声ログExportを確認。
+- 2026-10-22 16:57 JST、ADB install -rはSuccess。アンインストール/データ消去/ダウングレードなし。
+- Test MainActivityの起動コマンド成功、PIDを確認。firstInstallTimeは2026-09-30のまま、同じdataDir。Production/隔離Pace版は操作していない。
+- 更新後のTestプロセスにAndroidRuntime/ReactNativeJSのerror出力は検出されなかった。
+
+**実機確認の未完了項目**: 端末はmIsShowing=true/mInputRestricted=trueのロック状態。解除を依頼済み。画面上の起動/履歴/GPS詳細/ペース設定保持、更新後標準Backup Exportと全フィールド一致比較、新音声ログの実機保存/再読込/Exportは、ロック解除後に確認する。上書きインストール成功やfirstInstallTime維持だけで実データ保持を検証済みとは扱わない。
+
+更新前の36履歴/GPS11953点/ペース設定は完全なバックアップとして保全済み。まだSTART・疑似GPS・設定変更は行っていない。標準Backupの再Export後に、事前作成した比較スクリプトでruns/settings/draft/protectedIdsをcanonical比較する。実走受入条件も未完了として両IssueをOPENで維持。
+
+Draft PR: https://github.com/yshtysht8sh10-glitch/RunJourney/pull/37
