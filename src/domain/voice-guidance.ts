@@ -65,3 +65,14 @@ export function voiceSnapshot(run: ActiveRun, now: number) {
     source: 'existing effectiveEdges/timeModel; current pace and marathon use different windows',
     unavailable: ['OS audible volume', 'listener hearing confirmation'] };
 }
+
+/** Earliest wall time at an effective boundary; plateaus never refresh old notices. */
+export function activeBoundaryWallTime(run: ActiveRun, activeMs: number, now: number) {
+  let lo = Date.parse(run.startedAt), hi = run.endedAt ? Date.parse(run.endedAt) : now;
+  const active = { ...run, endedAt: undefined };
+  for (let i = 0; i < 48 && hi - lo > 0.001; i++) {
+    const mid = (lo + hi) / 2;
+    if (timeModel(active, mid).activeRunningTime >= activeMs) hi = mid; else lo = mid;
+  }
+  return hi;
+}

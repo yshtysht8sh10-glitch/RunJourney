@@ -1,4 +1,4 @@
-import { kilometerLaps, savingsMessage, savingsSeconds, spokenDuration, stopHint, voiceSnapshot } from '@/domain/voice-guidance';
+import { activeBoundaryWallTime, kilometerLaps, savingsMessage, savingsSeconds, spokenDuration, stopHint, voiceSnapshot } from '@/domain/voice-guidance';
 import { verifyVoiceLog } from '@/domain/voice-log';
 import { createPaceWorkout, DEFAULT_PACE_SETTINGS, windowPace } from '@/domain/pace-workout';
 import { ActiveRun, LocationPoint } from '@/types/run';
@@ -57,4 +57,12 @@ test('captured log operands recompute saving, stopped time and all-run predictio
   expect(verifyVoiceLog(text)[0]).toMatchObject({ savingsCorrect: true, stoppedTimeExcluded: true, marathonCorrect: true, lapSavingsCorrect: null });
   expect(verifyVoiceLog(JSON.stringify([{ data: { ...data, cumulativeSavingsSec: 9999 } }]))[0].savingsCorrect).toBe(false);
   expect(verifyVoiceLog('[{}]')[0].savingsCorrect).toBeNull();
+});
+
+test('wall deadline of a completed active boundary never advances during a stop or restored callback', () => {
+  let r = transition(run(), 'AUTO_STOP', 350000, 'sensor', 355000);
+  expect(activeBoundaryWallTime(r, 300000, 360000)).toBeCloseTo(300000, 2);
+  expect(activeBoundaryWallTime(r, 300000, 960000)).toBeCloseTo(300000, 2);
+  r = transition(r, 'RUNNING', 650000, 'sensor', 660000);
+  expect(activeBoundaryWallTime(r, 400000, 750000)).toBeCloseTo(700000, 2);
 });

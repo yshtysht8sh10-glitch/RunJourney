@@ -6,7 +6,7 @@ import { announcementClock, completedLapAnalysis, stateOf } from '@/utils/run-mo
 import { analyzePace, DEFAULT_LAP_MS } from '@/utils/pace-analysis';
 import { DEFAULT_VOICE_ITEMS, formatAnnouncement, VoiceItems } from '@/utils/voice-format';
 import { distanceBetween } from '@/utils/distance';
-import { kilometerLaps, stopHint, voiceSnapshot } from '@/domain/voice-guidance';
+import { activeBoundaryWallTime, kilometerLaps, stopHint, voiceSnapshot } from '@/domain/voice-guidance';
 import { RunRepository } from '@/repositories/run-repository';
 import { validPaceState } from '@/domain/pace-workout';
 
@@ -156,13 +156,8 @@ async function updateGuidance(run: ActiveRun) {
     for (const lap of lapCache.laps) {
       if (clock.confirmedActiveMs >= 0 && lap.activeMs > clock.confirmedActiveMs) continue;
       // Convert the effective boundary back to wall time for expiry; never refresh old laps.
-      let wallAt = Date.parse(run.startedAt) + lap.activeMs;
-      for (const e of run.events ?? []) {
-        if (e.state !== 'RUNNING' && e.timestamp <= wallAt) {
-          const resume = (run.events ?? []).find(r => r.timestamp > e.timestamp && r.state === 'RUNNING');
-          if (resume) wallAt += resume.timestamp - e.timestamp;
-        }
-      }
+      if (sentNotices.has(`${run.id}:km:${lap.km}`)) continue;
+      const wallAt = activeBoundaryWallTime(run, lap.activeMs, now);
       add(`km:${lap.km}`, 'KILOMETER_LAP', lap.message, wallAt, 30000, 70,
         { lapDistanceMeters: 1000, km: lap.km, startActiveMs: lap.startActiveMs, startBoundary: lap.startBoundary, endBoundary: lap.endBoundary, lapMs: lap.lapMs, lapSavingsSec: lap.lapSavings,
           cumulativeSavingsSec: lap.cumulativeSavings, distanceMeters: lap.km * 1000, activeMs: lap.activeMs,
@@ -173,9 +168,11 @@ async function updateGuidance(run: ActiveRun) {
   }
   if (periodic) {
     const clock = announcementClock(run);
-    const analysis = completedLapAnalysis(run, clock.confirmedActiveMs < 0 ? clock.activeMs : clock.confirmedActiveMs);
+    const verifiedMs = clock.confirmedActiveMs < 0 ? clock.activeMs : clock.confirmedActiveMs;
+    const due = Math.floor(verifiedMs / FIVE_MINUTES_MS);
+    const analysis = due >= 1 && !sentNotices.has(`${run.id}:five:${due}`) ? completedLapAnalysis(run, verifiedMs) : null;
     if (analysis) add(`five:${analysis.index}`, 'FIVE_MINUTES', formatAnnouncement(analysis.endMs, analysis.total.distanceMeters, analysis.lap, await VoiceAnnouncement.items()),
-      now - (snapshot.activeMs - analysis.endMs), 20000, 40,
+      activeBoundaryWallTime(run, analysis.endMs, now), 20000, 40,
       { spokenWindow: 'completed 5-minute active-time lap', spokenPaceSecPerKm: analysis.lap.secondsPerKm, spokenMarathonSec: analysis.lap.projectedTimeSeconds(42195), spokenLapDurationMs: analysis.lap.durationMs, timeLapMs: analysis.endMs, timeLapDistanceMeters: analysis.lap.distanceMeters, timeLap: analysis.lap, totalAtBoundary: analysis.total });
   }
   const batchState = `${run.id}:${candidate}:${running}`;
