@@ -45,8 +45,7 @@ GPS、走行履歴、正式停止判定、音声通知の条件/優先度は変�
 - 再起動後のJSON Exportを端末Downloadに保存してからPCへコピー。post-update-voice-log.jsonは2,924 bytes、端末/PC SHA-256一致 bfa1588ff099c285a5f01a36ccb8bd23d9bcd8e3ed5a2c46b7c901a9d3b139ec。pre-update-voice-log.jsonの2件が全フィールドで完全に含まれることをcanonical比較し、新2件の同一通知ID・開始時刻・STARTED/DONEとverification4件を確認。比較結果voice-log-migration-verification.jsonも保管。
 - 更新後の標準Backupを端末Downloadへ保存完了してからPC保管。post-update-backup.jsonは7,723,090 bytes、端末/PC SHA-256一致 ead07b1cc43fc58a793f7ce4fe296ec2ea66f5959c7378e5b093fb4eabab7956。アプリと同じdecodeBackupによる内部SHAと構造検証成功。
 - 通常21+ごみ箱15件、GPS11,953点、draftなし。全runs（GPS/イベント/補正/診断/ペース情報を含む）・全settings・draft・protectedIdsが更新前と完全一致。post-update-verification.jsonを保管。
-- 再起動後の設定画面でも20km/7:30km/目標2:30:00/±5秒を確認。履歴一覧とGit表示9a8b347の表示も確認。
-- START・疑似GPS・設定保存・履歴追加・Production/隔離Pace版の更新は行っていない。TestをSTART待機へ戻す。
+- 再起動後の設定画面でも20km/7:30km/目標2:30:00/±5秒を確認。履歴一覧と既存10.08km走行詳細（GPS681点）、Git表示9a8b347も確認。
+- START・疑似GPS・設定保存・履歴追加・Production/隔離Pace版の更新は行っていない。TestをSTART待機へ戻した。
 
 音声テストはLEGACYのテスト発話であり、実走のラップ/貯金入力は未取得（検算値null）。実走による画面OFF音声、ラップ/貯金検算、2時間30分連続走行は未検証。900イベント全保持・20MB超過時の制御はPC上の実ファイルテストで確認した結果として区別する。両Issueは実走受入確認までOPENのまま。
-
