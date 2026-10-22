@@ -28,3 +28,12 @@ GPS、走行履歴、正式停止判定、音声通知の条件/優先度は変�
 更新前Backup: 7,723,090 bytes、端末/PC SHA-256一致 60e34ef703f9d4b537db4db228ae37429131423836351f2068833c07e2bbc8d4。アプリのdecodeBackupで内部SHA/構造検証成功。通常21+ごみ箱15=36件、GPS11,953点、draftなし。ユーザーが変更した最新ペース設定は20km/7:30km/±5秒/音声ON/60秒。以前の10km設定へ戻さず、この最新設定を維持する。
 
 ビルド/署名/インストールと更新後の全データ・旧音声ログの比較は完了後に追記する。
+
+## ビルド・上書き結果
+
+- EAS成功: https://expo.dev/accounts/yshtysht8sh10/projects/RunJourney/builds/69d121f1-61ca-4881-85b2-f1fa831d0306
+- 実装9a8b347、cloudSyncTest profile。実APKはapp.runjourney.mobile.test/versionCode18、APK内Gitも9a8b347+cloud-sync-v18。新しい20,000イベント/20MB表示文字列をHermes bundleで確認。
+- APK 112,455,631 bytes、SHA-256 cb735bb13a5f72159b0a0d8b436b50d053aff5c5c5044d9f5b24989fec67c9f3。既存Testと同じ署名SHA-256 fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9cを照合。
+- 更新前標準Backupに加え、音声ログ2件（STARTED/DONE）もpre-update-voice-log.jsonへ保全。端末/PC SHA一致 a7f4060a880f6bc60a42b2c21cd5cea341d214bb34a61bbe5a78566c0dd7c409。
+- 2026-10-22 21:06 JST、adb install -r成功。アンインストール/データ消去なし。更新済みプロセス起動、初回インストール日維持、AndroidRuntime/ReactNativeJS/RunAnnouncerのエラーなし。
+- 端末が再度自動ロックされたため、解除を依頼。更新後の画面・旧ログ移行・再Export・Backup完全比較は確認後に追記する。
