@@ -40,3 +40,7 @@ export async function exportAnalysis(run: RunRecord) {
   await share(serializeAnalysis(run), exportFilename('run', Date.parse(run.startedAt)), 'text/markdown');
 }
 const digest = (text: string) => Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, text);
+
+export async function exportVoiceLog(text: string) {
+  await share(text, `runjourney-voice-${Date.now()}.json`, 'application/json');
+}

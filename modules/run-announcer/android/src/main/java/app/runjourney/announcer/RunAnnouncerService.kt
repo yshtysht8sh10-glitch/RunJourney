@@ -18,9 +18,12 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import java.util.Locale
+import org.json.JSONObject
+import org.json.JSONArray
 
 class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   companion object {
+    const val ACTION_BATCH = "app.runjourney.announcer.BATCH"
     const val ACTION_START = "app.runjourney.announcer.START"
     const val ACTION_TEST = "app.runjourney.announcer.TEST"
     const val ACTION_WORKOUT = "app.runjourney.announcer.WORKOUT"
@@ -32,10 +35,80 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   private val handler = Handler(Looper.getMainLooper())
   private var tts: TextToSpeech? = null
   private var ready = false
+  private var initFailed = false
   private var speaking = false
   private var lastSpeechAt = 0L
   private var pendingWorkout: Pair<String, Long>? = null
-  private val messages = java.util.ArrayDeque<String>()
+  private val messages = mutableListOf<JSONObject>()
+  private var currentNotice: JSONObject? = null
+  private var lastPriority = 0
+  private var batchMode = false
+  private val debugPrefs by lazy { getSharedPreferences("runjourney-voice-debug", 0) }
+  private val seen by lazy {
+    val stored = JSONArray(debugPrefs.getString("seen", "[]"))
+    (0 until stored.length()).map { stored.getString(it) }.toMutableList()
+  }
+
+  private fun audit(n: JSONObject, status: String) {
+    try {
+      val entries = JSONArray(debugPrefs.getString("entries", "[]"))
+      val now = System.currentTimeMillis()
+      val record = JSONObject(n.toString()).put("status", status).put("loggedAt", now)
+      if (!record.has("startedAt")) record.put("startedAt", JSONObject.NULL)
+      val retained = mutableListOf<JSONObject>()
+      for (i in 0 until entries.length()) {
+        val e = entries.getJSONObject(i)
+        if (now - e.optLong("loggedAt") <= 7L * 86400000) retained.add(e)
+      }
+      retained.add(record)
+      val drop = VoicePolicy.retainedStart(retained.map { it.toString().toByteArray(Charsets.UTF_8).size })
+      repeat(drop) { retained.removeAt(0) }
+      debugPrefs.edit().putString("entries", JSONArray(retained).toString()).apply()
+    } catch (e: Exception) { Log.w(TAG, "Voice audit unavailable", e) }
+  }
+
+  private fun receiveBatch(payload: String) {
+    batchMode = true
+    val batch = JSONObject(payload)
+    val runId = batch.optString("runId")
+    val cancel = batch.optBoolean("cancelCandidate")
+    val paused = batch.optBoolean("paused")
+    messages.toList().forEach { n ->
+      val type = n.optString("type")
+      if (n.optJSONObject("data")?.optString("runId") != runId || cancel && type == "STOP_CANDIDATE_ANNOUNCED" || paused && type == "PACE_WARNING") {
+        messages.remove(n); audit(n, "CANCELLED_STATE_OR_CANDIDATE")
+      }
+    }
+    val incoming = batch.getJSONArray("notices")
+    val sorted = (0 until incoming.length()).map { incoming.getJSONObject(it) }.sortedByDescending { it.optInt("priority") }
+    sorted.forEach { n ->
+      val id = n.getString("id")
+      if (!seen.contains(id)) {
+        seen.add(id); while (seen.size > 2048) seen.removeAt(0)
+        val type = n.optString("type")
+        val reason = if (initFailed) "INIT_FAILED" else VoicePolicy.suppression(type, n.optString("message").isBlank(),
+          System.currentTimeMillis(), n.optLong("expiresAt"), paused,
+          sorted.any { it.optInt("priority") > 20 && System.currentTimeMillis() <= it.optLong("expiresAt") && it.optString("message").isNotBlank() },
+          messages.any { it.optInt("priority") >= 70 }, messages.size)
+        if (reason == "QUEUED") n.put("nativeQueuedAt", System.currentTimeMillis())
+        audit(n, reason)
+        if (reason == "QUEUED") {
+          if (n.optInt("priority") >= 70) messages.toList().filter { it.optInt("priority") < n.optInt("priority") }.forEach {
+            messages.remove(it); audit(it, "SUPERSEDED")
+          }
+          messages.add(n)
+        }
+      }
+    }
+    debugPrefs.edit().putString("seen", JSONArray(seen).toString()).apply()
+    messages.sortByDescending { it.optInt("priority") }
+    if (speaking && messages.firstOrNull()?.optInt("priority") == 100 && (currentNotice?.optInt("priority") ?: 100) < 100) {
+      currentNotice?.let { audit(it, "INTERRUPTED_BY_TRANSITION") }; currentNotice = null
+      tts?.stop(); releaseFocus(); speaking = false
+    }
+    speakNext()
+    if (ready && !speaking && messages.isEmpty()) finishTest()
+  }
   private var wakeLock: PowerManager.WakeLock? = null
   private var focusRequest: AudioFocusRequest? = null
   private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
@@ -59,7 +132,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       // OFF and ON both wait for the shared analysis at the exact boundary.
       if (due > last && ready && preferences.getInt("messageInterval", -1) == due) {
         preferences.edit().putInt("lastAnnouncement", due).apply()
-        speak(preferences.getString("message", "") ?: "")
+        if (!batchMode) speak(preferences.getString("message", "") ?: "")
       }
       val next = now + ((due.toLong() + 1) * interval + 10_000 - active)
       handler.postDelayed(this, if (verified) 1_000 else (next - now).coerceIn(1_000, 10_000))
@@ -68,14 +141,17 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
 
   override fun onCreate() {
     super.onCreate()
+    lastSpeechAt = debugPrefs.getLong("lastSpeechAt", 0)
+    lastPriority = debugPrefs.getInt("lastPriority", 0)
     val channel = NotificationChannel(CHANNEL, "ランニング音声通知", NotificationManager.IMPORTANCE_LOW)
     getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     tts = TextToSpeech(this, this)
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    val batch = intent?.action == ACTION_BATCH
     val workout = intent?.action == ACTION_WORKOUT
-    val testing = intent?.action == ACTION_TEST || workout
+    val testing = intent?.action == ACTION_TEST || workout || batch
     if (intent?.action == ACTION_START) {
       val started = intent.getLongExtra("startedAtMs", System.currentTimeMillis())
       val previous = preferences.getLong("startedAtMs", 0)
@@ -103,6 +179,10 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
         .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "RunJourney:VoiceAnnouncements")
         .apply { if (preferences.getBoolean("running", false)) acquire() else acquire(30_000) }
     }
+    if (batch) {
+      receiveBatch(intent?.getStringExtra("payload") ?: "{}")
+      return START_NOT_STICKY
+    }
     if (testing) {
       val message = intent?.getStringExtra("message") ?: ""
       if (workout) {
@@ -122,15 +202,18 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
 
   override fun onInit(status: Int) {
     ready = status == TextToSpeech.SUCCESS
+    initFailed = !ready
     if (ready) {
       tts?.language = Locale.JAPANESE
       pendingTests.forEach { speak(it) }
       pendingTests.clear()
       deliverWorkout()
+      speakNext()
     }
     else {
       Log.e(TAG, "Japanese TTS initialization failed: $status")
       preferences.edit().putString("ttsStatus", "INIT_FAILED").apply()
+      messages.forEach { audit(it, "INIT_FAILED") }; messages.clear()
       finishTest()
     }
   }
@@ -138,7 +221,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   private fun speak(message: String) {
     if (message.isBlank()) return
     pendingWorkout = null
-    messages.add(message)
+    messages.add(JSONObject().put("id", "legacy-${System.nanoTime()}").put("message", message).put("type", "LEGACY").put("expiresAt", System.currentTimeMillis() + 20000).put("priority", 40))
     speakNext()
   }
 
@@ -158,12 +241,22 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
 
   private fun speakNext() {
     if (speaking || !ready || messages.isEmpty()) return
-    val message = messages.removeFirst()
+    val notice = messages.removeAt(0)
+    val now = System.currentTimeMillis()
+    if (now > notice.optLong("expiresAt") || notice.optInt("priority") <= 40 && notice.optInt("priority") < lastPriority && now - lastSpeechAt < 20000) {
+      audit(notice, if (now > notice.optLong("expiresAt")) "EXPIRED" else "HIGHER_PRIORITY_COOLDOWN")
+      if (messages.isEmpty()) finishTest() else speakNext()
+      return
+    }
+    currentNotice = notice
+    val message = notice.getString("message")
     val attributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
       .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
     val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
       .setAudioAttributes(attributes).setOnAudioFocusChangeListener { }.build()
     if (audioManager.requestAudioFocus(request) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+      audit(notice, "AUDIO_FOCUS_DENIED")
+      currentNotice = null
       Log.w(TAG, "Audio focus denied")
       preferences.edit().putString("ttsStatus", "AUDIO_FOCUS_DENIED").apply()
       if (!messages.isEmpty()) handler.post { speakNext() } else finishTest()
@@ -172,21 +265,30 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     focusRequest = request
     speaking = true
     lastSpeechAt = System.currentTimeMillis()
+    lastPriority = notice.optInt("priority")
+    debugPrefs.edit().putLong("lastSpeechAt", lastSpeechAt).putInt("lastPriority", lastPriority).apply()
     tts?.setAudioAttributes(attributes)
     tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
       override fun onStart(utteranceId: String?) {
+        val startedAt = System.currentTimeMillis()
+        handler.post { notice.put("startedAt", startedAt); audit(notice, "STARTED") }
         Log.i(TAG, "Speaking: $message")
         preferences.edit().putString("ttsStatus", "SPEAKING").putLong("ttsStartedAt", System.currentTimeMillis()).apply()
       }
-      override fun onDone(utteranceId: String?) { handler.post { finishUtterance("DONE") } }
-      override fun onError(utteranceId: String?) { handler.post { finishUtterance("ERROR") } }
+      override fun onDone(utteranceId: String?) { handler.post { if (currentNotice === notice) finishUtterance("DONE") } }
+      override fun onError(utteranceId: String?) { handler.post { if (currentNotice === notice) finishUtterance("ERROR") } }
     })
+    handler.postDelayed({
+      if (currentNotice === notice) { tts?.stop(); finishUtterance("PLAYBACK_TIMEOUT") }
+    }, 30000)
     if (tts?.speak(message, TextToSpeech.QUEUE_FLUSH, null, "runjourney-${System.nanoTime()}") != TextToSpeech.SUCCESS) finishUtterance("SPEAK_FAILED")
   }
 
   private fun finishUtterance(status: String) {
+    currentNotice?.let { audit(it, status) }; currentNotice = null
     lastSpeechAt = System.currentTimeMillis()
     preferences.edit().putString("ttsStatus", status).apply()
+    debugPrefs.edit().putLong("lastSpeechAt", lastSpeechAt).putInt("lastPriority", lastPriority).apply()
     releaseFocus()
     speaking = false
     if (messages.isEmpty()) finishTest() else speakNext()
@@ -200,11 +302,13 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   private val pendingTests = mutableListOf<String>()
 
   private fun finishTest() {
-    if (!preferences.getBoolean("running", false)) handler.post { stopSelf() }
+    if (!preferences.getBoolean("running", false)) handler.post { if (!speaking && messages.isEmpty()) stopSelf() }
   }
 
   override fun onDestroy() {
     handler.removeCallbacks(tick)
+    currentNotice?.let { audit(it, "SERVICE_DESTROYED") }; currentNotice = null
+    messages.forEach { audit(it, "SERVICE_DESTROYED") }; messages.clear()
     tts?.stop()
     tts?.shutdown()
     releaseFocus()

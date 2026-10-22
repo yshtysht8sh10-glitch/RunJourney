@@ -9,6 +9,8 @@ import { RunSettings } from '@/repositories/run-settings';
 import { ActiveRun } from '@/types/run';
 import { diagnosticReport, latestDiagnosticRun } from '@/utils/auto-stop-diagnostics';
 import { isStandaloneTest } from '@/utils/build';
+import { exportVoiceLog } from '@/services/run-export';
+import { verifyVoiceLog } from '@/domain/voice-log';
 import { VoiceAnnouncement } from '@/services/voice-announcement';
 
 export default function Diagnostics() {
@@ -16,9 +18,11 @@ export default function Diagnostics() {
   const [run, setRun] = useState<ActiveRun | null>(null);
   const [settings, setSettings] = useState({ autoStop: false, break: false });
   const [error, setError] = useState('');
+  const [voiceLog, setVoiceLog] = useState('[]');
   const load = useCallback(async () => {
     if (!isStandaloneTest()) return;
     try {
+      setVoiceLog(VoiceAnnouncement.debugLog());
       const [active, page, storedSettings] = await Promise.all([RunRepository.getActiveRun(), RunRepository.getHistoryPage(1), RunSettings.get()]);
       const saved = id ? await RunRepository.getRun(id) : page.length ? await RunRepository.getRun(page[0].id) : null;
       setRun(id ? saved : latestDiagnosticRun(active, saved ? [saved] : []));
@@ -40,6 +44,9 @@ export default function Diagnostics() {
     <Text style={styles.title}>Auto Stop Diagnostics</Text>
     {!isStandaloneTest() ? <Text style={styles.text}>Standalone Test版専用です。</Text> : <>
       <Pressable accessibilityRole="button" onPress={load} style={styles.button}><Text style={styles.text}>最新情報に更新</Text></Pressable>
+      <Text style={styles.text}>音声デバッグログ（端末内・最大512イベント / 1MB / 7日）</Text>
+      <Pressable accessibilityRole="button" style={styles.button} onPress={() => exportVoiceLog(JSON.stringify({ version: 1, entries: JSON.parse(voiceLog), verification: verifyVoiceLog(voiceLog) }, null, 2)).catch(e => Alert.alert('出力できませんでした', String(e)))}><Text style={styles.text}>音声ログ JSONをExport</Text></Pressable>
+      <Text selectable style={styles.log}>{JSON.stringify(JSON.parse(voiceLog).slice(-12), null, 2)}</Text>
       {!!error && <Text accessibilityRole="alert" style={styles.text}>{error}</Text>}
       {!report ? <Text style={styles.text}>{error || '記録がありません'}</Text> : <>
         <Text style={styles.text}>Run snapshot: Auto Stop {report.featuresSnapshot.autoStop ? 'ON' : 'OFF'} / Break {report.featuresSnapshot.break ? 'ON' : 'OFF'}</Text>

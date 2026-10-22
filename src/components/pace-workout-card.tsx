@@ -1,7 +1,8 @@
 import { StyleSheet, Text, View } from 'react-native';
 import { formatWorkoutPace, validPaceState } from '../domain/pace-workout';
 import { ActiveRun } from '../types/run';
-import { stateOf } from '../utils/run-model';
+import { savingsSeconds, savingsMessage } from '../domain/voice-guidance';
+import { stateOf, timeModel } from '../utils/run-model';
 export function PaceWorkoutCard({ run, now }: { run: ActiveRun; now: number }) {
   const s = run.paceWorkout;
   if (!validPaceState(s)) return null;
@@ -12,6 +13,7 @@ export function PaceWorkoutCard({ run, now }: { run: ActiveRun; now: number }) {
     <Text style={styles.title}>PACE WORKOUT · {labels[known ? s.status : 'UNKNOWN']}</Text>
     <Text style={styles.text}>目標 {formatWorkoutPace(segment.targetPaceSecPerKm)} /km（±{segment.toleranceSecPerKm}秒）</Text>
     <Text style={styles.text}>現在 {formatWorkoutPace(known ? s.currentPace : null)} /km · 差 {known && s.delta !== null ? `${s.delta >= 0 ? '+' : ''}${Math.round(s.delta)}秒/km` : '—'}</Text>
+    <Text style={styles.text}>{savingsMessage(savingsSeconds(run.distanceMeters, timeModel(run, now).activeRunningTime, segment.targetPaceSecPerKm))}</Text>
     <Text style={styles.text}>{segment.target.type === 'distance'
       ? `${(run.distanceMeters / 1000).toFixed(2)} / ${(segment.target.meters / 1000).toFixed(2)} km`
       : `目標 ${Math.round(segment.target.seconds / 60)}分`}{s.reached ? ' · 目標到達！記録は継続中' : ''}</Text>
