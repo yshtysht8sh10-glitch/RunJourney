@@ -27,7 +27,7 @@ GPS、走行履歴、正式停止判定、音声通知の条件/優先度は変�
 
 更新前Backup: 7,723,090 bytes、端末/PC SHA-256一致 60e34ef703f9d4b537db4db228ae37429131423836351f2068833c07e2bbc8d4。アプリのdecodeBackupで内部SHA/構造検証成功。通常21+ごみ箱15=36件、GPS11,953点、draftなし。ユーザーが変更した最新ペース設定は20km/7:30km/±5秒/音声ON/60秒。以前の10km設定へ戻さず、この最新設定を維持する。
 
-ビルド/署名/インストールと更新後の全データ・旧音声ログの比較は完了後に追記する。
+ビルド/署名/インストールと更新後の全データ・旧音声ログの比較は完了（下記）。
 
 ## ビルド・上書き結果
 
@@ -36,4 +36,17 @@ GPS、走行履歴、正式停止判定、音声通知の条件/優先度は変�
 - APK 112,455,631 bytes、SHA-256 cb735bb13a5f72159b0a0d8b436b50d053aff5c5c5044d9f5b24989fec67c9f3。既存Testと同じ署名SHA-256 fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9cを照合。
 - 更新前標準Backupに加え、音声ログ2件（STARTED/DONE）もpre-update-voice-log.jsonへ保全。端末/PC SHA一致 a7f4060a880f6bc60a42b2c21cd5cea341d214bb34a61bbe5a78566c0dd7c409。
 - 2026-10-22 21:06 JST、adb install -r成功。アンインストール/データ消去なし。更新済みプロセス起動、初回インストール日維持、AndroidRuntime/ReactNativeJS/RunAnnouncerのエラーなし。
-- 端末が再度自動ロックされたため、解除を依頼。更新後の画面・旧ログ移行・再Export・Backup完全比較は確認後に追記する。
+- 端末の再ロック解除後、以下の実機確認を完了。
+
+## 20MB版の実機検証完了
+
+- Diagnosticsに「最大20,000イベント / 20MB / 7日」を表示し、旧ログ2件を再読込できた。
+- 既存の音声テストを1回実行し、新しいSTARTED/DONEを記録。force-stop/再起動後も旧2件+新2件の4イベントを保持した。GPSのSTARTや疑似走行は行っていない。
+- 再起動後のJSON Exportを端末Downloadに保存してからPCへコピー。post-update-voice-log.jsonは2,924 bytes、端末/PC SHA-256一致 bfa1588ff099c285a5f01a36ccb8bd23d9bcd8e3ed5a2c46b7c901a9d3b139ec。pre-update-voice-log.jsonの2件が全フィールドで完全に含まれることをcanonical比較し、新2件の同一通知ID・開始時刻・STARTED/DONEとverification4件を確認。比較結果voice-log-migration-verification.jsonも保管。
+- 更新後の標準Backupを端末Downloadへ保存完了してからPC保管。post-update-backup.jsonは7,723,090 bytes、端末/PC SHA-256一致 ead07b1cc43fc58a793f7ce4fe296ec2ea66f5959c7378e5b093fb4eabab7956。アプリと同じdecodeBackupによる内部SHAと構造検証成功。
+- 通常21+ごみ箱15件、GPS11,953点、draftなし。全runs（GPS/イベント/補正/診断/ペース情報を含む）・全settings・draft・protectedIdsが更新前と完全一致。post-update-verification.jsonを保管。
+- 再起動後の設定画面でも20km/7:30km/目標2:30:00/±5秒を確認。履歴一覧とGit表示9a8b347の表示も確認。
+- START・疑似GPS・設定保存・履歴追加・Production/隔離Pace版の更新は行っていない。TestをSTART待機へ戻す。
+
+音声テストはLEGACYのテスト発話であり、実走のラップ/貯金入力は未取得（検算値null）。実走による画面OFF音声、ラップ/貯金検算、2時間30分連続走行は未検証。900イベント全保持・20MB超過時の制御はPC上の実ファイルテストで確認した結果として区別する。両Issueは実走受入確認までOPENのまま。
+
