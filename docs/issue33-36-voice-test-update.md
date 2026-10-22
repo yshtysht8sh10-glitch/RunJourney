@@ -60,7 +60,7 @@ Exportのverificationは保存済み入力からラップ時間・ラップ/累�
 
 ## APKと上書き更新
 
-EAS cloudSyncTest profileを使用。build/署名照合/ADB install -r/更新後Backup比較の結果を追記する。Production `app.runjourney.mobile` と隔離版 `app.runjourney.mobile.pace` は更新しない。Testのアンインストール/データ削除は行わない。
+EAS cloudSyncTest profileを使用。build/署名照合/ADB install -r/更新後Backup比較が完了（結果は下記）。Production `app.runjourney.mobile` と隔離版 `app.runjourney.mobile.pace` は更新しない。Testのアンインストール/データ削除は行わない。
 
 追加検証: 停止中/JS復帰時も完了済み通知の期限が伸びないことを検証。実走時計→壁時計を最初の到達時刻で逆算し、停止による期限更新を防止。既読5分通知のGPS再解析も省略。
 
@@ -82,8 +82,19 @@ EAS cloudSyncTest profileを使用。build/署名照合/ADB install -r/更新後
 - Test MainActivityの起動コマンド成功、PIDを確認。firstInstallTimeは2026-09-30のまま、同じdataDir。Production/隔離Pace版は操作していない。
 - 更新後のTestプロセスにAndroidRuntime/ReactNativeJSのerror出力は検出されなかった。
 
-**実機確認の未完了項目**: 端末はmIsShowing=true/mInputRestricted=trueのロック状態。解除を依頼済み。画面上の起動/履歴/GPS詳細/ペース設定保持、更新後標準Backup Exportと全フィールド一致比較、新音声ログの実機保存/再読込/Exportは、ロック解除後に確認する。上書きインストール成功やfirstInstallTime維持だけで実データ保持を検証済みとは扱わない。
+## ロック解除後の実機確認完了（2026-10-22 20時台 JST）
 
-更新前の36履歴/GPS11953点/ペース設定は完全なバックアップとして保全済み。まだSTART・疑似GPS・設定変更は行っていない。標準Backupの再Export後に、事前作成した比較スクリプトでruns/settings/draft/protectedIdsをcanonical比較する。実走受入条件も未完了として両IssueをOPENで維持。
+ユーザーからロック解除の連絡を受け、追加確認を完了した。
+
+- Test起動画面にGit d0bb6dd+cloud-sync-v18 / EAS ee656ee9を実表示。履歴一覧と2026-10-21の10.08km走行詳細（実走58分1秒、全経過62分2秒、GPS681点）を表示できた。
+- ペース設定ON/10km/6:00km/±5秒/音声ON/60秒間隔を確認。アプリをforce-stopして再起動した後も同じ値を画面で確認。設定の保存操作は行っていない。
+- 更新後の標準BackupをExportし、pre-voice-update-20261022/post-update-backup.jsonとしてPC保管（7,723,090 bytes）。端末/PC SHA-256一致: 0405064e17ed1f6c3d159a99291bb9d1055fe345b06194de234371356c3952e3。アプリと同じdecodeBackupによる内部SHA/構造検証成功。
+- 通常21+ごみ箱15=36件、GPS11,953点、draftなし。全runs（Raw GPS、停止イベント、補正、既存診断、ペース走メタデータを含む）、全settings、draft、protectedIdsをcanonical比較し、更新前と完全一致。post-update-verification.jsonも同フォルダに保管。
+- 設定の既存「音声通知をテスト」を1回実行。実走記録は作らず、ネイティブTTSのSTARTED/DONEと共通通知ID、実際の再生開始時刻がDiagnosticsに記録された。端末の音がユーザーに聞こえたかは未確認。
+- TTS終了後にforce-stop/再起動し、同じSTARTED/DONEがDiagnosticsで再読込できた。音声ログ JSONをExportし、ダウンロード経由でPCへ保存・JSON再読込成功。
+- voice-log-device-test.json（1,814 bytes）と検証結果を同じ保全フォルダへ保存。端末/PC SHA-256一致: a7f4060a880f6bc60a42b2c21cd5cea341d214bb34a61bbe5a78566c0dd7c409。version1、2イベント、同じ通知ID、STARTED/DONE、開始時刻、verification2件を確認。
+- この実機テストはLEGACYの既存テスト発話であり、走行データは未取得。そのverificationの計算値はnullで、走行ラップ/貯金の実機検算が成功したとは扱わない。計算は自動テストで検証済み、実走通知の数値突合はユーザーの実走で確認する。
+
+START・疑似GPS・走行履歴の追加・設定変更は行っていない。Production/隔離Pace版も更新していない。最後はTestのSTART待機画面へ戻す。実走（停止予告先行、低速ジョグ/短距離往復での誤予告、画面OFF/バックグラウンド音声、停止中貯金凍結、停止/再開付近の1km境界、目標後の記録継続）は未検証として、両IssueをOPENで維持する。
 
 Draft PR: https://github.com/yshtysht8sh10-glitch/RunJourney/pull/37
