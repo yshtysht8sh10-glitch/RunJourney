@@ -123,6 +123,9 @@ export function windowPace(points: LocationPoint[], now: number, resumedAt: numb
     return { pace: null, reason: 'GAP' as UnknownReason };
   const movement = inferMovement(window);
   if (!movement.moving) return { pace: null, reason: (movement.stationary || movement.summary.coherence < 0.7 ? 'STATIONARY' : 'GPS_QUALITY') as UnknownReason };
+  // A mostly moving 30s window can still contain a stationary tail. Do not call
+  // that diluted average a slow running pace while the formal stop is pending.
+  if (!inferMovement(window.slice(-3)).moving) return { pace: null, reason: 'STATIONARY' as UnknownReason };
   const analysis = analyzePoints(window, window[0].timestamp, window.at(-1)!.timestamp);
   return { pace: analysis && analysis.distanceMeters >= 20 ? analysis.secondsPerKm : null, reason: 'GPS_QUALITY' as UnknownReason };
 }

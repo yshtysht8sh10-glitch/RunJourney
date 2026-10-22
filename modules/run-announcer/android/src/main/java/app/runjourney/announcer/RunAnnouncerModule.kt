@@ -2,12 +2,25 @@ package app.runjourney.announcer
 
 import android.content.Intent
 import android.os.Build
+import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
 class RunAnnouncerModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("RunAnnouncer")
+
+    AsyncFunction("voiceLog") { limit: Int, promise: Promise ->
+      VoiceLogStorage.read(requireNotNull(appContext.reactContext), limit, promise)
+    }
+    Function("notifyBatch") { payload: String ->
+      val context = requireNotNull(appContext.reactContext)
+      val intent = Intent(context, RunAnnouncerService::class.java).apply {
+        action = RunAnnouncerService.ACTION_BATCH
+        putExtra("payload", payload)
+      }
+      if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)
+    }
 
     Function("updateWorkout") { key: String, message: String, expiresAt: Double, allowed: Boolean ->
       val context = requireNotNull(appContext.reactContext)
