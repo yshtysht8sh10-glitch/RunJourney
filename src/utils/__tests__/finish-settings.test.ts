@@ -1,0 +1,33 @@
+import AsyncStorage from '@/test/sqlite-fixture';
+import { FinishSettings } from '@/repositories/finish-settings';
+import { PaceSettingsRepository } from '@/repositories/pace-settings';
+import { DEFAULT_PACE_SETTINGS } from '@/domain/pace-workout';
+import { FinishClock } from '@/services/finish-clock';
+import native from '../../../modules/run-announcer';
+import { Platform } from 'react-native';
+jest.mock('../../../modules/run-announcer', () => ({ __esModule: true, default: { addListener: jest.fn(), finishClock: jest.fn() } }));
+beforeEach(async () => { await AsyncStorage.clear(); jest.clearAllMocks(); });
+afterEach(() => { FinishClock.stop(); jest.useRealTimers(); jest.restoreAllMocks(); });
+test('finish defaults manual and persists independently from pace settings', async () => {
+  await PaceSettingsRepository.save({ ...DEFAULT_PACE_SETTINGS, enabled: true, distanceKm: 10 });
+  const pace = await PaceSettingsRepository.get();
+  expect(await FinishSettings.get()).toEqual({ kind: 'manual' });
+  await FinishSettings.save({ kind: 'time', activeMs: 3600000 });
+  expect(await FinishSettings.get()).toEqual({ kind: 'time', activeMs: 3600000 });
+  expect(await PaceSettingsRepository.get()).toEqual(pace);
+  await expect(FinishSettings.save({ kind: 'distance', meters: NaN })).rejects.toThrow();
+  expect(await FinishSettings.get()).toEqual({ kind: 'time', activeMs: 3600000 });
+});
+test('native background pulse checks without GPS/JS interval and coalesces overlapping pulses', async () => {
+  jest.useFakeTimers(); jest.replaceProperty(Platform, 'OS', 'android');
+  const remove = jest.fn(); jest.mocked(native.addListener!).mockReturnValue({ remove });
+  let release!: () => void;
+  const check = jest.fn(() => new Promise<void>(resolve => { release = resolve; }));
+  FinishClock.start(check);
+  const pulse = jest.mocked(native.addListener!).mock.calls[0][1];
+  pulse(); pulse(); expect(check).toHaveBeenCalledTimes(1);
+  release(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+  pulse(); expect(check).toHaveBeenCalledTimes(2);
+  release(); FinishClock.stop();
+  expect(remove).toHaveBeenCalled(); expect(native.finishClock).toHaveBeenLastCalledWith(false);
+});

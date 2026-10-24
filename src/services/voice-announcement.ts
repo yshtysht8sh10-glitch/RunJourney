@@ -23,6 +23,11 @@ function nativeAnnouncer() {
 }
 
 export const VoiceAnnouncement = {
+  async achieved(runId: string, message: string): Promise<void> {
+    const now = Date.now();
+    await nativeAnnouncer()?.notifyBatch?.(JSON.stringify({ runId, ended: true, cancelCandidate: true, paused: true,
+      notices: [{ id: `${runId}:finish`, type: 'RUN_GOAL_FINISHED', message, queuedAt: now, expiresAt: now + 30000, priority: 110, data: { runId } }] }));
+  },
   async debugLog(limit = 12): Promise<string> { return await nativeAnnouncer()?.voiceLog?.(limit) ?? '[]'; },
   diagnostics() { return nativeAnnouncer()?.diagnostics?.() ?? null; },
   async items(): Promise<VoiceItems> {
@@ -65,7 +70,7 @@ export const VoiceAnnouncement = {
   },
   async updateRun(run: ActiveRun): Promise<void> {
     if (nativeAnnouncer()?.notifyBatch) {
-      try { await updateGuidance(run); } catch (error) { console.warn('Voice guidance failed; GPS retained', error); }
+      try { await queueGuidance(run); } catch (error) { console.warn('Voice guidance failed; GPS retained', error); }
       return;
     }
     // Independent of #6's periodic switch, but uses its one native TTS queue.
@@ -115,9 +120,26 @@ let lapCache: { key: string; laps: ReturnType<typeof kilometerLaps> } | undefine
 const sentNotices = new Set<string>();
 let lastBatchState = '';
 let hintSession = { runId: '', active: false, lastAt: -Infinity };
+let pendingGuidance: ActiveRun | undefined;
+let guidanceInFlight: Promise<void> | undefined;
+/** Coalesce callbacks while storage is busy instead of accumulating stale speech. */
+function queueGuidance(run: ActiveRun): Promise<void> {
+  pendingGuidance = run;
+  if (!guidanceInFlight) guidanceInFlight = (async () => {
+    while (pendingGuidance) {
+      const next = pendingGuidance; pendingGuidance = undefined;
+      await updateGuidance(next);
+    }
+  })().finally(() => { guidanceInFlight = undefined; });
+  return guidanceInFlight;
+}
 async function updateGuidance(run: ActiveRun) {
-  const now = Date.now(), native = nativeAnnouncer();
+  if (run.endedAt) return;
+  const native = nativeAnnouncer();
   const periodic = await VoiceAnnouncement.enabled();
+  // Preference I/O may queue behind a long GPS checkpoint. Evaluate freshness
+  // after that wait, so a stale observation cannot create a new stop hint.
+  const now = Date.now();
   const workout = validPaceState(run.paceWorkout) && run.paceWorkout.voice;
   if (!periodic && !workout) return;
   if (hintSession.runId !== run.id) hintSession = { runId: run.id, active: false, lastAt: -Infinity };
@@ -127,7 +149,7 @@ async function updateGuidance(run: ActiveRun) {
     if (sentNotices.has(`${run.id}:${id}`)) return;
     sentNotices.add(`${run.id}:${id}`);
     if (sentNotices.size > 2048) sentNotices.delete(sentNotices.values().next().value!);
-    notices.push({ id: `${run.id}:${id}`, type, message, queuedAt: now, expiresAt: at + ttl, priority, data: { ...snapshot, ...data } });
+    notices.push({ id: `${run.id}:${id}`, type, message, generatedAt: now, queuedAt: now, expiresAt: at + ttl, priority, data: { ...snapshot, ...data } });
   };
   const running = stateOf(run) === 'RUNNING' && !run.endedAt;
   const observations = (await RunRepository.getRecentObservations(4000, now)).slice(-6).map(p => ({ ...p, accuracy: p.accuracy ?? undefined, speed: p.speed ?? undefined }));
@@ -147,7 +169,7 @@ async function updateGuidance(run: ActiveRun) {
     if (e.state === 'AUTO_STOP' && !run.features?.autoStop || e.state === 'BREAK' && !run.features?.break) return;
     const type = e.state === 'AUTO_STOP' ? 'AUTO_STOP_CONFIRMED' : e.state === 'BREAK' ? 'BREAK' : e.source === 'sensor' ? 'AUTO_RESUME_CONFIRMED' : 'RESUME';
     add(`event:${index}:${e.timestamp}`, type, e.state === 'AUTO_STOP' ? '走行タイマーを一時停止しました。' : e.state === 'BREAK' ? '休憩します。' : e.source === 'sensor' ? '走行再開を検知しました。走行タイマーを再開します。' : '走行タイマーを再開します。', e.confirmedAt ?? e.timestamp, 15000, 100,
-      { effectiveAt: e.timestamp, confirmedAt: e.confirmedAt ?? null });
+      { effectiveAt: e.timestamp, confirmedAt: e.confirmedAt ?? null, eventIndex: index });
   });
   if (workout) {
     const lapKey = `${run.id}:${Math.floor(run.distanceMeters / 1000)}:${run.events?.length ?? 0}`;
@@ -176,6 +198,6 @@ async function updateGuidance(run: ActiveRun) {
       { spokenWindow: 'completed 5-minute active-time lap', spokenPaceSecPerKm: analysis.lap.secondsPerKm, spokenMarathonSec: analysis.lap.projectedTimeSeconds(42195), spokenLapDurationMs: analysis.lap.durationMs, timeLapMs: analysis.endMs, timeLapDistanceMeters: analysis.lap.distanceMeters, timeLap: analysis.lap, totalAtBoundary: analysis.total });
   }
   const batchState = `${run.id}:${candidate}:${running}`;
-  if (notices.length || lastBatchState !== batchState) native?.notifyBatch?.(JSON.stringify({ notices, cancelCandidate: !candidate, paused: !running, runId: run.id }));
+  if (notices.length || lastBatchState !== batchState) await native?.notifyBatch?.(JSON.stringify({ notices, cancelCandidate: !candidate, paused: !running, state: stateOf(run), latestEventIndex: (run.events?.length ?? 0) - 1, runId: run.id }));
   lastBatchState = batchState;
 }

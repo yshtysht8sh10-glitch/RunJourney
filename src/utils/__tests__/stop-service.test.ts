@@ -32,11 +32,13 @@ test('restoring failed-save snapshot does not restart GPS or request permissions
   expect(Location.getForegroundPermissionsAsync).not.toHaveBeenCalled();
 });
 
-test('GPS stop failure keeps draft and permits retry, no history before success', async () => {
+test('GPS stop failure freezes draft and permits retry without extending its end', async () => {
   jest.mocked(Location.stopLocationUpdatesAsync).mockRejectedValueOnce(new Error('OS failure')).mockResolvedValueOnce();
   await expect(RunService.stopRun()).rejects.toThrow('OS failure');
   expect(await RunRepository.getRuns()).toEqual([]);
-  expect(await RunRepository.getActiveRun()).toEqual(draft());
+  const frozen = (await RunRepository.getActiveRun())!;
+  expect(frozen).toMatchObject({ ...draft(), updatedAt: expect.any(String), endedAt: expect.any(String) });
   await RunService.stopRun();
   expect(await RunRepository.getRuns()).toHaveLength(1);
+  expect((await RunRepository.getRuns())[0].endedAt).toBe(frozen.endedAt);
 });

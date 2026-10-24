@@ -10,6 +10,10 @@ import { VoiceAnnouncement } from '@/services/voice-announcement';
 import { isStandaloneTest } from '@/utils/build';
 import { PaceSettingsRepository } from '@/repositories/pace-settings';
 import { createPaceWorkout } from '@/domain/pace-workout';
+import { FinishSettings } from '@/repositories/finish-settings';
+import { achievementMessage, goalAchievement } from '@/domain/finish-goal';
+import { FinishClock } from '@/services/finish-clock';
+import { completionLog } from '@/services/completion-log';
 
 const trackingOptions: Location.LocationTaskOptions = {
   accuracy: Location.Accuracy.High,
@@ -29,6 +33,9 @@ const trackingOptions: Location.LocationTaskOptions = {
 };
 
 let stopInFlight: Promise<RunRecord | null> | null = null;
+let lastFinished: RunRecord | null = null;
+type FinishListener = (record: RunRecord | null, error?: unknown) => void;
+const finishListeners = new Set<FinishListener>();
 
 async function assertTrackingIsAvailable(): Promise<void> {
   if (!(await TaskManager.isAvailableAsync())) {
@@ -71,11 +78,13 @@ export const RunService = {
     if (existing) {
       if (existing.endedAt) throw new Error('終了した記録の保存を再試行してください。');
       await startLocationTask();
+      if (existing.finishGoal?.kind === 'time') FinishClock.start(() => RunService.checkGoal());
       await VoiceAnnouncement.restore(existing);
       return existing;
     }
 
     const now = new Date().toISOString();
+    const finishGoal = await FinishSettings.get();
     // Guidance must never prevent START if its preferences are unavailable.
     let paceWorkout: ActiveRun['paceWorkout'];
     try { paceWorkout = createPaceWorkout(await PaceSettingsRepository.get(), Date.parse(now)); }
@@ -84,6 +93,7 @@ export const RunService = {
       id: Crypto.randomUUID(),
       startedAt: now,
       distanceMeters: 0,
+      finishGoal,
       points: [],
       ...(paceWorkout ? { paceWorkout } : {}),
       features: await RunSettings.get(),
@@ -93,6 +103,8 @@ export const RunService = {
       updatedAt: now,
     };
     await RunRepository.saveActiveRun(active);
+    lastFinished = null;
+    if (finishGoal.kind === 'time') FinishClock.start(() => RunService.checkGoal());
     try {
       await startLocationTask();
       await VoiceAnnouncement.restore(active);
@@ -108,6 +120,7 @@ export const RunService = {
     const active = await RunRepository.getActiveRun();
     if (!active) return null;
     if (active.endedAt) return active;
+    if (active.finishGoal?.kind === 'time') FinishClock.start(() => RunService.checkGoal());
     await VoiceAnnouncement.restore(active);
 
     const foreground = await Location.getForegroundPermissionsAsync();
@@ -150,16 +163,43 @@ export const RunService = {
     return run;
   },
 
-  stopRun(): Promise<RunRecord | null> {
-    if (stopInFlight) return stopInFlight;
+  subscribeFinish(listener: FinishListener) { finishListeners.add(listener); return () => { finishListeners.delete(listener); }; },
+  async checkGoal(run?: ActiveRun | null): Promise<RunRecord | null> {
+    const active = run ?? await RunRepository.getActiveRun();
+    if (!active || active.endedAt || !goalAchievement(active, Date.now())) return null;
+    return RunService.stopRun(true, active.id);
+  },
+  stopRun(automatic = false, expectedId?: string): Promise<RunRecord | null> {
+    if (stopInFlight) { completionLog('JOIN_IN_FLIGHT', { automatic, expectedId }); return stopInFlight; }
     const endedAt = new Date().toISOString();
+    completionLog('FINISH_STARTED', { automatic, expectedId, requestedAt: endedAt });
     stopInFlight = (async () => {
+      const frozen = await RunRepository.prepareFinish(endedAt, automatic, expectedId);
+      if (!frozen) return lastFinished;
+      completionLog('FROZEN', { runId: frozen.id, finishGoal: frozen.finishGoal ?? { kind: 'manual' }, achievement: frozen.achievement,
+        state: frozen.events?.at(-1)?.state ?? 'RUNNING', endedAt: frozen.endedAt, distanceMeters: frozen.distanceMeters });
+      FinishClock.stop();
       VoiceAnnouncement.stop();
       if (await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME)) {
         await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
       }
-      return RunRepository.finishActiveRun(endedAt);
-    })().finally(() => { stopInFlight = null; });
+      const saved = await RunRepository.finishActiveRun(frozen.endedAt!);
+      if (saved) {
+        lastFinished = saved;
+        completionLog('SAVE_SUCCEEDED', { runId: saved.id, endedAt: saved.endedAt, voiceEventId: saved.achievement ? `${saved.id}:finish` : null });
+        // Neither listeners nor speech can turn committed history into a save failure.
+        for (const listener of finishListeners) { try { listener(saved); } catch { /* UI isolated */ } }
+        if (saved.achievement) {
+          try { await VoiceAnnouncement.achieved(saved.id, achievementMessage(saved)); }
+          catch (error) { console.warn('Achievement speech failed; history saved', error); }
+        }
+      }
+      return saved;
+    })().catch(error => {
+      completionLog('FINISH_FAILED', { automatic, expectedId, error: String(error) });
+      for (const listener of finishListeners) { try { listener(null, error); } catch { /* UI isolated */ } }
+      throw error;
+    }).finally(() => { stopInFlight = null; });
     return stopInFlight;
   },
 };

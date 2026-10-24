@@ -9,11 +9,24 @@ import expo.modules.kotlin.modules.ModuleDefinition
 class RunAnnouncerModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("RunAnnouncer")
+    Events("finishClock")
+    Function("appendDiagnostic") { payload: String ->
+      VoiceLogStorage.append(requireNotNull(appContext.reactContext), payload, System.currentTimeMillis())
+    }
+    OnCreate { FinishClockService.pulse = { sendEvent("finishClock", emptyMap<String, Any>()) } }
+    OnDestroy { FinishClockService.pulse = null }
+    Function("finishClock") { enabled: Boolean ->
+      val context = requireNotNull(appContext.reactContext)
+      val intent = Intent(context, FinishClockService::class.java)
+      if (enabled) {
+        if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)
+      } else context.stopService(intent)
+    }
 
     AsyncFunction("voiceLog") { limit: Int, promise: Promise ->
       VoiceLogStorage.read(requireNotNull(appContext.reactContext), limit, promise)
     }
-    Function("notifyBatch") { payload: String ->
+    AsyncFunction("notifyBatch") { payload: String ->
       val context = requireNotNull(appContext.reactContext)
       val intent = Intent(context, RunAnnouncerService::class.java).apply {
         action = RunAnnouncerService.ACTION_BATCH

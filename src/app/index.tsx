@@ -10,6 +10,7 @@ import { analyzePace } from '@/utils/pace-analysis';
 import { BuildInfo } from '@/components/build-info';
 import { RunService } from '@/services/run-service';
 import { ActiveRun } from '@/types/run';
+import { FinishGoalSettings } from '@/components/finish-goal-settings';
 
 function formatElapsed(durationMs: number): string {
   const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
@@ -40,6 +41,11 @@ export default function RunScreen() {
   const [now, setNow] = useState(() => Date.now());
   const [busy, setBusy] = useState(true);
   const [saveError, setSaveError] = useState('');
+  const [finishReady, setFinishReady] = useState(false);
+  useEffect(() => RunService.subscribeFinish?.((saved, error) => {
+    if (saved) { setActiveRun(null); router.replace({ pathname: './run-summary', params: { id: saved.id } }); }
+    else if (error) { setSaveError(String(error)); void RunService.getActiveRun().then(setActiveRun); }
+  }), []);
 
   const showError = useCallback((error: unknown) => {
     const message = error instanceof Error ? error.message : '処理に失敗しました。';
@@ -124,7 +130,8 @@ export default function RunScreen() {
             <>
               <Text style={styles.readyTitle}>今日の一歩を{`\n`}記録しよう。</Text>
               <Text style={styles.description}>START後は画面をOFFにしても記録が続きます。位置情報は「常に許可」を選択してください。</Text>
-              <Pressable accessibilityRole="button" disabled={busy} onPress={start} style={({ pressed }) => [styles.startButton, pressed && styles.pressed, busy && styles.disabled]}>
+              <FinishGoalSettings onReady={setFinishReady} />
+              <Pressable accessibilityRole="button" disabled={busy || !finishReady} onPress={start} style={({ pressed }) => [styles.startButton, pressed && styles.pressed, (busy || !finishReady) && styles.disabled]}>
                 <Text style={styles.startButtonText}>{busy ? '準備中…' : 'START'}</Text>
               </Pressable>
             </>

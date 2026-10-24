@@ -31,3 +31,21 @@ test('background cancels actual button hold', () => {
   act(() => { button().props.onPressIn(); jest.advanceTimersByTime(700); listener.mock.calls.forEach(call => call[1]('background')); jest.advanceTimersByTime(1500); button().props.onLongPress(); });
   expect(stop).not.toHaveBeenCalled();
 });
+test('early native long-press signal is retried by the same gauge clock without lifting finger', () => {
+  const { stop, button } = render();
+  act(() => { button().props.onPressIn(); jest.advanceTimersByTime(1490); button().props.onLongPress(); });
+  expect(stop).not.toHaveBeenCalled();
+  act(() => { jest.advanceTimersByTime(10); });
+  expect(stop).toHaveBeenCalledTimes(1);
+  act(() => { jest.advanceTimersByTime(2000); button().props.onPressOut(); });
+  expect(stop).toHaveBeenCalledTimes(1);
+});
+test('rerender uses latest callback and disabled state cancels an in-progress hold', () => {
+  const { stop, button } = render(), latest = jest.fn();
+  act(() => { button().props.onPressIn(); jest.advanceTimersByTime(500); tree.update(createElement(StopButton, { disabled: false, onStop: latest })); });
+  act(() => { jest.advanceTimersByTime(1000); });
+  expect(latest).toHaveBeenCalledTimes(1); expect(stop).not.toHaveBeenCalled();
+  act(() => { tree.update(createElement(StopButton, { disabled: false, onStop: latest })); button().props.onPressIn(); jest.advanceTimersByTime(500); tree.update(createElement(StopButton, { disabled: true, onStop: latest })); });
+  act(() => { jest.advanceTimersByTime(2000); });
+  expect(latest).toHaveBeenCalledTimes(1);
+});

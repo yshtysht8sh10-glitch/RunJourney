@@ -5,6 +5,7 @@ import { iteratePages } from '../domain/pages';
 import { pagedDistanceLaps } from '../domain/paged-analysis';
 import { RunRepository } from '../repositories/run-repository';
 import { analyzePace } from '../utils/pace-analysis';
+import { achievementMessage } from '../domain/finish-goal';
 
 export default function PaceWorkoutReport({ runId, lazy = false }: { runId: string; lazy?: boolean }) {
   const [requested, setRequested] = useState(!lazy);
@@ -13,6 +14,7 @@ export default function PaceWorkoutReport({ runId, lazy = false }: { runId: stri
   const [laps, setLaps] = useState<Awaited<ReturnType<typeof pagedDistanceLaps>>>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [achievement, setAchievement] = useState('');
   useEffect(() => {
     let mounted = true;
     if (!requested) return;
@@ -24,6 +26,7 @@ export default function PaceWorkoutReport({ runId, lazy = false }: { runId: stri
         if (text.length > 128 * 1024) return;
       }
       const metadata = text ? JSON.parse(text) : {};
+      if (mounted) setAchievement(achievementMessage(metadata));
       if (!validPaceState(metadata.paceWorkout)) return;
       const summary = await source.summary();
       if (mounted) {
@@ -34,10 +37,11 @@ export default function PaceWorkoutReport({ runId, lazy = false }: { runId: stri
     return () => { mounted = false; };
   }, [runId, requested]);
   if (!requested) return <Pressable accessibilityRole="button" style={styles.button} onPress={() => setRequested(true)}><Text style={styles.text}>ペース走の結果を確認</Text></Pressable>;
-  if (!state) return error ? <Text style={styles.note}>{error}</Text> : null;
+  if (!state) return <>{!!achievement && <Text accessibilityRole="alert" style={styles.text}>{achievement}</Text>}{!!error && <Text style={styles.note}>{error}</Text>}</>;
   const segment = state.workout.segments[0];
   const difference = average === null ? null : Math.round(average - segment.targetPaceSecPerKm);
   return <View style={styles.panel} testID="pace-workout-report">
+    {!!achievement && <Text accessibilityRole="alert" style={styles.text}>{achievement}</Text>}
     <Text style={styles.title}>ペース走の結果</Text>
     <Text style={styles.text}>目標 {formatWorkoutPace(segment.targetPaceSecPerKm)} /km（±{segment.toleranceSecPerKm}秒）</Text>
     <Text style={styles.text}>平均 {formatWorkoutPace(average)} /km · 目標との差 {difference === null ? '—' : `${difference >= 0 ? '+' : ''}${difference}秒/km`}</Text>
