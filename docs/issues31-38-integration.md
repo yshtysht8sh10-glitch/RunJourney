@@ -60,5 +60,18 @@ version1、entries561行、verification561行、通知ID226個。記録範囲202
 - 実機でnotifyBatchのPromise戻り値に`Unknown type: android.content.ComponentName`を検出。native呼出し自体は動作していたがPromiseが失敗扱いになるため、notifyBatchとfinishClockの戻り値を明示的にUnitへ修正（aadab15）。この修正はKotlin/16 JVMテストとlint/TypeScript成功後push。
 - 1e3f1c0で1分目標・Break/Resume・画面OFFの短時間試験を実施。native foreground pulseの存在、画面OFF中の達成発話開始と時計サービス停止をlogcatで確認。保存時間・停止除外・一意保存はExportで後続照合する。Auto Stop設定を試験中だけOFFに変更し、終了後に元へ戻す。
 - ローカルassembleStandaloneTestは成功したが、既存生成環境がversionCode17のため導入していない。ダウングレードは行わず、最終配布・導入はEASのcloudSyncTest/versionCode18を使用する。
+- 時間試験のExport照合完了: 02:12:22.192〜02:14:00.226、全経過98,034ms、Break38,034ms、実走60,000msで目標終了。到達判定は境界の77ms後、保存は約517ms後、保存後に達成通知がnativeキューへ投入され、STARTED/DONEまで確認。対象IDの履歴は1件。画面OFF中の終了を確認した短時間試験であり、60分の実走試験とは区別する。
+- 既存38件の全フィールド不変、既存設定の全キー/値不変、draftなしを確認。新規終了設定だけmanualを保存。検証2件を含む40履歴/14,315 GPS点を新規Export・端末/PC hash・decodeBackup・隔離SQLite全snapshot復元で保全。SHA256 94658f9345f5f26db3f4c02afe43952058d8443be7311dd436366417bb7fb7ad。time-test-verification.jsonとtime-voice-evidence.jsonを私有保全先に保存。
 
-APK・実機結果は後続の追記で記録する。長時間実走、5km/60分の実距離・実時間、停止の体感、イヤホンでの聴取、低速往復/ノイズの誤予告率は次の実走受入事項。自動テストや短時間の端末操作を実走完了とは扱わず、関連Issueは閉じない。
+### 最終APK・実機更新結果
+
+- 最終EAS: https://expo.dev/accounts/yshtysht8sh10/projects/RunJourney/builds/e7cb02c7-940b-430d-9b78-c7e511ec2f1c 、実装aadab15。APK内app.configと起動画面で同じGit/EASを確認。実manifestは`app.runjourney.mobile.test` / versionCode18 / minSdk26 / targetSdk36。
+- APK SHA256 `52f41b0d8dc194784bb6918bf4a8959fe157feec39eff9f5d217281f4bd55e15`、署名は更新前と同じ`fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c`。保全先のrunjourney-test-aadab15.apkを配布用とする。1e3f1c0版は最終配布用ではない。
+- 2026-10-25 02:24 JST、`adb install -r`成功。アンインストール/データ消去/ダウングレードなし。初回インストール日2026-09-30、dataDirを維持。Production/Paceには操作していない。
+- 修正版で1回の長押し（1.8秒接触）→保存完了画面を再確認。先行実機試験と合わせて2回の長押し成立。続いて1分目標をバックグラウンドで試験し、02:25:33.772〜02:26:33.772、実走60,000ms、判定53ms遅れで境界時刻に一度だけ保存。達成音声のQUEUED/STARTED/DONEをJSONで確認。型エラー/発話ブリッジ失敗は再発せず、終了後のforeground GPS/clock/voiceサービス停止を確認。
+- Auto Stop/音声通知ON、ペース設定20km/7:30km/±5秒/60秒間隔を含む既存設定の全キー・値を保全時と照合し復元。終了条件はmanual。force-stop/再起動後もGit aadab15、EAS e7cb02c7、START待機・手動終了設定を確認。
+- 最終標準Exportは42履歴/14,326 GPS点、draftなし。既存38件+先行検証2件の全フィールド不変、全設定/保護ID一致。追加は最終版の検証2件のみ（合計検証4件は削除せず保持）。端末/PC SHA、内部SHA、別SQLiteへの全snapshot復元とintegrity_check=okを確認。
+- 最終Backup SHA256 `b303dfbab8a85b5faa74480c97375edea3d0b46579e3742f0ba8ef1ad6331e25`、8,976,919 bytes。backup-final.json / final-verification.json / final-restore.sqliteを私有保全先に保存。
+- 最終音声ログ774行・1,763,873 bytes。元の561行が全フィールドで完全に残ることを確認。全774行を再検算しfalse0。両時間目標の達成イベントは同一IDのQUEUED→STARTED→DONE。音声ログSHA256 `68c262e47817b0b1d5a56724969974d0b1fd1f7a3f6752e515a9a6362af8a2e1`。voice-final.json / voice-final-verification.jsonに保存。聴取確認とは区別する。
+
+長時間実走、5km/60分の実距離・実時間、停止の体感、イヤホンでの聴取、低速往復/ノイズの誤予告率は次の実走受入事項。GPS更新を意図的に止めた実機試験やOSによるプロセス強制終了、iOSサスペンド中も未検証。距離目標は合成GPSの品質・境界/最終ラップ回帰で確認したもので、実距離の5km試験ではない。自動テストや短時間の端末操作を実走完了とは扱わず、関連Issueは閉じない。
