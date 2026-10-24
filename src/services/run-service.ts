@@ -34,6 +34,7 @@ const trackingOptions: Location.LocationTaskOptions = {
 
 let stopInFlight: Promise<RunRecord | null> | null = null;
 let lastFinished: RunRecord | null = null;
+let manualStopAt: string | null = null;
 type FinishListener = (record: RunRecord | null, error?: unknown) => void;
 const finishListeners = new Set<FinishListener>();
 
@@ -170,11 +171,18 @@ export const RunService = {
     return RunService.stopRun(true, active.id);
   },
   stopRun(automatic = false, expectedId?: string): Promise<RunRecord | null> {
-    if (stopInFlight) { completionLog('JOIN_IN_FLIGHT', { automatic, expectedId }); return stopInFlight; }
+    if (stopInFlight) {
+      if (!automatic) manualStopAt ??= new Date().toISOString();
+      completionLog('JOIN_IN_FLIGHT', { automatic, expectedId }); return stopInFlight;
+    }
     const endedAt = new Date().toISOString();
+    manualStopAt = automatic ? null : endedAt;
     completionLog('FINISH_STARTED', { automatic, expectedId, requestedAt: endedAt });
     stopInFlight = (async () => {
-      const frozen = await RunRepository.prepareFinish(endedAt, automatic, expectedId);
+      let frozen = await RunRepository.prepareFinish(endedAt, automatic, expectedId);
+      // A newly confirmed stop can retract a provisional time-goal result.
+      // A concurrent, explicit manual STOP must still be honored in that case.
+      if (!frozen && manualStopAt) frozen = await RunRepository.prepareFinish(manualStopAt, false, expectedId);
       if (!frozen) return lastFinished;
       completionLog('FROZEN', { runId: frozen.id, finishGoal: frozen.finishGoal ?? { kind: 'manual' }, achievement: frozen.achievement,
         state: frozen.events?.at(-1)?.state ?? 'RUNNING', endedAt: frozen.endedAt, distanceMeters: frozen.distanceMeters });

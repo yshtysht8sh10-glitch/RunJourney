@@ -51,3 +51,13 @@ test('speech failure never rejects successfully saved completion', async () => {
   await expect(RunService.checkGoal()).resolves.toMatchObject({ achievement: { reachedAt: 3600000 } });
   expect(await RunRepository.getRuns()).toHaveLength(1);
 });
+test('manual STOP remains authoritative if a concurrent automatic check is retracted by a stop transition', async () => {
+  const r = draft(); r.events = [{ state: 'AUTO_STOP', timestamp: 1000000, source: 'sensor' }];
+  await RunRepository.saveActiveRun(r);
+  const a = RunService.stopRun(true, r.id), b = RunService.stopRun();
+  expect(a).toBe(b);
+  const result = await a;
+  expect(result?.id).toBe(r.id);
+  expect(result?.achievement).toBeUndefined();
+  expect(await RunRepository.getRuns()).toHaveLength(1);
+});
