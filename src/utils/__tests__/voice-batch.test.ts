@@ -66,3 +66,28 @@ test('native failure never changes GPS/history', async () => {
   expect(JSON.stringify(r)).toBe(captured); expect(before).not.toBe(captured);
 });
 
+test('a later stop candidate can announce again after cancellation and cooldown', async () => {
+  const r = run();
+  const samples = (now: number) => [now - 2000, now - 1000, now].map(timestamp => ({ timestamp, receivedAt: now, latitude: 35, longitude: 139, speed: 0, accuracy: 5 }));
+  jest.mocked(RunRepository.getRecentObservations).mockResolvedValue(samples(start + 60000));
+  await VoiceAnnouncement.updateRun(r);
+  expect(notices().filter(n => n.type === 'STOP_CANDIDATE_ANNOUNCED')).toHaveLength(1);
+  jest.mocked(RunRepository.getRecentObservations).mockResolvedValue([]);
+  await VoiceAnnouncement.updateRun(r);
+  jest.mocked(Date.now).mockReturnValue(start + 91000);
+  jest.mocked(RunRepository.getRecentObservations).mockResolvedValue(samples(start + 91000));
+  await VoiceAnnouncement.updateRun(r);
+  expect(notices().filter(n => n.type === 'STOP_CANDIDATE_ANNOUNCED')).toHaveLength(1);
+});
+
+test('slow preference read does not create a hint from observations that expired during the wait', async () => {
+  const r = run();
+  let release!: (value: boolean) => void;
+  jest.spyOn(VoiceAnnouncement, 'enabled').mockReturnValueOnce(new Promise(resolve => { release = resolve; }));
+  jest.mocked(RunRepository.getRecentObservations).mockResolvedValue([start + 58000, start + 59000, start + 60000].map(timestamp => ({ timestamp, receivedAt: timestamp, latitude: 35, longitude: 139, speed: 0, accuracy: 5 })));
+  const update = VoiceAnnouncement.updateRun(r);
+  jest.mocked(Date.now).mockReturnValue(start + 71000);
+  release(true); await update;
+  expect(notices().some(n => n.type === 'STOP_CANDIDATE_ANNOUNCED')).toBe(false);
+});
+

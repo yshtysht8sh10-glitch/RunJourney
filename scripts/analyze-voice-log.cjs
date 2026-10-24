@@ -7,7 +7,11 @@ const raw = fs.readFileSync(input), document = JSON.parse(raw);
 if (!Array.isArray(document.entries)) throw Error('entries array required');
 const uniqueRows = [...new Map(document.entries.map(e => [JSON.stringify(e), e])).values()];
 const byId = new Map();
-for (const e of uniqueRows) { const rows = byId.get(e.id) ?? []; rows.push(e); byId.set(e.id, rows); }
+for (const [index, e] of uniqueRows.entries()) {
+  // Non-speech diagnostics may have no notification ID; never merge them.
+  const key = e.id ?? `diagnostic-row:${index}`;
+  const rows = byId.get(key) ?? []; rows.push(e); byId.set(key, rows);
+}
 const events = [...byId].map(([id, rows]) => {
   const first = rows[0], last = rows.at(-1), started = rows.find(e => e.status === 'STARTED');
   const queued = rows.find(e => e.status === 'QUEUED');
