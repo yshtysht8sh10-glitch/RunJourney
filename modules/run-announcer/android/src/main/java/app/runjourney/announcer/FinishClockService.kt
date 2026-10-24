@@ -18,7 +18,10 @@ class FinishClockService : Service() {
   private val handler = Handler(Looper.getMainLooper())
   private var lock: PowerManager.WakeLock? = null
   private val tick = object : Runnable {
-    override fun run() { pulse?.invoke(); handler.postDelayed(this, 1000) }
+    override fun run() {
+      try { pulse?.invoke() } catch (e: Exception) { android.util.Log.w("RunJourneyClock", "JS pulse unavailable", e) }
+      handler.postDelayed(this, 1000)
+    }
   }
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     val channel = "runjourney-finish-clock"

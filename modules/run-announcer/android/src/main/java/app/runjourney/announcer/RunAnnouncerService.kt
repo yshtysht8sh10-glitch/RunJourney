@@ -296,20 +296,22 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     lastPriority = notice.optInt("priority")
     debugPrefs.edit().putLong("lastSpeechAt", lastSpeechAt).putInt("lastPriority", lastPriority).apply()
     tts?.setAudioAttributes(attributes)
+    val utteranceKey = "runjourney-${System.nanoTime()}"
     tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
       override fun onStart(utteranceId: String?) {
+        if (utteranceId != utteranceKey) return
         val startedAt = System.currentTimeMillis()
         handler.post { if (currentNotice === notice) { notice.put("startedAt", startedAt); audit(notice, "STARTED") } }
         Log.i(TAG, "Speaking: $message")
         preferences.edit().putString("ttsStatus", "SPEAKING").putLong("ttsStartedAt", System.currentTimeMillis()).apply()
       }
-      override fun onDone(utteranceId: String?) { handler.post { if (currentNotice === notice) finishUtterance("DONE") } }
-      override fun onError(utteranceId: String?) { handler.post { if (currentNotice === notice) finishUtterance("ERROR") } }
+      override fun onDone(utteranceId: String?) { if (utteranceId == utteranceKey) handler.post { if (currentNotice === notice) finishUtterance("DONE") } }
+      override fun onError(utteranceId: String?) { if (utteranceId == utteranceKey) handler.post { if (currentNotice === notice) finishUtterance("ERROR") } }
     })
     handler.postDelayed({
       if (currentNotice === notice) { tts?.stop(); finishUtterance("PLAYBACK_TIMEOUT") }
     }, 30000)
-    if (tts?.speak(message, TextToSpeech.QUEUE_FLUSH, null, "runjourney-${System.nanoTime()}") != TextToSpeech.SUCCESS) finishUtterance("SPEAK_FAILED")
+    if (tts?.speak(message, TextToSpeech.QUEUE_FLUSH, null, utteranceKey) != TextToSpeech.SUCCESS) finishUtterance("SPEAK_FAILED")
   }
 
   private fun finishUtterance(status: String) {
