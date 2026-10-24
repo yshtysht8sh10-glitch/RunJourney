@@ -21,6 +21,7 @@ class RunAnnouncerModule : Module() {
       if (enabled) {
         if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)
       } else context.stopService(intent)
+      Unit
     }
 
     AsyncFunction("voiceLog") { limit: Int, promise: Promise ->
@@ -33,6 +34,7 @@ class RunAnnouncerModule : Module() {
         putExtra("payload", payload)
       }
       if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)
+      Unit
     }
 
     Function("updateWorkout") { key: String, message: String, expiresAt: Double, allowed: Boolean ->
