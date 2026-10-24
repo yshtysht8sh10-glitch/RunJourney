@@ -8,6 +8,8 @@ export type LocationPoint = {
 };
 
 export type RunRecord = {
+  finishGoal?: import('../domain/finish-goal').FinishGoal;
+  achievement?: import('../domain/finish-goal').GoalAchievement;
   /** Optional bounded guidance metadata; GPS/history remain valid if absent. */
   paceWorkout?: import('../domain/pace-workout').PaceWorkoutState;
   id: string;

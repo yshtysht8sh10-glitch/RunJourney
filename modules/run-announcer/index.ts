@@ -1,7 +1,10 @@
 import { requireNativeModule } from 'expo-modules-core';
 
 type RunAnnouncer = {
-  notifyBatch?(payload: string): void;
+  appendDiagnostic?(payload: string): void;
+  finishClock?(enabled: boolean): void;
+  addListener?(event: 'finishClock', listener: () => void): { remove(): void };
+  notifyBatch?(payload: string): Promise<void> | void;
   voiceLog?(limit: number): Promise<string>;
   updateWorkout?(key: string, message: string, expiresAt: number, allowed: boolean): void;
   start(startedAtMs: number, intervalMs: number): void;

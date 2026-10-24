@@ -33,6 +33,13 @@ if (!TaskManager.isTaskDefined(LOCATION_TASK_NAME)) {
         accuracy: location.coords.accuracy, speed: location.coords.speed, receivedAt })), AppState.currentState ?? 'unknown')
       : await RunRepository.appendActivePoints(data.locations.map(toPoint));
     if (updated) {
+      if (updated.endedAt) return;
+      if (updated.finishGoal && updated.finishGoal.kind !== 'manual') {
+        // Lazy load after task registration to avoid the service initialization cycle.
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { RunService } = require('@/services/run-service') as typeof import('@/services/run-service');
+        if (await RunService.checkGoal(updated)) return;
+      }
       VoiceAnnouncement.updateDistance(updated.distanceMeters);
       await VoiceAnnouncement.updateRun(updated);
     }

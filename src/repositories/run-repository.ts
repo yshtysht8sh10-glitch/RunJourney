@@ -11,10 +11,12 @@ import { detectStop, effectiveDistance, recordDiagnostic, stateOf, stopIntervals
 import { validateRuns } from '@/utils/run-backup';
 import { GpsObservationSession, incrementObservationCount, RawLocationObservation } from '@/utils/gps-observation';
 import { safelyAdvancePaceWorkout } from '@/domain/pace-workout';
+import { goalAchievement } from '@/domain/finish-goal';
 
 
 let operationQueue: Promise<unknown> = Promise.resolve();
 let observationSession: { active: ActiveRun; observation: GpsObservationSession; needsCheckpoint: boolean } | null = null;
+let pendingFinish: ActiveRun | null = null;
 
 function flushObservation(active: ActiveRun, endMs: number): ActiveRun {
   const pending = observationSession?.observation.latestPoint;
@@ -110,6 +112,7 @@ export const RunRepository = {
 
   getActiveRun(): Promise<ActiveRun | null> {
     return serialized(async () => {
+      if (pendingFinish) return pendingFinish;
       if (observationSession) return observationSession.active;
       const stored = await (await database()).getDraft();
       if (!stored) return null;
@@ -120,16 +123,17 @@ export const RunRepository = {
   },
 
   saveActiveRun(run: ActiveRun): Promise<void> {
-    return serialized(() => { observationSession = null; return database().then(db => db.saveDraft(run)); });
+    return serialized(async () => { await (await database()).saveDraft(run); observationSession = null; pendingFinish = null; });
   },
 
   clearActiveRun(): Promise<void> {
-    return serialized(() => { observationSession = null; return database().then(db => db.clearDraft()); });
+    return serialized(() => { observationSession = null; pendingFinish = null; return database().then(db => db.clearDraft()); });
   },
 
   /** Test PoC entry point: RAM observations, shared detector, throttled GPS/storage. */
   appendActiveObservations(raws: RawLocationObservation[], appState = 'unknown'): Promise<ActiveRun | null> {
     return serialized(async () => {
+      if (pendingFinish) return pendingFinish;
       if (!observationSession) {
         const stored = await (await database()).getDraft();
         if (!stored) return null;
@@ -166,11 +170,13 @@ export const RunRepository = {
   },
 
   getRecentObservations(windowMs = 10_000, now = Date.now()) {
-    return serialized(async () => observationSession?.observation.buffer.getRecent(windowMs, now) ?? []);
+    // RAM-only immutable snapshot must not wait behind SQLite checkpoints.
+    return Promise.resolve(observationSession?.observation.buffer.getRecent(windowMs, now) ?? []);
   },
 
   appendActivePoints(points: LocationPoint[]): Promise<ActiveRun | null> {
     return serialized(async () => {
+      if (pendingFinish) return pendingFinish;
       const stored = await (await database()).getDraft();
       if (!stored) return null;
 
@@ -195,6 +201,7 @@ export const RunRepository = {
 
   transition(state: RunState, timestamp: number): Promise<ActiveRun | null> {
     return serialized(async () => {
+      if (pendingFinish) return pendingFinish;
       const stored = await (await database()).getDraft();
       if (!stored) return null;
       const original: ActiveRun = flushObservation(observationSession?.active ?? stored, timestamp);
@@ -209,12 +216,34 @@ export const RunRepository = {
     });
   },
 
+  /** Serialized with GPS writes: freeze before waiting for OS tracking shutdown. */
+  prepareFinish(endedAt: string, automatic = false, expectedId?: string): Promise<ActiveRun | null> {
+    return serialized(async () => {
+      const stored = await (await database()).getDraft();
+      if (!stored || expectedId && stored.id !== expectedId) return null;
+      const draft = pendingFinish ?? observationSession?.active ?? stored;
+      if (draft.endedAt) { await (await database()).saveDraft(draft); return draft; }
+      const now = Date.parse(endedAt);
+      const active = flushObservation(draft, now);
+      const achievement = goalAchievement(active, now);
+      if (automatic && !achievement) return null;
+      const end = achievement ? new Date(achievement.reachedAt).toISOString() : endedAt;
+      const frozen = { ...active, endedAt: end, ...(achievement ? { achievement } : {}), updatedAt: end };
+      frozen.distanceMeters = effectiveDistance(frozen);
+      // Retain a retryable RAM snapshot even if the first durable freeze fails.
+      if (observationSession) observationSession.active = frozen;
+      pendingFinish = frozen;
+      await (await database()).saveDraft(frozen);
+      return frozen;
+    });
+  },
+
   finishActiveRun(endedAt: string): Promise<RunRecord | null> {
     return serialized(async () => {
       const stored = await (await database()).getDraft();
       if (!stored) return null;
 
-      const draft: ActiveRun = observationSession?.active ?? stored;
+      const draft: ActiveRun = pendingFinish ?? observationSession?.active ?? stored;
       endedAt = draft.endedAt ?? endedAt;
       const active = safelyAdvancePaceWorkout(flushObservation(draft, Date.parse(endedAt)), Date.parse(endedAt), true);
       const record: RunRecord = {
@@ -230,6 +259,7 @@ export const RunRepository = {
       if (observationSession) observationSession.active = record;
       const saved = await (await database()).complete(record);
       observationSession = null;
+      pendingFinish = null;
       return saved;
     });
   },
