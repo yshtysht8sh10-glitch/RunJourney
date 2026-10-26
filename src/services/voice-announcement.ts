@@ -112,7 +112,12 @@ export const VoiceAnnouncement = {
       console.warn('Voice announcement distance update failed', error);
     }
   },
-  stop(): void {
+  stop(runId?: string): void {
+    if (runId) {
+      finishedRuns.add(runId);
+      while (finishedRuns.size > 32) finishedRuns.delete(finishedRuns.values().next().value!);
+      if (pendingGuidance?.run.id === runId) pendingGuidance = undefined;
+    }
     try {
       nativeAnnouncer()?.stop();
     } catch (error) {
@@ -127,6 +132,7 @@ let lastBatchState = '';
 let hintSession = { runId: '', active: false, lastAt: -Infinity, detectedAt: 0, lowSpeedAt: 0 };
 let pendingGuidance: { run: ActiveRun; stateOnly: boolean } | undefined;
 let periodicPreference: { runId: string; value: boolean } | undefined;
+const finishedRuns = new Set<string>();
 let guidanceInFlight: Promise<void> | undefined;
 /** Coalesce callbacks while storage is busy instead of accumulating stale speech. */
 function queueGuidance(run: ActiveRun, stateOnly = false): Promise<void> {
@@ -140,7 +146,7 @@ function queueGuidance(run: ActiveRun, stateOnly = false): Promise<void> {
   return guidanceInFlight;
 }
 async function updateGuidance(run: ActiveRun, stateOnly: boolean) {
-  if (run.endedAt) return;
+  if (run.endedAt || finishedRuns.has(run.id)) return;
   const native = nativeAnnouncer();
   if (periodicPreference?.runId !== run.id) periodicPreference = { runId: run.id, value: await VoiceAnnouncement.enabled() };
   const periodic = periodicPreference.value;
@@ -187,6 +193,7 @@ async function updateGuidance(run: ActiveRun, stateOnly: boolean) {
   });
   const batchState = `${run.id}:${candidate}:${running}:${snapshot.activeMs}:${snapshot.distanceMeters}`;
   const send = async () => {
+    if (finishedRuns.has(run.id)) return;
     await native?.notifyBatch?.(JSON.stringify({ notices: notices.splice(0), recovery: recoveryGuidance(run, now), cancelCandidate: !candidate, paused: !running, state: stateOf(run), latestEventIndex: (run.events?.length ?? 0) - 1, runId: run.id }));
     lastBatchState = batchState;
   };

@@ -2,6 +2,7 @@ package app.runjourney.announcer
 
 import android.content.Context
 import android.media.MediaPlayer
+import android.os.Looper
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.shadows.ShadowMediaPlayer
 import org.json.JSONArray
@@ -117,5 +118,14 @@ class VoiceRecoveryTest {
     assertEquals("fresh current totals", resumed.optString("message"))
     assertEquals(3, resumed.getJSONArray("recoveryOf").length())
     assertTrue(queue().isEmpty()); assertEquals(1, resumed.optInt("retry"))
+  }
+  @Test fun disablingVoiceDoesNotPermanentlyFinishAnActiveRun() {
+    batch("RUNNING")
+    RunAnnouncerService.stopRunning!!.invoke()
+    shadowOf(Looper.getMainLooper()).idle()
+    assertEquals("", service.getSharedPreferences("runjourney-voice-debug", Context.MODE_PRIVATE).getString("finishedRun", ""))
+    set("ready", false)
+    batch("RUNNING", notice("FIVE_MINUTES", "after-enable"))
+    assertEquals("after-enable", queue().single().optString("id"))
   }
 }

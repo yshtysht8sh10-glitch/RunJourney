@@ -25,7 +25,6 @@ import org.json.JSONArray
 class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   companion object {
     const val ACTION_BATCH = "app.runjourney.announcer.BATCH"
-    const val ACTION_STOP = "app.runjourney.announcer.STOP"
     const val ACTION_START = "app.runjourney.announcer.START"
     const val ACTION_TEST = "app.runjourney.announcer.TEST"
     const val ACTION_WORKOUT = "app.runjourney.announcer.WORKOUT"
@@ -90,7 +89,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     batchState = batch.optString("state", if (paused) "AUTO_STOP" else "RUNNING")
     latestEventIndex = batch.optInt("latestEventIndex", -1)
     ended = batch.optBoolean("ended")
-    if (ended) debugPrefs.edit().putString("finishedRun", runId).apply()
+    if (ended && !batch.optBoolean("muted")) debugPrefs.edit().putString("finishedRun", runId).apply()
     messages.toList().forEach { n ->
       if (!validInState(n)) {
         messages.remove(n); audit(n, "CANCELLED_STATE_OR_CANDIDATE")
@@ -191,7 +190,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     super.onCreate()
     stopRunning = { handler.post {
       preferences.edit().putBoolean("running", false).putBoolean("workoutAllowed", false).apply()
-      receiveBatch(JSONObject().put("runId", batchRunId).put("ended", true).put("cancelCandidate", true)
+      receiveBatch(JSONObject().put("runId", batchRunId).put("ended", true).put("muted", true).put("cancelCandidate", true)
         .put("notices", JSONArray()).toString())
     }; Unit }
     lastSpeechAt = debugPrefs.getLong("lastSpeechAt", 0)
@@ -202,12 +201,6 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    if (intent?.action == ACTION_STOP) {
-      preferences.edit().putBoolean("running", false).putBoolean("workoutAllowed", false).apply()
-      receiveBatch(JSONObject().put("runId", batchRunId).put("ended", true).put("cancelCandidate", true)
-        .put("notices", JSONArray()).toString())
-      return START_NOT_STICKY
-    }
     val batch = intent?.action == ACTION_BATCH
     val workout = intent?.action == ACTION_WORKOUT
     val testing = intent?.action == ACTION_TEST || workout || batch

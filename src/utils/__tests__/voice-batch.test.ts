@@ -103,3 +103,16 @@ test('state feedback is dispatched before slow voice-item reads; early feedback 
   expect(payload.recovery.message).toContain('時点');
 });
 
+test('manual finish discards an in-flight payload that was waiting for settings', async () => {
+  const r = run();
+  r.events = [{ state: 'AUTO_STOP', source: 'sensor', timestamp: start + 55000, confirmedAt: start + 60000 }];
+  let release!: (value: boolean) => void;
+  jest.spyOn(VoiceAnnouncement, 'enabled').mockReturnValueOnce(new Promise(resolve => { release = resolve; }));
+  const pending = VoiceAnnouncement.updateRun(r);
+  VoiceAnnouncement.stop(r.id);
+  release(true); await pending;
+  expect(native.notifyBatch).not.toHaveBeenCalled();
+  await VoiceAnnouncement.updateRun(r);
+  expect(native.notifyBatch).not.toHaveBeenCalled();
+});
+

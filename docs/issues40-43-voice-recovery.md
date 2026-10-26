@@ -27,3 +27,5 @@ TestのRAM観測後・SQLite checkpoint前に状態通知だけを非同期送�
 Jest、Android JVM/Robolectric実serviceキュー試験、lint、TypeScriptを実行。チャイム中の終了/新状態、停止中の定期情報保持、5分/1km/貯金の一回復旧、統合、重複/最新状態、チャイム失敗後のTTS継続を確認。具体的件数・配布APK・導入後照合は確定後追記する。
 
 未検証: 実走の停止予告先行時間、信号待ち・足踏み・低速往復・GPSノイズでの誤予告率、Bluetooth/ミュート/通話/OSフォーカス喪失、バックグラウンド・画面OFFでの新チャイムと中断復旧の聴取。自動試験は実機実走の代用ではない。
+
+追加回帰: 音声OFFは走行終了の永久抑制フラグを立てず、同一走行でONへ戻せる。手動STOPはJS側の進行中payloadも破棄する。最終Jest 46 suites/425 tests、Android 25 tests（Robolectric実service9件）、lint/型チェック成功。先行EAS 00673319はこの追加修正のためcancel済みで配布対象外。
