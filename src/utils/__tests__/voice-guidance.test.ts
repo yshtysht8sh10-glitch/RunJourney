@@ -21,7 +21,7 @@ test.each([[350, 25], [400, -25]])('lap %ss/km uses unrounded active distance bo
 test('positive saving becomes delay with natural Japanese and second rounding', () => {
   expect(savingsSeconds(1000, 350000, 375)).toBe(25);
   expect(savingsSeconds(2000, 800000, 375)).toBe(-50);
-  expect(savingsMessage(-30)).toBe('累計で30秒遅れています。');
+  expect(savingsMessage(-30)).toBe('目標より30秒遅れています。');
   expect(spokenDuration(70)).toBe('1分10秒'); expect(spokenDuration(359.9)).toBe('6分');
 });
 test.each(['AUTO_STOP', 'BREAK'] as const)('%s freezes saving, even over a km boundary', state => {

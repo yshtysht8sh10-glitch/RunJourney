@@ -2,6 +2,7 @@ import type { ActiveRun, LocationPoint } from '../types/run';
 import { analyzePoints } from '../utils/pace-analysis';
 import { inferMovement, usableObservation } from '../utils/movement-inference';
 import { stateOf, timeModel } from '../utils/run-model';
+import { savingsMessage, savingsSeconds } from './voice-guidance';
 
 export type PaceStatus = 'FAST' | 'ON_TARGET' | 'SLOW' | 'UNKNOWN';
 export type PaceSegment = {
@@ -170,8 +171,7 @@ export function advancePaceWorkout(run: ActiveRun, now: number, force = false, s
     && (s.status !== 'ON_TARGET' || s.lastGuidedStatus === 'FAST' || s.lastGuidedStatus === 'SLOW'))) {
     const message = reached ? 'ペース走の目標に到達しました。記録は継続します。'
       : s.status === 'ON_TARGET' ? '目標ペースに戻りました。'
-        : s.status === 'FAST' ? '目標より少しペースが速いです。'
-          : `目標より約${Math.round(Math.abs(s.delta!))}秒、1キロあたりのペースが遅れています。無理のないペースで走りましょう。`;
+        : savingsMessage(savingsSeconds(run.distanceMeters, activeMs, segment.targetPaceSecPerKm));
     s.notice = { key: `${run.id}:${now}`, message, at: now, goal: reached }; s.lastVoiceAt = now;
     if (!reached) s.lastGuidedStatus = s.status;
   }

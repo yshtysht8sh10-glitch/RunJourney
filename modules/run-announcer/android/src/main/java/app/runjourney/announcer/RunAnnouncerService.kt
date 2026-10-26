@@ -9,6 +9,7 @@ import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.media.MediaPlayer
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -24,12 +25,14 @@ import org.json.JSONArray
 class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   companion object {
     const val ACTION_BATCH = "app.runjourney.announcer.BATCH"
+    const val ACTION_STOP = "app.runjourney.announcer.STOP"
     const val ACTION_START = "app.runjourney.announcer.START"
     const val ACTION_TEST = "app.runjourney.announcer.TEST"
     const val ACTION_WORKOUT = "app.runjourney.announcer.WORKOUT"
     const val PREFS = "runjourney-announcer"
     private const val CHANNEL = "runjourney-voice"
     private const val TAG = "RunAnnouncer"
+    @Volatile internal var stopRunning: (() -> Unit)? = null
   }
 
   private val handler = Handler(Looper.getMainLooper())
@@ -48,6 +51,9 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   private var batchState = "RUNNING"
   private var latestEventIndex = -1
   private var ended = false
+  private var chime: MediaPlayer? = null
+  private var chimeActive = false
+  private var recovery: JSONObject? = null
   private val debugPrefs by lazy { getSharedPreferences("runjourney-voice-debug", 0) }
   private val seen by lazy {
     val stored = JSONArray(debugPrefs.getString("seen", "[]"))
@@ -74,7 +80,13 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     if (debugPrefs.getString("finishedRun", "") == runId && !batch.optBoolean("ended")) {
       (0 until incoming.length()).forEach { audit(incoming.getJSONObject(it), "RUN_ENDED") }; return
     }
+    if (batchRunId.isNotEmpty() && batchRunId != runId) {
+      messages.forEach { audit(it, "DISCARDED_RUN_CHANGED") }; messages.clear()
+      if (!chimeActive) interrupt("INTERRUPTED_RUN_CHANGED")
+      recovery = null
+    }
     batchRunId = runId; candidateCancelled = cancel
+    batch.optJSONObject("recovery")?.let { recovery = it }
     batchState = batch.optString("state", if (paused) "AUTO_STOP" else "RUNNING")
     latestEventIndex = batch.optInt("latestEventIndex", -1)
     ended = batch.optBoolean("ended")
@@ -103,9 +115,11 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
         if (reason == "QUEUED") n.put("nativeQueuedAt", System.currentTimeMillis())
         audit(n, reason)
         if (reason == "QUEUED") {
-          if (n.optInt("priority") >= 70) messages.toList().filter { it.optInt("priority") < n.optInt("priority") }.forEach {
-            messages.remove(it); audit(it, "SUPERSEDED")
+          if (VoicePolicy.information(type)) messages.toList().filter { it.optString("type") == type }.forEach {
+            messages.remove(it); audit(it, "DISCARDED_NEWER_INFORMATION")
           }
+          if (n.optInt("priority") >= 80) messages.filter { VoicePolicy.information(it.optString("type")) }.forEach { defer(it) }
+          if (VoicePolicy.information(type) && (paused || chimeActive || (currentNotice?.optInt("priority") ?: 0) >= 80 || messages.any { it.optInt("priority") >= 80 })) defer(n)
           messages.add(n)
         }
       }
@@ -114,7 +128,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     messages.sortByDescending { it.optInt("priority") }
     val nextPriority = messages.firstOrNull()?.optInt("priority") ?: 0
     // A short, valid stop hint must not wait behind a long lap/periodic notice.
-    if (speaking && VoicePolicy.shouldPreempt(currentNotice?.optInt("priority") ?: 110, nextPriority)) {
+    if (speaking && !chimeActive && VoicePolicy.shouldPreempt(currentNotice?.optInt("priority") ?: 110, nextPriority)) {
       interrupt(if (nextPriority >= 100) "INTERRUPTED_BY_TRANSITION" else "INTERRUPTED_BY_STOP_HINT")
     }
     speakNext()
@@ -127,8 +141,20 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     return VoicePolicy.validState(type, candidateCancelled, batchState, ended,
       n.optJSONObject("data")?.optInt("eventIndex", -1) ?: -1, latestEventIndex)
   }
+  private fun defer(n: JSONObject) {
+    if (n.optBoolean("deferred")) return
+    n.put("deferred", true).put("expiresAt", System.currentTimeMillis() + 120000)
+    audit(n, "DEFERRED")
+  }
   private fun interrupt(status: String) {
-    currentNotice?.let { audit(it, status) }; currentNotice = null
+    if (chimeActive) { currentNotice?.let { audit(it, "CHIME_INTERRUPT_BLOCKED") }; return }
+    currentNotice?.let {
+      audit(it, status)
+      if (!ended && validInState(it) && VoicePolicy.information(it.optString("type")) && it.optInt("retry") == 0) {
+        val retry = JSONObject(it.toString()).put("originalId", it.optString("id")).put("id", it.optString("id") + ":retry").put("retry", 1)
+        retry.remove("startedAt"); defer(retry); messages.add(retry)
+      } else audit(it, "DISCARDED")
+    }; currentNotice = null
     tts?.stop(); releaseFocus(); speaking = false
   }
   private var wakeLock: PowerManager.WakeLock? = null
@@ -163,6 +189,11 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
 
   override fun onCreate() {
     super.onCreate()
+    stopRunning = { handler.post {
+      preferences.edit().putBoolean("running", false).putBoolean("workoutAllowed", false).apply()
+      receiveBatch(JSONObject().put("runId", batchRunId).put("ended", true).put("cancelCandidate", true)
+        .put("notices", JSONArray()).toString())
+    }; Unit }
     lastSpeechAt = debugPrefs.getLong("lastSpeechAt", 0)
     lastPriority = debugPrefs.getInt("lastPriority", 0)
     val channel = NotificationChannel(CHANNEL, "ランニング音声通知", NotificationManager.IMPORTANCE_LOW)
@@ -171,6 +202,12 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    if (intent?.action == ACTION_STOP) {
+      preferences.edit().putBoolean("running", false).putBoolean("workoutAllowed", false).apply()
+      receiveBatch(JSONObject().put("runId", batchRunId).put("ended", true).put("cancelCandidate", true)
+        .put("notices", JSONArray()).toString())
+      return START_NOT_STICKY
+    }
     val batch = intent?.action == ACTION_BATCH
     val workout = intent?.action == ACTION_WORKOUT
     val testing = intent?.action == ACTION_TEST || workout || batch
@@ -264,6 +301,8 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
 
   private fun speakNext() {
     if (speaking || !ready || messages.isEmpty()) return
+    // Deferred information follows state feedback, ahead of new periodic items.
+    messages.sortByDescending { if (it.optBoolean("deferred")) 75 else it.optInt("priority") }
     val notice = messages.removeAt(0)
     if (batchMode && !validInState(notice)) {
       audit(notice, "STALE_STATE")
@@ -271,13 +310,25 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       return
     }
     val now = System.currentTimeMillis()
-    if (now > notice.optLong("expiresAt") || notice.optInt("priority") <= 40 && notice.optInt("priority") < lastPriority && now - lastSpeechAt < 20000) {
+    if (now > notice.optLong("expiresAt")) {
       audit(notice, if (now > notice.optLong("expiresAt")) "EXPIRED" else "HIGHER_PRIORITY_COOLDOWN")
       if (messages.isEmpty()) finishTest() else speakNext()
       return
     }
+    if (notice.optBoolean("deferred")) {
+      val fresh = recovery
+      if (fresh == null || now - (fresh.optJSONObject("data")?.optLong("sampledAt") ?: 0) > 120000) {
+        audit(notice, "DISCARDED_STALE_RECOVERY"); speakNext(); return
+      }
+      val merged = JSONArray().put(notice.optString("originalId", notice.optString("id")))
+      messages.toList().filter { it.optBoolean("deferred") }.forEach {
+        messages.remove(it); merged.put(it.optString("originalId", it.optString("id"))); audit(it, "DISCARDED_MERGED_RECOVERY")
+      }
+      notice.put("message", fresh.getString("message")).put("data", fresh.getJSONObject("data"))
+        .put("recoveryOf", merged).put("retry", 1)
+      audit(notice, "RESUMED")
+    }
     currentNotice = notice
-    val message = notice.getString("message")
     val attributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
       .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
     val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
@@ -295,6 +346,44 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     lastSpeechAt = System.currentTimeMillis()
     lastPriority = notice.optInt("priority")
     debugPrefs.edit().putLong("lastSpeechAt", lastSpeechAt).putInt("lastPriority", lastPriority).apply()
+    if (notice.optString("type") in listOf("AUTO_STOP_CONFIRMED", "AUTO_RESUME_CONFIRMED") && !notice.optBoolean("chimePlayed")) {
+      playChime(notice, attributes); return
+    }
+    speakNotice(notice, attributes)
+  }
+
+  private fun playChime(notice: JSONObject, attributes: AudioAttributes) {
+    chimeActive = true
+    notice.put("chimePlayed", true)
+    val player = MediaPlayer()
+    chime = player
+    fun complete(status: String) {
+      if (chime !== player) return
+      audit(notice, status)
+      player.release(); chime = null; chimeActive = false
+      if (!validInState(notice) || messages.any { it.optInt("priority") > notice.optInt("priority") }) {
+        audit(notice, "DISCARDED_STATE_AFTER_CHIME"); currentNotice = null; speaking = false; releaseFocus()
+        speakNext(); if (messages.isEmpty() && !speaking) finishTest()
+      } else speakNotice(notice, attributes)
+    }
+    try {
+      player.setAudioAttributes(attributes)
+      val resource = if (notice.optString("type") == "AUTO_STOP_CONFIRMED") R.raw.run_stop else R.raw.run_resume
+      resources.openRawResourceFd(resource).use { fd -> player.setDataSource(fd.fileDescriptor, fd.startOffset, fd.length) }
+      player.setOnCompletionListener { complete("CHIME_COMPLETED") }
+      player.setOnErrorListener { _, _, _ -> complete("CHIME_FAILED"); true }
+      player.setOnPreparedListener {
+        if (chime === player) {
+          try { player.start(); audit(notice, "CHIME_STARTED") } catch (_: Exception) { complete("CHIME_FAILED") }
+        }
+      }
+      player.prepareAsync()
+      handler.postDelayed({ if (chime === player) complete("CHIME_TIMEOUT") }, 2000)
+    } catch (_: Exception) { complete("CHIME_FAILED") }
+  }
+
+  private fun speakNotice(notice: JSONObject, attributes: AudioAttributes) {
+    val message = notice.getString("message")
     tts?.setAudioAttributes(attributes)
     val utteranceKey = "runjourney-${System.nanoTime()}"
     tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
@@ -336,7 +425,10 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   }
 
   override fun onDestroy() {
+    stopRunning = null
     handler.removeCallbacks(tick)
+    if (chimeActive) currentNotice?.let { audit(it, "CHIME_INTERRUPTED_SERVICE_DESTROYED") }
+    chime?.release(); chime = null; chimeActive = false
     currentNotice?.let { audit(it, "SERVICE_DESTROYED") }; currentNotice = null
     messages.forEach { audit(it, "SERVICE_DESTROYED") }; messages.clear()
     tts?.stop()

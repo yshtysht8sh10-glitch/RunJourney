@@ -13,6 +13,21 @@ const base = (): ActiveRun => ({ id: 'observations', startedAt: new Date(0).toIS
 beforeEach(async () => { await RunRepository.clearActiveRun(); await AsyncStorage.clear(); jest.clearAllMocks(); });
 afterEach(async () => { jest.restoreAllMocks(); await RunRepository.clearActiveRun(); });
 
+test('early observation feedback runs before checkpoint completion and failure cannot lose GPS', async () => {
+  await RunRepository.saveActiveRun(base());
+  const order: string[] = [];
+  jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+  const result = await RunRepository.appendActiveObservations([raw(0), raw(5000)], 'background', observed => {
+    order.push('feedback');
+    expect(observed.points).toHaveLength(2);
+    throw Error('audio unavailable');
+  });
+  order.push('checkpoint completed');
+  expect(order).toEqual(['feedback', 'checkpoint completed']);
+  expect(result?.points).toHaveLength(2);
+  expect((await RunRepository.getActiveRun())?.points).toEqual(result?.points);
+});
+
 test('empty, timestamp order, duplicate, exact window boundary, irregular fixes, poor accuracy and null speed', () => {
   const buffer = new RollingObservationBuffer();
   expect(buffer.getLatest()).toBeNull(); expect(buffer.getRecent()).toEqual([]);

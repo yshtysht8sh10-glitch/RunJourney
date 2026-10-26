@@ -2,6 +2,7 @@ import { ActiveRun, LocationPoint } from '../types/run';
 import { effectiveEdges, stateOf, timeModel } from '../utils/run-model';
 import { distanceBetween } from '../utils/distance';
 import { usableObservation } from '../utils/movement-inference';
+import { lapDistanceSpeech } from '../utils/voice-format';
 
 export const savingsSeconds = (meters: number, activeMs: number, target: number) => target * meters / 1000 - activeMs / 1000;
 export function spokenDuration(seconds: number) {
@@ -9,8 +10,8 @@ export function spokenDuration(seconds: number) {
   return `${n >= 60 ? `${Math.floor(n / 60)}分` : ''}${n % 60 || n < 60 ? `${n % 60}秒` : ''}`;
 }
 export function savingsMessage(seconds: number) {
-  return seconds < -0.5 ? `累計で${spokenDuration(seconds)}遅れています。`
-    : seconds >= 0.5 ? `累計貯金は${spokenDuration(seconds)}です。` : '累計の貯金と遅れはありません。';
+  return seconds < -0.5 ? `目標より${spokenDuration(seconds)}遅れています。`
+    : seconds >= 0.5 ? `目標より${spokenDuration(seconds)}早いです。` : '累計の貯金と遅れはありません。';
 }
 /** Interpolate distance boundaries on the existing effective active-time edges. */
 type BoundaryEdge = { startMs: number; endMs: number; distanceMeters: number; startDistanceMeters: number };
@@ -41,13 +42,29 @@ export function kilometerLaps(run: ActiveRun, now: number) {
  */
 export function stopHint(points: LocationPoint[], now: number) {
   const last = points.at(-1);
-  const window = points.filter(p => last && p.timestamp >= last.timestamp - 4000).slice(-6);
+  // Use the consecutive stationary suffix. Including a moving fix from four
+  // seconds ago needlessly postpones a valid two-second hint until it ages out.
+  const recent = points.filter(p => last && p.timestamp >= last.timestamp - 4000).slice(-6);
+  let start = recent.length;
+  while (start > 0) {
+    const p = recent[start - 1];
+    if (!usableObservation(p) || p.accuracy! > 12 || p.speed === undefined || p.speed < 0 || p.speed > 0.35) break;
+    start--;
+  }
+  const window = recent.slice(start);
   const age = last ? now - last.timestamp : Infinity;
   return age >= 0 && age <= 3000 && window.length >= 3
     && window.at(-1)!.timestamp - window[0].timestamp >= 2000
     && window.every((p, i) => usableObservation(p) && p.accuracy! <= 12 && p.speed !== undefined && p.speed >= 0 && p.speed <= 0.35
       && (i === 0 || p.timestamp > window[i - 1].timestamp && p.timestamp - window[i - 1].timestamp <= 2000))
     && window.every(p => window.every(q => distanceBetween(p, q) <= 2));
+}
+
+/** A recovery describes its new sampling time, never a stale rolling pace. */
+export function recoveryGuidance(run: ActiveRun, now: number) {
+  const data = voiceSnapshot(run, now);
+  const pace = data.distanceMeters >= 30 ? data.activeMs / data.distanceMeters : null;
+  return { data, message: `保留していた走行情報です。実走行${spokenDuration(data.activeMs / 1000)}時点で、総走行距離${lapDistanceSpeech(data.distanceMeters)}。${pace === null ? '' : `ここまでの平均は1キロ${spokenDuration(pace)}ペースです。`}${data.cumulativeSavingsSec === null ? '' : savingsMessage(data.cumulativeSavingsSec)}` };
 }
 export function voiceSnapshot(run: ActiveRun, now: number) {
   const t = timeModel(run, now);
