@@ -9,13 +9,13 @@ const run = (): ActiveRun => ({ id: 'recovery', startedAt: new Date(0).toISOStri
   distanceMeters: 1000, features: { autoStop: true, break: true }, paceWorkout: createPaceWorkout({ ...DEFAULT_PACE_SETTINGS, enabled: true }, 0) });
 
 test('reproduction #43: preceding moving fix no longer delays the unchanged 2s stationary evidence', () => {
-  const fixes = [point(0, -6, 3), point(1000, -3, 3), point(2000, 0), point(3000, 0.2), point(4000, 0.4)];
-  expect(stopHint(fixes.slice(0, -1), 3000)).toBe(false);
-  expect(stopHint(fixes, 4000)).toBe(true);
+  const fixes = [point(0, -6, 3), point(1000, -3, 3), point(2000, 0), point(3000, 0.2), point(4000, 0.4), point(5000, 0.6), point(6000, 0.8)];
+  expect(stopHint(fixes.slice(0, 4), 3000)).toBe(false);
+  expect(stopHint(fixes.slice(0, 5), 4000)).toBe(true);
   // The previous implementation required *every* fix in the trailing 4s to be slow.
-  const old = (now: number) => fixes.filter(p => p.timestamp >= now - 4000).every(p => p.speed! <= 0.35);
-  expect(old(4000)).toBe(false);
-  expect(old(6000)).toBe(true);
+  const old = (received: LocationPoint[]) => received.filter(p => p.timestamp >= received.at(-1)!.timestamp - 4000).every(p => p.speed! <= 0.35);
+  expect(old(fixes.slice(0, 5))).toBe(false);
+  expect(old(fixes)).toBe(true);
 });
 
 test.each([
