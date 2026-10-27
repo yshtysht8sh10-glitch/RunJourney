@@ -1,6 +1,8 @@
 import { requireNativeModule } from 'expo-modules-core';
 
 type RunAnnouncer = {
+  noiseControl?(action: 'start' | 'stop' | 'finish' | 'preview' | 'enable', runId: string): string;
+  noiseDiagnostics?(): { status: string; running: boolean; gain: number; dbfs: number; baselineDbfs: number; inputType: number; outputType: number; updatedAt: number };
   appendDiagnostic?(payload: string): void;
   finishClock?(enabled: boolean): void;
   addListener?(event: 'finishClock', listener: () => void): { remove(): void };

@@ -70,7 +70,7 @@ export function voiceSnapshot(run: ActiveRun, now: number) {
   const t = timeModel(run, now);
   const target = run.paceWorkout?.workout?.segments?.[0]?.targetPaceSecPerKm ?? null;
   const currentPace = stateOf(run) === 'RUNNING' && now - (run.paceWorkout?.evaluatedAt ?? 0) <= 40000 ? run.paceWorkout?.currentPace ?? null : null;
-  return { runId: run.id, sampledAt: now, distanceMeters: run.distanceMeters,
+  return { runId: run.id, sampledAt: now, candidateId: run.diagnostics?.entries.at(-1)?.pipeline?.candidateId ?? null, distanceMeters: run.distanceMeters,
     elapsedMs: t.wallClockElapsed, activeMs: t.activeRunningTime, stoppedMs: t.autoStoppedDuration + t.breakDuration,
     currentPaceSecPerKm: currentPace, targetPaceSecPerKm: target,
     cumulativeSavingsSec: target === null ? null : savingsSeconds(run.distanceMeters, t.activeRunningTime, target),

@@ -9,6 +9,7 @@ import { VoiceAnnouncement } from '@/services/voice-announcement';
 import { DEFAULT_VOICE_ITEMS, VoiceItems } from '@/utils/voice-format';
 import { isStandaloneTest } from '@/utils/build';
 import PaceWorkoutSettings from '@/components/pace-workout-settings';
+import { NoiseVolumeSettings } from '@/components/noise-volume-settings';
 
 export default function SettingsScreen() {
   const [features, setFeatures] = useState(DEFAULT_RUN_FEATURES);
@@ -67,6 +68,7 @@ export default function SettingsScreen() {
       <Switch value={enabled} disabled={busy} onValueChange={change} />
     </Pressable>
     <Text style={styles.section}>読み上げ内容</Text>
+    {isStandaloneTest() && <NoiseVolumeSettings />}
     {(Object.keys(labels) as (keyof VoiceItems)[]).map((key) =>
       <View key={key} style={styles.row}>
         <Text style={[styles.label, styles.copy]}>{labels[key]}</Text>

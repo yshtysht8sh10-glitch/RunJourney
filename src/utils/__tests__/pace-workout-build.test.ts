@@ -19,7 +19,7 @@ test('isolated Pace variant cannot overwrite production or Test; generation is i
   expect(result).toContain("applicationId 'app.runjourney.mobile'");
   expect(result).toMatch(/paceWorkout\s*\{[\s\S]*?applicationIdSuffix '\.pace'/);
   expect(result).toMatch(/standaloneTest\s*\{[\s\S]*?applicationIdSuffix '\.test'/);
-  expect(result).toContain('RunJourney Pace'); expect(result).toContain('output.versionCodeOverride = 19');
+  expect(result).toContain('RunJourney Pace'); expect(result).toContain('output.versionCodeOverride = 20');
   expect(apply(result)).toBe(result);
 });
 test('EAS pace profile selects only the isolated APK build type', () => {

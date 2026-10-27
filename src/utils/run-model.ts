@@ -146,6 +146,10 @@ export function detectStop(run: ActiveRun, point: LocationPoint, inputSource: St
   const last = prior.last;
   const detail: Omit<StopDiagnostic, 'decision'> = { timestamp: point.timestamp, receivedAt: Date.now(), state,
     speed: point.speed, accuracy: point.accuracy, inputSource, intervalMs: last ? point.timestamp - last.timestamp : undefined };
+  if (last && point.timestamp > last.timestamp) {
+    detail.displacement = distanceBetween(last, point);
+    detail.effectiveSpeed = detail.displacement / ((point.timestamp - last.timestamp) / 1000);
+  }
   const report = (next: ActiveRun, decision: StopDiagnostic['decision'], reason?: StopDiagnostic['reason']) => recordDiagnostic(next, { ...detail, state: stateOf(next), decision, reason });
   if (!run.features?.autoStop) return report(run, 'SKIP', StopReason.SETTING_DISABLED);
   if (state === 'BREAK') return report(run, 'SKIP', StopReason.STATE_CHANGED);

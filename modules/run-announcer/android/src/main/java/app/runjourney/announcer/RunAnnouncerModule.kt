@@ -2,6 +2,10 @@ package app.runjourney.announcer
 
 import android.content.Intent
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.Manifest
+import android.content.pm.PackageManager
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -10,6 +14,40 @@ class RunAnnouncerModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("RunAnnouncer")
     Events("finishClock")
+    Function("noiseControl") { action: String, runId: String ->
+      val context = requireNotNull(appContext.reactContext)
+      val preferences = context.getSharedPreferences(RunAnnouncerService.PREFS, 0)
+      if (action == "enable") {
+        preferences.edit().putBoolean("noiseUserStopped", false).apply(); "READY"
+      } else if (action == "stop") {
+        preferences.edit().putBoolean("noiseUserStopped", true).apply()
+        context.stopService(Intent(context, NoiseMonitorService::class.java)); "OFF"
+      } else if (action == "finish") {
+        // Only shorten an already-running lease; never start a microphone from background.
+        if (NoiseState.running || NoiseState.status == "STARTING") context.startService(Intent(context, NoiseMonitorService::class.java).setAction("FINISH"))
+        "FINISHING"
+      } else if (action == "start" && preferences.getBoolean("noiseUserStopped", false)) "USER_STOPPED"
+      else if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) "PERMISSION_DENIED"
+      else if (appContext.currentActivity?.hasWindowFocus() != true) "VISIBLE_ACTIVITY_REQUIRED"
+      else try {
+        NoiseState.status = "STARTING"
+        if (action == "preview") preferences.edit().putBoolean("noiseUserStopped", false).apply()
+        val intent = Intent(context, NoiseMonitorService::class.java).putExtra("runId", runId)
+          .putExtra("leaseMs", if (action == "preview") 20000L else 21600000L)
+        context.startForegroundService(intent)
+        if (action == "preview") Handler(Looper.getMainLooper()).postDelayed({
+          val speech = Intent(context, RunAnnouncerService::class.java).setAction(RunAnnouncerService.ACTION_TEST)
+            .putExtra("message", "騒音に合わせた音量のテストです。周囲が騒がしくなると案内の音量を少し上げ、静かになるとゆっくり戻します。音量は端末の設定が上限です。")
+          try { context.startForegroundService(speech) } catch (_: Exception) { }
+        }, 2500)
+        "STARTING"
+      } catch (_: Exception) { NoiseState.audit(context, "START_RESTRICTED", runId); "START_RESTRICTED" }
+    }
+    Function("noiseDiagnostics") {
+      mapOf("status" to NoiseState.status, "running" to NoiseState.running, "gain" to NoiseState.gain,
+        "dbfs" to NoiseState.dbfs, "baselineDbfs" to NoiseState.baseline, "inputType" to NoiseState.inputType,
+        "outputType" to NoiseState.outputType, "updatedAt" to NoiseState.updatedAt)
+    }
     Function("appendDiagnostic") { payload: String ->
       VoiceLogStorage.append(requireNotNull(appContext.reactContext), payload, System.currentTimeMillis())
     }

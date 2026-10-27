@@ -12,6 +12,8 @@ import { isStandaloneTest } from '@/utils/build';
 import { exportVoiceLog } from '@/services/run-export';
 import { verifyVoiceLog } from '@/domain/voice-log';
 import { VoiceAnnouncement } from '@/services/voice-announcement';
+import { summarizeStopLatency } from '@/domain/stop-latency';
+import { AdaptiveAudio } from '@/services/adaptive-audio';
 
 export default function Diagnostics() {
   const { id } = useLocalSearchParams<{ id?: string }>();
@@ -20,6 +22,7 @@ export default function Diagnostics() {
   const [error, setError] = useState('');
   const [voiceLog, setVoiceLog] = useState('[]');
   const [exportingVoice, setExportingVoice] = useState(false);
+  const [latency, setLatency] = useState<ReturnType<typeof summarizeStopLatency> | null>(null);
   const voiceExportLock = useRef(false);
   const load = useCallback(async () => {
     if (!isStandaloneTest()) return;
@@ -46,7 +49,9 @@ export default function Diagnostics() {
     voiceExportLock.current = true; setExportingVoice(true);
     try {
       const full = await VoiceAnnouncement.debugLog(20000);
-      await exportVoiceLog(JSON.stringify({ version: 1, entries: JSON.parse(full), verification: verifyVoiceLog(full) }));
+      const summary = summarizeStopLatency(JSON.parse(full), run?.id);
+      setLatency(summary);
+      await exportVoiceLog(JSON.stringify({ version: 2, entries: JSON.parse(full), verification: verifyVoiceLog(full), latencySummary: summary, noise: AdaptiveAudio.diagnostics() }));
     } catch (e) { Alert.alert('出力できませんでした', String(e)); }
     finally { voiceExportLock.current = false; setExportingVoice(false); }
   };
@@ -57,6 +62,12 @@ export default function Diagnostics() {
       <Pressable accessibilityRole="button" onPress={load} style={styles.button}><Text style={styles.text}>最新情報に更新</Text></Pressable>
       <Text style={styles.text}>音声デバッグログ（端末内・最大20,000イベント / 20MB / 7日）</Text>
       <Pressable accessibilityRole="button" disabled={exportingVoice} style={styles.button} onPress={exportVoice}><Text style={styles.text}>{exportingVoice ? '音声ログを出力中…' : '音声ログ JSONをExport'}</Text></Pressable>
+      <Pressable accessibilityRole="button" disabled={exportingVoice} style={styles.button} onPress={() => {
+        setExportingVoice(true);
+        void VoiceAnnouncement.debugLog(20000).then(text => setLatency(summarizeStopLatency(JSON.parse(text), run?.id)))
+          .catch(error => Alert.alert('集計できませんでした', String(error))).finally(() => setExportingVoice(false));
+      }}><Text style={styles.text}>停止・通知の遅延サマリーを集計</Text></Pressable>
+      {latency && <Text selectable style={styles.log}>{JSON.stringify({ stages: latency.stages, reasons: latency.reasons, candidateCount: latency.candidates.length, limitations: latency.limitations, noise: AdaptiveAudio.diagnostics() }, null, 2)}</Text>}
       <Text selectable style={styles.log}>{JSON.stringify(JSON.parse(voiceLog).slice(-12), null, 2)}</Text>
       {!!error && <Text accessibilityRole="alert" style={styles.text}>{error}</Text>}
       {!report ? <Text style={styles.text}>{error || '記録がありません'}</Text> : <>
