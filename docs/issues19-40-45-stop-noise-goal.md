@@ -56,3 +56,17 @@ JavaScript 49 suites / 442 tests成功。TypeScript・Expo lint成功。native�
 ## 次回実走受入
 
 同一候補IDでGPS→配送→キュー→判定窓→確定→チャイム/TTSを追い、停止を人が記録した時刻と推定低速時刻を分ける。短い信号待ち、GPS精度悪化、再開直後、予告直後の確定、情報案内中の割込み、画面OFFを確認。イヤホンで静音→車両通過→静音の音量変化と過大音量がないこと、権限拒否・通知停止・通話・Bluetooth接続断・電池消費を確認。手動/距離/時間終了の履歴値と読み上げ、二重保存なしを確認する。机上テストを理由にIssueをCloseしない。
+
+## ビルドと実機プレビュー（2026-10-28 JST）
+
+実装SHA `9d6a52ce7bea96a6182c52ace68b165b2e85320f`、PR [#46](https://github.com/yshtysht8sh10-glitch/RunJourney/pull/46)（#44をbase）。native Robolectric 31tests全成功。Android assembleStandaloneTest成功（3分13秒）。APK実manifestは`app.runjourney.mobile.test`、versionCode20、minSdk26/targetSdk36、画面表示`9d6a52c+cloud-sync-v20`。私有APK `runjourney-test-v20-9d6a52c.apk` は112,533,287bytes、SHA256 `fbaff8bed7ff6180322ec5af5ef15d3ba12b770f16160a7eab112d2f4c3b38e3`。署名SHA256 `fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c` は既存Testと一致。
+
+01:42 JSTに`adb install -r`成功、19→20。初回インストール日時2026-09-30 23:40:36、dataDirを維持。Production/Paceへの操作なし。EAS cloudSyncTestも同一実装を送信済み: [build b4d19c36](https://expo.dev/accounts/yshtysht8sh10/projects/RunJourney/builds/b4d19c36-961f-4bae-913a-3a23153bcb0e)、確認時IN_QUEUE。EASの表示appIdentifier/versionはconfig基本値であり、導入判定にはAPK実manifestのTest ID/versionCode20を用いた。端末導入したのはローカルAPKで、クラウドAPKは未完成。
+
+実機で初期OFF、権限拒否後もOFF・通常TTS STARTED/DONEを確認。許可後の20秒プレビューでは内蔵マイク(inputType15)とBluetooth A2DP(outputType8)を確認し、microphone FGS通知、RMSレベルのみ、gain0.65、MONITORINGを観測。合成QUEUED→STARTED168ms、COMPLETED520ms、adaptive-local-synthesis再生STARTED543ms、再生DONE、測定開始20,004ms後STOPPEDを確認。権限許可後に実機合成/再生経路が動作する証拠であり、騒音上昇時の実際の聞き取り・画面OFF・走行時消費電力の検証ではない。試験終了後に設定をOFFへ戻しサービス停止を確認。走行開始操作はせず、プレビューは履歴を作らない。
+
+## 更新後データの全件照合
+
+01:45 JSTの標準Exportを取得し、更新前BackupとdecodeBackup/canonicalで比較。44履歴の全フィールド・GPS15,544点の全値・291イベント・ごみ箱19件・保護ID24件・draftなしが一致。既存設定6キーの値も不変。意図した追加は`@runjourney/noise-volume/v1: off`の1件のみ（プレビュー試験後OFF）。欠損0・変更履歴0・追加履歴0。
+
+更新後Backupは9,970,013bytes、端末とPCのSHA256一致 `c4c18becb1b3e8d70a12393ab7f72e435a97aa4ed9220ad40391a91d30360e96`。内部SHA検証成功。PCの新しい隔離SQLiteへ復元し、全snapshot一致、integrity_check=ok、foreign_key_check違反0。更新前BackupのSHA不変も再確認した。端末にRestore/Importを行わず、データ消去・アンインストールなし。証跡は私有保全先の`backup-after.json`、`restore-after.sqlite`、`verification-after.json`、`voice-after-preview.json`に保持。
