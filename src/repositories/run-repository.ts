@@ -12,10 +12,12 @@ import { validateRuns } from '@/utils/run-backup';
 import { GpsObservationSession, incrementObservationCount, RawLocationObservation } from '@/utils/gps-observation';
 import { safelyAdvancePaceWorkout } from '@/domain/pace-workout';
 import { goalAchievement } from '@/domain/finish-goal';
+import { StopLatencyTracker, stopDecisionEvidence } from '@/domain/stop-latency';
+import { diagnosticLog } from '@/services/diagnostic-log';
 
 
 let operationQueue: Promise<unknown> = Promise.resolve();
-let observationSession: { active: ActiveRun; observation: GpsObservationSession; needsCheckpoint: boolean } | null = null;
+let observationSession: { active: ActiveRun; observation: GpsObservationSession; needsCheckpoint: boolean; latency: StopLatencyTracker } | null = null;
 let pendingFinish: ActiveRun | null = null;
 
 function flushObservation(active: ActiveRun, endMs: number): ActiveRun {
@@ -132,7 +134,9 @@ export const RunRepository = {
 
   /** Test PoC entry point: RAM observations, shared detector, throttled GPS/storage. */
   appendActiveObservations(raws: RawLocationObservation[], appState = 'unknown', onObserved?: (run: ActiveRun) => void): Promise<ActiveRun | null> {
+    const submittedAt = Date.now();
     return serialized(async () => {
+      const enteredAt = Date.now();
       if (pendingFinish) return pendingFinish;
       if (!observationSession) {
         const stored = await (await database()).getDraft();
@@ -141,7 +145,7 @@ export const RunRepository = {
         const counts = { ...(active.diagnostics?.counts ?? {}) };
         incrementObservationCount(counts, 'SEGMENTS');
         active.diagnostics = { ...active.diagnostics, entries: active.diagnostics?.entries ?? [], processed: active.diagnostics?.processed ?? 0, counts };
-        observationSession = { active, observation: new GpsObservationSession(active.points.at(-1)?.timestamp, counts.GPS_OBS_LAST_TIMESTAMP), needsCheckpoint: false };
+        observationSession = { active, observation: new GpsObservationSession(active.points.at(-1)?.timestamp, counts.GPS_OBS_LAST_TIMESTAMP), needsCheckpoint: false, latency: new StopLatencyTracker() };
       }
       let active = observationSession.active;
         if (active.endedAt) return active;
@@ -150,8 +154,16 @@ export const RunRepository = {
       const incoming = observationSession.observation.ingest(raws, counts, appState, Date.parse(active.startedAt));
       active = { ...active, diagnostics: { ...active.diagnostics!, counts } };
       const persisted: LocationPoint[] = [];
-      for (const { point, persist, window } of incoming) {
+      for (const { point, persist, window, receivedAt } of incoming) {
+        const evaluatedAt = Date.now();
         active = detectStop(active, point, 'live-observation', window);
+        const entry = active.diagnostics?.entries.at(-1);
+        if (entry?.timestamp === point.timestamp && active.diagnostics) {
+          const annotated = observationSession.latency.annotate(active.id, entry, { callbackAt: receivedAt, submittedAt, enteredAt, evaluatedAt, finishedAt: Date.now() });
+          active = { ...active, diagnostics: { ...active.diagnostics, entries: [...active.diagnostics.entries.slice(0, -1), annotated], trace: active.diagnostics.trace?.map(e => e === entry ? annotated : e) } };
+          diagnosticLog('STOP_PIPELINE', `${active.id}:sample:${point.timestamp}`, annotated.decision,
+            { runId: active.id, appState, pipeline: annotated.pipeline, evidence: stopDecisionEvidence(annotated) });
+        }
         if (persist) persisted.push(point);
       }
       active = { ...active, points: [...active.points, ...persisted], updatedAt: new Date().toISOString() };
@@ -165,7 +177,14 @@ export const RunRepository = {
       // cannot cancel or delay durable GPS storage or change detector results.
       try { onObserved?.(active); } catch (error) { console.warn('Observation feedback failed', error); }
       if (observationSession.needsCheckpoint) {
-        await (await database()).saveDraft(active);
+        const startedAt = Date.now();
+        try {
+          await (await database()).saveDraft(active);
+          diagnosticLog('STOP_CHECKPOINT', `${active.id}:checkpoint:${startedAt}`, 'COMPLETED', { runId: active.id, startedAt, finishedAt: Date.now(), durationMs: Date.now() - startedAt });
+        } catch (error) {
+          diagnosticLog('STOP_CHECKPOINT', `${active.id}:checkpoint:${startedAt}`, 'FAILED', { runId: active.id, startedAt, finishedAt: Date.now(), durationMs: Date.now() - startedAt });
+          throw error;
+        }
         observationSession.needsCheckpoint = false;
       }
       return active;

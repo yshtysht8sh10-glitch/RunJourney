@@ -1,6 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+  <uses-permission android:name="android.permission.RECORD_AUDIO" />
   <application>
+    <service android:name="app.runjourney.announcer.NoiseMonitorService" android:exported="false" android:foregroundServiceType="microphone" />
     <service android:name="app.runjourney.announcer.FinishClockService" android:exported="false" android:foregroundServiceType="location" />
     <service android:name="app.runjourney.announcer.RunAnnouncerService" android:exported="false" android:foregroundServiceType="mediaPlayback" />
   </application>

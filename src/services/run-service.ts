@@ -11,7 +11,8 @@ import { isStandaloneTest } from '@/utils/build';
 import { PaceSettingsRepository } from '@/repositories/pace-settings';
 import { createPaceWorkout } from '@/domain/pace-workout';
 import { FinishSettings } from '@/repositories/finish-settings';
-import { achievementMessage, goalAchievement } from '@/domain/finish-goal';
+import { goalAchievement } from '@/domain/finish-goal';
+import { AdaptiveAudio } from '@/services/adaptive-audio';
 import { FinishClock } from '@/services/finish-clock';
 import { completionLog } from '@/services/completion-log';
 
@@ -81,6 +82,7 @@ export const RunService = {
       await startLocationTask();
       if (existing.finishGoal?.kind === 'time') FinishClock.start(() => RunService.checkGoal());
       await VoiceAnnouncement.restore(existing);
+      void AdaptiveAudio.start(existing.id, !!existing.paceWorkout?.voice);
       return existing;
     }
 
@@ -109,6 +111,7 @@ export const RunService = {
     try {
       await startLocationTask();
       await VoiceAnnouncement.restore(active);
+      void AdaptiveAudio.start(active.id, !!active.paceWorkout?.voice);
       return active;
     } catch (error) {
       // START was durably committed. Preserve it if GPS/voice startup fails;
@@ -123,6 +126,7 @@ export const RunService = {
     if (active.endedAt) return active;
     if (active.finishGoal?.kind === 'time') FinishClock.start(() => RunService.checkGoal());
     await VoiceAnnouncement.restore(active);
+    void AdaptiveAudio.start(active.id, !!active.paceWorkout?.voice);
 
     const foreground = await Location.getForegroundPermissionsAsync();
     const background = await Location.getBackgroundPermissionsAsync();
@@ -188,6 +192,7 @@ export const RunService = {
         state: frozen.events?.at(-1)?.state ?? 'RUNNING', endedAt: frozen.endedAt, distanceMeters: frozen.distanceMeters });
       FinishClock.stop();
       VoiceAnnouncement.stop(frozen.id);
+      AdaptiveAudio.finish();
       if (await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME)) {
         await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
       }
@@ -197,10 +202,9 @@ export const RunService = {
         completionLog('SAVE_SUCCEEDED', { runId: saved.id, endedAt: saved.endedAt, voiceEventId: saved.achievement ? `${saved.id}:finish` : null });
         // Neither listeners nor speech can turn committed history into a save failure.
         for (const listener of finishListeners) { try { listener(saved); } catch { /* UI isolated */ } }
-        if (saved.achievement) {
-          try { await VoiceAnnouncement.achieved(saved.id, achievementMessage(saved)); }
-          catch (error) { console.warn('Achievement speech failed; history saved', error); }
-        }
+        // Enqueue results after durable save; never wait for synthesis/playback.
+        try { await VoiceAnnouncement.finished(saved); }
+        catch (error) { console.warn('Finish speech failed; history saved', error); }
       }
       return saved;
     })().catch(error => {

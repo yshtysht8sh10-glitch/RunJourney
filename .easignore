@@ -1,0 +1,61 @@
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+.expo-export-check/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.keystore
+*.p8
+*.p12
+*.key
+*.mobileprovision
+local.properties
+credentials.json
+google-services.json
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files
+.env
+.env.*
+.env*.local
+
+# typescript
+*.tsbuildinfo
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+/artifacts/web-review/
+
+example
+
+# generated native folders
+/ios
+/android
+/modules/*/android/build/
+/modules/*/android/.gradle/
+/build-issue6.log
+/tmp/issue15-*.log
+
+# Never upload local/private diagnostic inputs or scratch outputs.
+/tmp/

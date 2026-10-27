@@ -45,12 +45,13 @@ export const StopReason = {
 } as const;
 export type StopReasonCode = typeof StopReason[keyof typeof StopReason];
 export type StopDiagnostic = {
+  pipeline?: import('../domain/stop-latency').StopPipelineData;
   timestamp: number; receivedAt?: number; state: RunState; accuracy?: number;
   speed?: number; effectiveSpeed?: number; displacement?: number; originDisplacement?: number;
   intervalMs?: number; candidateStartedAt?: number; candidateAgeMs?: number;
   decision: 'START' | 'CONTINUE' | 'RESET' | 'HOLD' | 'SKIP' | 'STOP_CONFIRMED' | 'RESUME_CONFIRMED';
   inputSource?: 'live-observation' | 'live-persisted' | 'replay';
-  window?: { durationMs: number; validCount: number; displacement: number; pathLength: number; spread: number; speedMedian?: number; coherence: number; displacementSpeed?: number; movingEdgeRatio?: number; stopEvidence?: 'narrow-stillness' | 'bounded-dwell' | 'none' };
+  window?: { durationMs: number; validCount: number; displacement: number; pathLength: number; spread: number; speedMedian?: number; coherence: number; displacementSpeed?: number; movingEdgeRatio?: number; maxEdgeSpeed?: number; firstEdgeSpeed?: number; edgesValid?: boolean; stopEvidence?: 'narrow-stillness' | 'bounded-dwell' | 'none' };
   effectiveTimestamp?: number; confirmedAt?: number;
   reason?: StopReasonCode;
 };

@@ -3,6 +3,7 @@ package app.runjourney.announcer
 import android.content.Context
 import android.media.MediaPlayer
 import android.os.Looper
+import android.speech.tts.TextToSpeech
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.shadows.ShadowMediaPlayer
 import org.json.JSONArray
@@ -33,12 +34,13 @@ class VoiceRecoveryTest {
     service.javaClass.getDeclaredMethod("receiveBatch", String::class.java).apply { isAccessible = true }.invoke(service, payload.toString())
   }
   @Before fun setup() {
+    NoiseState.running = false; NoiseState.playback = false
     ShadowMediaPlayer.setMediaInfoProvider { ShadowMediaPlayer.MediaInfo(320, 0) }
     service = Robolectric.buildService(RunAnnouncerService::class.java).create().get()
     service.getSharedPreferences("runjourney-voice-debug", Context.MODE_PRIVATE).edit().clear().commit()
     set("ready", false)
   }
-  @After fun destroy() { service.onDestroy() }
+  @After fun destroy() { service.onDestroy(); NoiseState.running = false }
   @Test fun interruptedFiveMinuteKilometerAndSavingsAreRetainedOnce() {
     for (type in listOf("FIVE_MINUTES", "KILOMETER_LAP", "PACE_WARNING")) {
       queue().clear(); set("currentNotice", notice(type)); set("speaking", true)
@@ -127,5 +129,39 @@ class VoiceRecoveryTest {
     set("ready", false)
     batch("RUNNING", notice("FIVE_MINUTES", "after-enable"))
     assertEquals("after-enable", queue().single().optString("id"))
+  }
+  @Test fun synthesisFailureUsesNormalTtsAndRemovesGeneratedFile() {
+    val tts = get("tts") as TextToSpeech
+    shadowOf(tts).simulateSynthesizeToFileResult(TextToSpeech.ERROR)
+    NoiseState.running = true; NoiseState.updatedAt = System.currentTimeMillis(); NoiseState.gain = .8f
+    set("ready", true)
+    batch("RUNNING", notice("FIVE_MINUTES"))
+    shadowOf(Looper.getMainLooper()).idle()
+    assertEquals("test", shadowOf(tts).lastSpokenText)
+    assertNull(get("speechFile")); assertNull(get("adaptivePlayer"))
+  }
+  @Test fun lateSynthesisCallbackCannotResurrectInterruptedInformation() {
+    val tts = get("tts") as TextToSpeech
+    NoiseState.running = true; NoiseState.updatedAt = System.currentTimeMillis(); NoiseState.gain = .8f
+    set("ready", true)
+    batch("RUNNING", notice("FIVE_MINUTES"))
+    val first = get("currentNotice") as JSONObject
+    val listener = shadowOf(tts).utteranceProgressListener
+    val file = get("speechFile") as java.io.File
+    batch("AUTO_STOP", notice("AUTO_STOP_CONFIRMED"))
+    assertFalse(file.exists()); assertNull(get("adaptivePlayer"))
+    listener.onDone(first.getString("synthesisKey")); shadowOf(Looper.getMainLooper()).idle()
+    assertNull(get("adaptivePlayer"))
+    assertEquals("AUTO_STOP_CONFIRMED", (get("currentNotice") as JSONObject).optString("type"))
+  }
+  @Test fun candidateChimeAlsoWaitsForCompletionButNeverSpeaksAfterConfirmation() {
+    set("ready", true)
+    batch("RUNNING", notice("STOP_CANDIDATE_ANNOUNCED"), candidate = true)
+    val player = get("chime") as MediaPlayer
+    batch("AUTO_STOP", notice("AUTO_STOP_CONFIRMED"))
+    assertSame(player, get("chime"))
+    shadowOf(player).invokeCompletionListener()
+    assertEquals("AUTO_STOP_CONFIRMED", (get("currentNotice") as JSONObject).optString("type"))
+    assertTrue(get("chimeActive") as Boolean)
   }
 }

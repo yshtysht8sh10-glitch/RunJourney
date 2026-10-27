@@ -116,3 +116,16 @@ test('manual finish discards an in-flight payload that was waiting for settings'
   expect(native.notifyBatch).not.toHaveBeenCalled();
 });
 
+test('manual finish has saved-result speech when enabled, and silence when both voices are OFF', async () => {
+  const r = { ...run(), endedAt: new Date(start + 60000).toISOString(), paceWorkout: undefined };
+  await VoiceAnnouncement.setEnabled(false, null);
+  await VoiceAnnouncement.finished(r);
+  expect(native.notifyBatch).not.toHaveBeenCalled();
+  await VoiceAnnouncement.setEnabled(true, null);
+  await VoiceAnnouncement.finished(r);
+  expect(notices()[0].type).toBe('RUN_GOAL_FINISHED');
+  expect(notices()[0].message).toContain('走行を終了しました');
+  const batch = JSON.parse(jest.mocked(native.notifyBatch!).mock.calls.at(-1)![0]);
+  expect(batch.ended).toBe(true); expect(batch.notices[0].data.savedEndedAt).toBe(r.endedAt);
+});
+

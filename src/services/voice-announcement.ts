@@ -1,7 +1,10 @@
 import SettingsStorage from '@/repositories/storage';
 import { Platform } from 'react-native';
 
-import { ActiveRun } from '@/types/run';
+import { ActiveRun, RunRecord } from '@/types/run';
+import { finishVoice } from '@/domain/finish-voice';
+import { diagnosticLog } from '@/services/diagnostic-log';
+import { AdaptiveAudio } from '@/services/adaptive-audio';
 import { announcementClock, completedLapAnalysis, stateOf } from '@/utils/run-model';
 import { analyzePace, DEFAULT_LAP_MS } from '@/utils/pace-analysis';
 import { DEFAULT_VOICE_ITEMS, formatAnnouncement, VoiceItems } from '@/utils/voice-format';
@@ -23,6 +26,13 @@ function nativeAnnouncer() {
 }
 
 export const VoiceAnnouncement = {
+  async finished(run: RunRecord): Promise<void> {
+    const allowed = await this.enabled() || validPaceState(run.paceWorkout) && run.paceWorkout.voice;
+    if (!allowed) { diagnosticLog('RUN_FINISH_VOICE', `${run.id}:finish`, 'SUPPRESSED_VOICE_OFF', { runId: run.id }); return; }
+    const summary = finishVoice(run), now = Date.now();
+    await nativeAnnouncer()?.notifyBatch?.(JSON.stringify({ runId: run.id, ended: true, cancelCandidate: true, paused: true,
+      notices: [{ id: `${run.id}:finish`, type: 'RUN_GOAL_FINISHED', message: summary.message, generatedAt: now, dispatchedAt: now, queuedAt: now, expiresAt: now + 30000, priority: 110, data: summary.data }] }));
+  },
   async achieved(runId: string, message: string): Promise<void> {
     const now = Date.now();
     await nativeAnnouncer()?.notifyBatch?.(JSON.stringify({ runId, ended: true, cancelCandidate: true, paused: true,
@@ -50,6 +60,7 @@ export const VoiceAnnouncement = {
   async setEnabled(enabled: boolean, activeRun: ActiveRun | null): Promise<void> {
     await SettingsStorage.setItem(SETTING_KEY, enabled ? 'on' : 'off');
     if (periodicPreference) periodicPreference.value = enabled;
+    if (!enabled && !activeRun?.paceWorkout?.voice) AdaptiveAudio.stop();
     if (enabled && activeRun) this.start(activeRun);
     else nativeAnnouncer()?.stop();
   },
@@ -113,6 +124,7 @@ export const VoiceAnnouncement = {
     }
   },
   stop(runId?: string): void {
+    if (!runId) AdaptiveAudio.stop();
     if (runId) {
       finishedRuns.add(runId);
       while (finishedRuns.size > 32) finishedRuns.delete(finishedRuns.values().next().value!);
@@ -188,12 +200,14 @@ async function updateGuidance(run: ActiveRun, stateOnly: boolean) {
     const type = e.state === 'AUTO_STOP' ? 'AUTO_STOP_CONFIRMED' : e.state === 'BREAK' ? 'BREAK' : e.source === 'sensor' ? 'AUTO_RESUME_CONFIRMED' : 'RESUME';
     add(`event:${index}:${e.timestamp}`, type, e.state === 'AUTO_STOP' ? '走行タイマーを一時停止しました。' : e.state === 'BREAK' ? '休憩します。' : e.source === 'sensor' ? '走行再開を検知しました。走行タイマーを再開します。' : '走行タイマーを再開します。', e.confirmedAt ?? e.timestamp, 15000, 100,
       { effectiveAt: e.timestamp, confirmedAt: e.confirmedAt ?? null, eventIndex: index,
+        candidateId: run.diagnostics?.trace?.find(d => d.timestamp === (e.confirmedAt ?? e.timestamp) && ['STOP_CONFIRMED', 'RESUME_CONFIRMED'].includes(d.decision))?.pipeline?.candidateId ?? null,
         lastHintDetectedAt: hintSession.detectedAt || null, lastHintLowSpeedObservedAt: hintSession.lowSpeedAt || null,
         hintToConfirmationMs: hintSession.detectedAt && e.confirmedAt && e.confirmedAt >= hintSession.detectedAt && e.confirmedAt - hintSession.detectedAt <= 30000 ? e.confirmedAt - hintSession.detectedAt : null });
   });
   const batchState = `${run.id}:${candidate}:${running}:${snapshot.activeMs}:${snapshot.distanceMeters}`;
   const send = async () => {
     if (finishedRuns.has(run.id)) return;
+    notices.forEach(n => { n.dispatchedAt = Date.now(); });
     await native?.notifyBatch?.(JSON.stringify({ notices: notices.splice(0), recovery: recoveryGuidance(run, now), cancelCandidate: !candidate, paused: !running, state: stateOf(run), latestEventIndex: (run.events?.length ?? 0) - 1, runId: run.id }));
     lastBatchState = batchState;
   };
