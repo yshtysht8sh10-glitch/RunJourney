@@ -187,7 +187,7 @@ export const RunService = {
       completionLog('FROZEN', { runId: frozen.id, finishGoal: frozen.finishGoal ?? { kind: 'manual' }, achievement: frozen.achievement,
         state: frozen.events?.at(-1)?.state ?? 'RUNNING', endedAt: frozen.endedAt, distanceMeters: frozen.distanceMeters });
       FinishClock.stop();
-      VoiceAnnouncement.stop();
+      VoiceAnnouncement.stop(frozen.id);
       if (await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME)) {
         await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
       }

@@ -6,7 +6,7 @@ import { RunService } from '@/services/run-service';
 import { isStandaloneTest } from '@/utils/build';
 import { ActiveRun } from '@/types/run';
 jest.mock('@/utils/build', () => ({ isStandaloneTest: jest.fn(() => true) }));
-jest.mock('@/services/voice-announcement', () => ({ VoiceAnnouncement: { restore: jest.fn(), updateDistance: jest.fn(), updateRun: jest.fn() } }));
+jest.mock('@/services/voice-announcement', () => ({ VoiceAnnouncement: { restore: jest.fn(), updateState: jest.fn(), updateDistance: jest.fn(), updateRun: jest.fn() } }));
 jest.mock('expo-task-manager', () => ({ isTaskDefined: () => false, defineTask: jest.fn() }));
 jest.mock('expo-location', () => ({ Accuracy: { High: 4 }, ActivityType: { Fitness: 3 }, PermissionStatus: { GRANTED: 'granted' },
   getForegroundPermissionsAsync: jest.fn(async () => ({ status: 'granted' })), getBackgroundPermissionsAsync: jest.fn(async () => ({ status: 'granted' })),

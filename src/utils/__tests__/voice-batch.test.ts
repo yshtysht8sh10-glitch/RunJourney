@@ -91,3 +91,28 @@ test('slow preference read does not create a hint from observations that expired
   expect(notices().some(n => n.type === 'STOP_CANDIDATE_ANNOUNCED')).toBe(false);
 });
 
+test('state feedback is dispatched before slow voice-item reads; early feedback sends no periodic items', async () => {
+  const r = run();
+  await VoiceAnnouncement.setEnabled(true, null);
+  r.events = [{ state: 'AUTO_STOP', source: 'sensor', timestamp: start + 55000, confirmedAt: start + 60000 }];
+  await VoiceAnnouncement.updateState(r);
+  expect(notices().map(n => n.type)).toEqual(['AUTO_STOP_CONFIRMED']);
+  expect(notices()[0].data.confirmedAt).toBe(start + 60000);
+  const payload = JSON.parse(jest.mocked(native.notifyBatch!).mock.calls.at(-1)![0]);
+  expect(payload.recovery.data.state).toBe('AUTO_STOP');
+  expect(payload.recovery.message).toContain('時点');
+});
+
+test('manual finish discards an in-flight payload that was waiting for settings', async () => {
+  const r = run();
+  r.events = [{ state: 'AUTO_STOP', source: 'sensor', timestamp: start + 55000, confirmedAt: start + 60000 }];
+  let release!: (value: boolean) => void;
+  jest.spyOn(VoiceAnnouncement, 'enabled').mockReturnValueOnce(new Promise(resolve => { release = resolve; }));
+  const pending = VoiceAnnouncement.updateRun(r);
+  VoiceAnnouncement.stop(r.id);
+  release(true); await pending;
+  expect(native.notifyBatch).not.toHaveBeenCalled();
+  await VoiceAnnouncement.updateRun(r);
+  expect(native.notifyBatch).not.toHaveBeenCalled();
+});
+

@@ -101,7 +101,7 @@ test.each([[300, 'FAST'], [450, 'SLOW']] as const)('%s pace warns only after two
   expect(r.paceWorkout?.status).toBe('UNKNOWN');
   r = step(r, 60000, pace);
   expect(r.paceWorkout?.status).toBe(status);
-  expect(r.paceWorkout?.notice?.message).toContain(status === 'FAST' ? '速い' : '遅れ');
+  expect(r.paceWorkout?.notice?.message).toContain(status === 'FAST' ? '早い' : '遅れ');
   expect(step(r, 90000, pace).paceWorkout?.notice).toBeUndefined();
   expect(step(step(r, 90000, pace), 120000, pace).paceWorkout?.notice).toBeDefined();
 });

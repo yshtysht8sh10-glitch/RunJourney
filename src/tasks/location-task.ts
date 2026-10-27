@@ -30,7 +30,8 @@ if (!TaskManager.isTaskDefined(LOCATION_TASK_NAME)) {
     const receivedAt = Date.now();
     const updated = isStandaloneTest()
       ? await RunRepository.appendActiveObservations(data.locations.map(location => ({ ...toPoint(location),
-        accuracy: location.coords.accuracy, speed: location.coords.speed, receivedAt })), AppState.currentState ?? 'unknown')
+        accuracy: location.coords.accuracy, speed: location.coords.speed, receivedAt })), AppState.currentState ?? 'unknown',
+        observed => { void VoiceAnnouncement.updateState(observed); })
       : await RunRepository.appendActivePoints(data.locations.map(toPoint));
     if (updated) {
       if (updated.endedAt) return;

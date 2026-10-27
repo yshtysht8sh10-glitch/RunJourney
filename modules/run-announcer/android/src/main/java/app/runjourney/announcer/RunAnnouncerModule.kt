@@ -27,7 +27,9 @@ class RunAnnouncerModule : Module() {
     AsyncFunction("voiceLog") { limit: Int, promise: Promise ->
       VoiceLogStorage.read(requireNotNull(appContext.reactContext), limit, promise)
     }
-    AsyncFunction("notifyBatch") { payload: String ->
+    // Dispatch the tiny service intent directly; do not wait on the shared
+    // async-module executor behind database/file work. Playback stays async.
+    Function("notifyBatch") { payload: String ->
       val context = requireNotNull(appContext.reactContext)
       val intent = Intent(context, RunAnnouncerService::class.java).apply {
         action = RunAnnouncerService.ACTION_BATCH
@@ -115,7 +117,10 @@ class RunAnnouncerModule : Module() {
     Function("stop") {
       val context = requireNotNull(appContext.reactContext)
       context.getSharedPreferences(RunAnnouncerService.PREFS, 0).edit().putBoolean("running", false).putBoolean("workoutAllowed", false).apply()
-      context.stopService(Intent(context, RunAnnouncerService::class.java))
+      // Deliver termination through the queue so an already-started chime can
+      // finish. This never waits for sound before saving the actual run.
+      RunAnnouncerService.stopRunning?.invoke() ?: context.stopService(Intent(context, RunAnnouncerService::class.java))
+      Unit
     }
   }
 }

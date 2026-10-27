@@ -4,7 +4,7 @@ import { RunRepository } from '@/repositories/run-repository';
 import { VoiceAnnouncement } from '@/services/voice-announcement';
 import '@/tasks/location-task';
 jest.mock('expo-task-manager', () => ({ isTaskDefined: () => false, defineTask: jest.fn() }));
-jest.mock('@/services/voice-announcement', () => ({ VoiceAnnouncement: { updateDistance: jest.fn(), updateRun: jest.fn() } }));
+jest.mock('@/services/voice-announcement', () => ({ VoiceAnnouncement: { updateState: jest.fn(), updateDistance: jest.fn(), updateRun: jest.fn() } }));
 beforeEach(async () => { await AsyncStorage.clear(); jest.mocked(VoiceAnnouncement.updateRun).mockClear(); });
 test.each([true, false])('background GPS uses persisted feature snapshot (autoStop=%s)', async autoStop => {
   await RunRepository.saveActiveRun({ id: 'background', startedAt: new Date(0).toISOString(), points: [], createdAt: '', updatedAt: '', distanceMeters: 0,

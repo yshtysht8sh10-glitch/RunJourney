@@ -131,7 +131,7 @@ export const RunRepository = {
   },
 
   /** Test PoC entry point: RAM observations, shared detector, throttled GPS/storage. */
-  appendActiveObservations(raws: RawLocationObservation[], appState = 'unknown'): Promise<ActiveRun | null> {
+  appendActiveObservations(raws: RawLocationObservation[], appState = 'unknown', onObserved?: (run: ActiveRun) => void): Promise<ActiveRun | null> {
     return serialized(async () => {
       if (pendingFinish) return pendingFinish;
       if (!observationSession) {
@@ -161,6 +161,9 @@ export const RunRepository = {
         observationSession.needsCheckpoint = true;
       }
       observationSession.active = active;
+      // Optional audio feedback sees RAM state before the checkpoint; failures
+      // cannot cancel or delay durable GPS storage or change detector results.
+      try { onObserved?.(active); } catch (error) { console.warn('Observation feedback failed', error); }
       if (observationSession.needsCheckpoint) {
         await (await database()).saveDraft(active);
         observationSession.needsCheckpoint = false;
