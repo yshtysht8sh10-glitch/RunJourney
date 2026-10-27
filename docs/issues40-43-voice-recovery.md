@@ -1,6 +1,6 @@
 # Issues #40–#43 音声案内
 
-実装・自動テスト・ローカルTest APK上書き更新まで完了。更新後の全データ照合は端末ロック解除待ち、EASクラウドAPKはキュー待ち。両項目を完了扱いにはしていない。
+実装・自動テスト・ローカルTest APK上書き更新・更新前後の全データ照合まで完了。実走での音声受入は未完了。EASクラウドAPKについては後述の最終確認時点の状態を参照。
 
 ## ベースと範囲
 
@@ -39,7 +39,30 @@ Jest、Android JVM/Robolectric実serviceキュー試験、lint、TypeScriptを�
 - APK: `D:/working/RunJourney-preservation/voice-40-43-20261027/runjourney-test-local-c685525.apk`。112,505,467bytes、SHA256 `93d38057b19f954d4fc2159064100811e876caa934724f781b255774fa36b288`。
 - 署名SHA256: `fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c`。更新前Testの実APKから取得した値と一致。
 - 2026-10-27 01:27 JST、adb install -r成功。versionCode18→19。初回インストール日時2026-09-30 23:40:36とdataDirを保持。アンインストール・アプリデータ消去・ダウングレードは実施していない。Production/Paceには更新操作をしていない。
-- 更新後バックアップの全43件/GPS/設定/保護IDの比較は、端末の自動ロックにより未実施。初回インストール日・dataDir維持だけで「全データ一致」とは判定しない。ロック解除後、標準Backupを再Exportして端末/PC SHA・内部SHA・隔離SQLite復元と更新前snapshotの全フィールドを比較する。
+- 2026-10-27 12:33 JST、更新後の標準Backup取得と全データ照合を完了。下記の全snapshot比較で一致を確認。
 - EAS cloudSyncTest: https://expo.dev/accounts/yshtysht8sh10/projects/RunJourney/builds/e18118a2-c9d4-4c82-9e11-c09d6989ed01 。実装c685525、最終確認時IN_QUEUE。クラウドAPK生成・ダウンロード・署名検証は未完了。端末に導入したものは上記ローカルAPK。
 
 再導入する場合も、更新前Backupの検証後、同じpackage/署名・versionCode19以上を確認して `adb install -r <APK>` のみを使用する。既に上記APKの上書き更新は成功している。実走の受入項目は前節に記載。
+
+
+## 更新後の実データ照合完了（2026-10-27 12:33 JST）
+
+Test画面でv0.1.0 (19) / Git c685525+cloud-sync-v19、Android package情報でもversionCode19を確認した。端末の標準Backup Exportで実データを取得し、更新前Backupとアプリと同じdecodeBackup/canonicalを用いて比較した。
+
+| 対象 | 更新前 | 更新後 | 結果 |
+| --- | ---: | ---: | --- |
+| 全履歴（ごみ箱含む） | 43 | 43 | 全レコードの全フィールド一致 |
+| Raw GPS点 | 14,851 | 14,851 | 全点・全値一致 |
+| 停止・再開イベント | 275 | 275 | 全イベント・全値一致 |
+| ごみ箱の履歴 | 19 | 19 | 状態・日時も一致 |
+| 設定キー | 6 | 6 | 全キー・全値一致 |
+| 保護ID | 24 | 24 | 完全一致 |
+| draft | なし | なし | 一致 |
+
+欠損0件・追加0件・変更レコード0件。snapshot全体のcanonical SHA256は前後とも `0e68d2ab12ae818e98abcca4235d9940082e98aeefa7ef960bda18701af14ad4`。バックアップのexportedAtが変わるためファイルSHAは異なるが、実データsnapshotには差分がない。
+
+更新後Backup: 9,458,282 bytes、端末/PC SHA256一致 `a9d1bfbc1c5ed76d452b267ae7406a376638403ce23e4b4f012ff8a32c8f77be`。更新前後とも内部SHA検証成功。更新後BackupをPCの新しい隔離SQLiteへ復元し、全snapshot一致・integrity_check=ok・foreign_key_check違反0を確認した。元の更新前BackupのSHAも再確認し不変。
+
+私有保全先の `backup-after-20261027-1232.json`、`restore-after-20261027-1232.sqlite`、`verification-after-20261027-1232.json`、`validation-after-20261027-1232.json` に証跡を保存。位置情報・個別の設定値はGitHubへアップロードしない。今回の端末操作はTestの実装表示確認と標準Backup Exportのみ。データ消去・アンインストール・再インストール・Importは実施せず、Production/Paceも操作していない。
+
+実走での音声確認は未完了のままで、Issue #40〜#43がすべてOPENであることを確認した。この照合はデータ保全の検証であり、音声の実走受入とは区別する。
