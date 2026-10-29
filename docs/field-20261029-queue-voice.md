@@ -82,3 +82,23 @@ JS449tests/52suites、型チェック、Expo lint（警告なし）成功。nati
 5. 比較対象はGPS配送・キューp50/p95/max、候補/確定/通知時刻、TTL失効と非生成理由、音量/route/画面OFF/RUN終了summary。新ログ欠損はゼロ扱いしない。
 
 全IssueはOPEN維持。実装完了と実走受入完了を分ける。実走でp95/最大キューが悪化していないこと、誤停止・距離/時間・保存・音声の退行なし、騒音連動の聴取/電池影響を確認するまでCloseしない。
+
+## 実機・ビルド検証（2026-10-29 JST）
+
+最終実装SHA `c2f01b7`。実装d3b2cf7に、保存中renderをまたぐ移動許可の保持、既存ONユーザーのnative診断設定引継ぎ、終了時routeの解放前記録を追加した。PR [#50](https://github.com/yshtysht8sh10-glitch/RunJourney/pull/50)。追加guard回帰1件も成功し、JS検証は合計450件（全体449件＋追加1件）、native32件、型・Lint成功。
+
+最終Test APKは`app.runjourney.mobile.test` / versionCode21 / minSdk26 / targetSdk36、112,544,887bytes。SHA256 `12df48c6df2e508ea5153800b58bfe31b62516a98d89a3e54a69ee68d58fa0c8`。署名SHA256 `fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c`は既存Testと一致。私有保全先`runjourney-test-v21-c2f01b7.apk`。ローカル最終buildはnativeテストを含め31秒成功。端末へ`adb install -r`で20→21、同じ21内の検証修正も上書きし、画面`c2f01b7+cloud-sync-v21`を確認。初回インストール日時2026-09-30 23:40:36とdataDirを維持。中間APKは最終成果物と区別する。
+
+クラウドEASも最終SHAを送信: [build 5dd7d607](https://expo.dev/accounts/yshtysht8sh10/projects/RunJourney/builds/5dd7d607-9f86-4dcb-ab48-04f62b18e4b5)。旧候補の待機ビルドは取消済み。確認時IN_PROGRESS。導入済みAPKはローカルビルド。EAS表示の基本package/versionではなく、導入する実APKのmanifestと署名で判定する。
+
+実機でタブ切替とAndroid戻るの未保存警告、編集継続、破棄、保存後に移動、開始前の保存値反映を確認。距離15→16kmの試験後、15kmへ保存し直した。その他の設定を変更しない。現在の更新前保存設定は15km・5:20/km・許容±5秒・Pace音声ON/60秒・騒音連動ONであり、そのまま保持する。10月29日の実走時OFFという証拠とは時点が異なる。
+
+最終候補で20秒プレビューをホームへ移して背景状態で継続し、内蔵マイクtype15、TTS合成、Bluetooth A2DP(type8)再生STARTED/DONE、gain0.65適用、media音量14/最大目盛30、configured=true、マイク許可、98サンプルのdBFS min/max/mean、約20秒後STOPPEDを確認。測定後サービス停止。生音声保存なし。画面は点灯状態でscreenOffSamples=0なので、画面OFF継続は未検証。騒音変化に対する聴取・走行中の電池・新しいRUN終了summaryの実走確認も次回に残す。今回端末でSTART/履歴作成は行わない。
+
+## 更新後の全件照合
+
+更新後標準BackupをdecodeBackup/canonicalで比較し、45履歴の全フィールド、GPS16,512点の全値、313イベント、ごみ箱19件、保護ID24件、設定7件の全キー/値、draftなしを含む**snapshot全体が完全一致**した。欠損0・意図しない変更0・履歴追加0。試験で一時変更した距離も元の15kmへ復元済み。騒音連動ONを含め、更新前の設定を全て保持した。
+
+更新後Backupは11,058,962bytes、端末/PC SHA256一致 `174e81b1846c8fc494ec31fd7bef47438c1db8d7dc407057211f7190f0a77a4b`。内部SHA検証、PCの新しい隔離SQLiteへの復元全snapshot一致、integrity_check=ok、foreign_key_check違反0。更新前SHA不変も再確認。端末Restore/Import/消去/アンインストールなし、Production/Pace操作なし。私有`backup-after.json`・`restore-after.sqlite`・`verification-after.json`・`voice-after-device.json`に証跡を保持した。
+
+次RUNでは現在の保存済み15km/5:20kmペース/許容±5秒/Pace音声60秒以上間隔と、ユーザーが有効化済みの騒音連動ONを開始画面で確認して使用できる。次RUNでSTOP_PIPELINEのキュー分布とTTL・PACE_EVALUATION・VOICE_GENERATED、NOISE_CONFIGURATION/NOISE_APP_STATE/NOISE_RUN_SUMMARY・各音声audio欄を確認する。実装済みの診断項目でも、実走における新RUN終了summary/画面OFFの値は今回まだ取得していない。
