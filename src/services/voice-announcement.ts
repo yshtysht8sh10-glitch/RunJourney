@@ -174,6 +174,7 @@ async function updateGuidance(run: ActiveRun, stateOnly: boolean) {
     if (sentNotices.has(`${run.id}:${id}`)) return;
     sentNotices.add(`${run.id}:${id}`);
     if (sentNotices.size > 2048) sentNotices.delete(sentNotices.values().next().value!);
+    diagnosticLog('VOICE_GENERATED', run.id + ':' + id, type, { runId: run.id, generatedAt: now, sourceAt: at, expiresAt: at + ttl, minimumPaceIntervalSec: run.paceWorkout?.voiceIntervalSec ?? null });
     notices.push({ id: `${run.id}:${id}`, type, message, generatedAt: now, queuedAt: now, expiresAt: at + ttl, priority, data: { ...snapshot, ...data } });
   };
   const running = stateOf(run) === 'RUNNING' && !run.endedAt;

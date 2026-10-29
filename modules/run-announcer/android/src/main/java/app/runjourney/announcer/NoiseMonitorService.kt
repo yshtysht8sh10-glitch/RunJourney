@@ -10,6 +10,7 @@ import android.os.*
 import org.json.JSONObject
 
 internal object NoiseState {
+  @Volatile var measurementRunId = ""
   @Volatile var running = false
   @Volatile var gain = 1f
   @Volatile var dbfs = -90.0
@@ -20,12 +21,31 @@ internal object NoiseState {
   @Volatile var externalOutput = false
   @Volatile var inputType = 0
   @Volatile var outputType = 0
+  @Volatile var samples = 0L
+  @Volatile var sumDbfs = 0.0
+  @Volatile var minDbfs = 0.0
+  @Volatile var maxDbfs = -90.0
+  @Volatile var screenOffSamples = 0L
+  @Volatile var startedAt = 0L
+  fun snapshot(context: Context): JSONObject {
+    val manager = context.getSystemService(AudioManager::class.java)
+    return JSONObject().put("measurementRunId", measurementRunId).put("running", running).put("routeKnown", outputType != 0).put("status", status).put("gain", gain)
+      .put("configured", context.getSharedPreferences(RunAnnouncerService.PREFS, 0).getBoolean("noiseConfigured", false))
+      .put("microphoneGranted", context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
+      .put("dbfs", dbfs).put("baselineDbfs", baseline).put("inputType", inputType).put("outputType", outputType)
+      .put("screenInteractive", context.getSystemService(PowerManager::class.java).isInteractive)
+      .put("mediaVolume", manager.getStreamVolume(AudioManager.STREAM_MUSIC)).put("mediaVolumeMax", manager.getStreamMaxVolume(AudioManager.STREAM_MUSIC))
+      .put("samples", samples).put("meanDbfs", if(samples > 0) sumDbfs / samples else JSONObject.NULL)
+      .put("minDbfs", if(samples > 0) minDbfs else JSONObject.NULL).put("maxDbfs", if(samples > 0) maxDbfs else JSONObject.NULL)
+      .put("screenOffSamples", screenOffSamples).put("startedAt", startedAt).put("updatedAt", updatedAt)
+      .put("rawAudioStored", false)
+  }
   fun available() = running && System.currentTimeMillis() - updatedAt in 0..2000
   fun audit(context: Context, status: String, runId: String = "") {
     VoiceLogStorage.append(context, JSONObject().put("type", "NOISE_LEVEL").put("status", status)
       .put("loggedAt", System.currentTimeMillis()).put("data", JSONObject().put("runId", runId)
         .put("dbfs", dbfs).put("baselineDbfs", baseline).put("gain", gain).put("inputType", inputType).put("outputType", outputType)
-        .put("speakerFeedbackHold", playback && !externalOutput).put("rawAudioStored", false)).toString(), System.currentTimeMillis())
+        .put("summary", snapshot(context)).put("speakerFeedbackHold", playback && !externalOutput).put("rawAudioStored", false)).toString(), System.currentTimeMillis())
   }
 }
 
@@ -55,6 +75,8 @@ class NoiseMonitorService : Service() {
       startForeground(609, Notification.Builder(this, "runjourney-noise").setSmallIcon(applicationInfo.icon)
         .setContentTitle("RunJourney 騒音レベル測定中").setContentText("音声は保存しません。音量は端末の設定が上限です。")
         .addAction(Notification.Action.Builder(null, "測定を停止", stop).build()).setOngoing(true).build())
+      NoiseState.measurementRunId = runId
+      NoiseState.samples = 0; NoiseState.sumDbfs = 0.0; NoiseState.minDbfs = 0.0; NoiseState.maxDbfs = -90.0; NoiseState.screenOffSamples = 0; NoiseState.startedAt = System.currentTimeMillis()
       capture = true
       worker = Thread({ measure() }, "RunJourneyNoise").also { it.start() }
       handler.postDelayed(expiry, (intent?.getLongExtra("leaseMs", 21600000) ?: 21600000).coerceIn(10000, 21600000))
@@ -87,6 +109,11 @@ class NoiseMonitorService : Service() {
         val level = NoiseGain.dbfs(pcm, count); pcm.fill(0)
         NoiseState.inputType = record.routedDevice?.type ?: 0
         val hold = NoiseState.playback && !NoiseState.externalOutput
+        if (!hold) {
+          NoiseState.samples++; NoiseState.sumDbfs += level
+          NoiseState.minDbfs = minOf(NoiseState.minDbfs, level); NoiseState.maxDbfs = maxOf(NoiseState.maxDbfs, level)
+          if (!getSystemService(PowerManager::class.java).isInteractive) NoiseState.screenOffSamples++
+        }
         NoiseState.gain = policy.update(level, count / 16000.0, hold)
         NoiseState.dbfs = if (hold) NoiseState.dbfs else level
         NoiseState.baseline = policy.baselineDb; NoiseState.updatedAt = System.currentTimeMillis()
@@ -97,6 +124,7 @@ class NoiseMonitorService : Service() {
       if (capture) { NoiseState.status = "MIC_UNAVAILABLE"; NoiseState.audit(this, NoiseState.status, runId) }
     } finally {
       pcm.fill(0); NoiseState.running = false; NoiseState.gain = 1f
+      if (NoiseState.status !in listOf("MIC_UNAVAILABLE", "START_RESTRICTED", "PERMISSION_DENIED")) NoiseState.status = "STOPPED"
       try { record?.stop() } catch (_: Exception) { }
       record?.release(); recorder = null
       handler.post { stopSelf() }

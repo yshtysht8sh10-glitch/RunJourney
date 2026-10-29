@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { usePaceLeaveGuard } from '@/hooks/use-pace-leave-guard';
 import { Alert, Platform, Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { DEFAULT_PACE_SETTINGS, formatWorkoutPace, targetPaceSeconds, targetTimeSeconds, validPaceSettings } from '../domain/pace-workout';
 import { PaceSettingsRepository } from '../repositories/pace-settings';
@@ -14,6 +15,7 @@ function clock(seconds: number) {
   return `${Math.floor(total / 3600)}:${String(Math.floor(total / 60) % 60).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
 }
 export default function PaceWorkoutSettings() {
+  const [persisted, setPersisted] = useState(DEFAULT_PACE_SETTINGS);
   const [settings, setSettings] = useState(DEFAULT_PACE_SETTINGS);
   const [distance, setDistance] = useState('5');
   const [pace, setPace] = useState('6:15');
@@ -29,7 +31,7 @@ export default function PaceWorkoutSettings() {
     let mounted = true;
     PaceSettingsRepository.get().then(s => {
       if (!mounted) return;
-      setSettings(s); setDistance(String(s.distanceKm)); setPace(formatWorkoutPace(s.paceSecPerKm));
+      setPersisted(s); setSettings(s); setDistance(String(s.distanceKm)); setPace(formatWorkoutPace(s.paceSecPerKm));
       setCanonicalPace(s.paceSecPerKm);
       setDuration(clock(targetTimeSeconds(s.distanceKm, s.paceSecPerKm)));
       setTolerance(String(s.toleranceSecPerKm)); setFrequency(String(s.voiceIntervalSec)); setLoaded(true);
@@ -47,15 +49,22 @@ export default function PaceWorkoutSettings() {
     if (basis === 'pace' && Number.isFinite(nextKm * paceSeconds)) setDuration(clock(nextKm * paceSeconds));
     if (basis === 'time' && nextKm > 0) setPace(formatWorkoutPace(parseWorkoutClock(duration, true) / nextKm));
   };
+  const dirty = loaded && JSON.stringify(draft) !== JSON.stringify(persisted);
   const save = async () => {
     setBusy(true);
     try {
       // OFF remains available even while draft numeric fields contain an unfinished edit.
       const next = settings.enabled ? draft : { ...settings, ...(valid ? draft : {}), enabled: false };
-      await PaceSettingsRepository.save(next); setSettings(next); setSaved(true);
-    } catch (error) { Alert.alert('ペース走を保存できませんでした', String(error)); }
+      await PaceSettingsRepository.save(next); setPersisted(next); setSettings(next); setDistance(String(next.distanceKm)); setPace(formatWorkoutPace(next.paceSecPerKm)); setCanonicalPace(next.paceSecPerKm); setDuration(clock(targetTimeSeconds(next.distanceKm, next.paceSecPerKm))); setTolerance(String(next.toleranceSecPerKm)); setFrequency(String(next.voiceIntervalSec)); setBasis('pace'); setSaved(true);
+    } catch (error) { Alert.alert('ペース走を保存できませんでした', String(error)); throw error; }
     finally { setBusy(false); }
   };
+  const discard = () => {
+    const s = persisted; setSettings(s); setDistance(String(s.distanceKm)); setPace(formatWorkoutPace(s.paceSecPerKm));
+    setCanonicalPace(s.paceSecPerKm); setDuration(clock(targetTimeSeconds(s.distanceKm, s.paceSecPerKm)));
+    setTolerance(String(s.toleranceSecPerKm)); setFrequency(String(s.voiceIntervalSec)); setBasis('pace'); setSaved(false);
+  };
+  usePaceLeaveGuard(dirty, save, discard);
   const input = (label: string, value: string, onChangeText: (s: string) => void) => <View style={styles.field}>
     <Text style={styles.text}>{label}</Text><TextInput accessibilityLabel={label} value={value}
       onChangeText={text => { setSaved(false); onChangeText(text); }} editable={loaded && !busy}
@@ -63,6 +72,7 @@ export default function PaceWorkoutSettings() {
   </View>;
   return <View style={styles.panel}>
     <Text style={styles.title}>ペース走（次のSTARTから）</Text>
+    <Text accessibilityLiveRegion="polite" style={dirty ? styles.error : styles.note}>{dirty ? "編集中・未保存" : "保存済み"} · 適用予定: {persisted.enabled ? `${persisted.distanceKm}km / ${formatWorkoutPace(persisted.paceSecPerKm)} /km / 音声${persisted.voice ? persisted.voiceIntervalSec + "秒以上間隔" : "OFF"}` : "ペース走OFF"}</Text>
     <View style={styles.row}><Text style={styles.text}>一定ペース走</Text><Switch accessibilityLabel="一定ペース走" value={settings.enabled} disabled={!loaded || busy}
       onValueChange={enabled => { setSettings(s => ({ ...s, enabled })); setSaved(false); }} /></View>
     {settings.enabled && <>
@@ -86,7 +96,7 @@ export default function PaceWorkoutSettings() {
       <Text style={styles.note}>{Platform.OS === 'android' ? '音声は対応するAndroid開発ビルドで利用できます。通常の5分通知とは個別に設定します。' : 'この端末では画面表示で案内します。音声はAndroidに対応しています。'}目標に到達しても自動STOPしません。</Text>
       {!valid && <Text accessibilityRole="alert" style={styles.error}>距離0.1〜200km、ペース2〜30分/km、許容幅0〜120秒、通知60〜600秒、目標時間48時間以内で入力してください。</Text>}
     </>}
-    <Pressable accessibilityRole="button" accessibilityLabel="ペース走設定を保存" disabled={!loaded || busy || settings.enabled && !valid} onPress={save} style={styles.button}>
+    <Pressable accessibilityRole="button" accessibilityLabel="ペース走設定を保存" disabled={!loaded || busy || settings.enabled && !valid} onPress={() => { void save().catch(() => undefined); }} style={styles.button}>
       <Text style={styles.text}>{busy ? '保存中…' : 'ペース走設定を保存'}</Text>
     </Pressable>
     {saved && <Text accessibilityLiveRegion="polite" style={styles.note}>保存しました。次のSTARTから適用します。</Text>}

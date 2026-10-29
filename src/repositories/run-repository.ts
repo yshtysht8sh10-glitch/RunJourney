@@ -14,11 +14,23 @@ import { safelyAdvancePaceWorkout } from '@/domain/pace-workout';
 import { goalAchievement } from '@/domain/finish-goal';
 import { StopLatencyTracker, stopDecisionEvidence } from '@/domain/stop-latency';
 import { diagnosticLog } from '@/services/diagnostic-log';
+import { LatestCheckpoint } from './latest-checkpoint';
 
 
 let operationQueue: Promise<unknown> = Promise.resolve();
 let observationSession: { active: ActiveRun; observation: GpsObservationSession; needsCheckpoint: boolean; latency: StopLatencyTracker } | null = null;
 let pendingFinish: ActiveRun | null = null;
+const checkpoints = new LatestCheckpoint<ActiveRun>(async active => {
+  const startedAt = Date.now();
+  try {
+    await (await database()).saveDraft(active);
+    diagnosticLog('STOP_CHECKPOINT', active.id + ':checkpoint:' + startedAt, 'COMPLETED', { runId: active.id, startedAt, finishedAt: Date.now(), durationMs: Date.now() - startedAt, sampleAt: active.detector?.last?.timestamp, pointCount: active.points.length });
+  } catch (error) {
+    if (observationSession?.active.id === active.id) observationSession.needsCheckpoint = true;
+    diagnosticLog('STOP_CHECKPOINT', active.id + ':checkpoint:' + startedAt, 'FAILED', { runId: active.id, durationMs: Date.now() - startedAt });
+    throw error;
+  }
+}, error => console.warn('GPS checkpoint failed; RAM snapshot retained for retry', error));
 
 function flushObservation(active: ActiveRun, endMs: number): ActiveRun {
   const pending = observationSession?.observation.latestPoint;
@@ -125,11 +137,11 @@ export const RunRepository = {
   },
 
   saveActiveRun(run: ActiveRun): Promise<void> {
-    return serialized(async () => { await (await database()).saveDraft(run); observationSession = null; pendingFinish = null; });
+    return serialized(async () => { await checkpoints.flush(); await (await database()).saveDraft(run); observationSession = null; pendingFinish = null; });
   },
 
   clearActiveRun(): Promise<void> {
-    return serialized(() => { observationSession = null; pendingFinish = null; return database().then(db => db.clearDraft()); });
+    return serialized(async () => { await checkpoints.flush(); observationSession = null; pendingFinish = null; return database().then(db => db.clearDraft()); });
   },
 
   /** Test PoC entry point: RAM observations, shared detector, throttled GPS/storage. */
@@ -169,7 +181,12 @@ export const RunRepository = {
       active = { ...active, points: [...active.points, ...persisted], updatedAt: new Date().toISOString() };
       if (persisted.length || (active.events?.length ?? 0) !== previousEventCount) {
         active.distanceMeters = effectiveDistance(active);
+        const previousEvaluation = active.paceWorkout?.evaluatedAt;
         active = safelyAdvancePaceWorkout(active, incoming.at(-1)?.point.timestamp ?? Date.now());
+        const pace = active.paceWorkout;
+        if (pace && pace.evaluatedAt !== previousEvaluation) diagnosticLog('PACE_EVALUATION', active.id + ':pace:' + pace.evaluatedAt,
+          pace.notice ? 'CREATED' : !pace.voice ? 'VOICE_OFF' : stateOf(active) !== 'RUNNING' ? 'PAUSED' : pace.status === 'UNKNOWN' ? 'UNKNOWN_QUALITY' : 'INTERVAL_OR_STATE_CONDITION',
+          { runId: active.id, evaluatedAt: pace.evaluatedAt, voice: pace.voice, minimumIntervalSec: pace.voiceIntervalSec, status: pace.status, lastVoiceAt: pace.lastVoiceAt, noticeId: pace.notice?.key ?? null });
         observationSession.needsCheckpoint = true;
       }
       observationSession.active = active;
@@ -177,19 +194,14 @@ export const RunRepository = {
       // cannot cancel or delay durable GPS storage or change detector results.
       try { onObserved?.(active); } catch (error) { console.warn('Observation feedback failed', error); }
       if (observationSession.needsCheckpoint) {
-        const startedAt = Date.now();
-        try {
-          await (await database()).saveDraft(active);
-          diagnosticLog('STOP_CHECKPOINT', `${active.id}:checkpoint:${startedAt}`, 'COMPLETED', { runId: active.id, startedAt, finishedAt: Date.now(), durationMs: Date.now() - startedAt });
-        } catch (error) {
-          diagnosticLog('STOP_CHECKPOINT', `${active.id}:checkpoint:${startedAt}`, 'FAILED', { runId: active.id, startedAt, finishedAt: Date.now(), durationMs: Date.now() - startedAt });
-          throw error;
-        }
+        checkpoints.schedule(active);
         observationSession.needsCheckpoint = false;
       }
       return active;
     });
   },
+
+  flushCheckpoint() { return checkpoints.flush(); },
 
   getRecentObservations(windowMs = 10_000, now = Date.now()) {
     // RAM-only immutable snapshot must not wait behind SQLite checkpoints.
@@ -223,6 +235,7 @@ export const RunRepository = {
 
   transition(state: RunState, timestamp: number): Promise<ActiveRun | null> {
     return serialized(async () => {
+      await checkpoints.flush();
       if (pendingFinish) return pendingFinish;
       const stored = await (await database()).getDraft();
       if (!stored) return null;
@@ -241,6 +254,7 @@ export const RunRepository = {
   /** Serialized with GPS writes: freeze before waiting for OS tracking shutdown. */
   prepareFinish(endedAt: string, automatic = false, expectedId?: string): Promise<ActiveRun | null> {
     return serialized(async () => {
+      await checkpoints.flush();
       const stored = await (await database()).getDraft();
       if (!stored || expectedId && stored.id !== expectedId) return null;
       const draft = pendingFinish ?? observationSession?.active ?? stored;
@@ -262,6 +276,7 @@ export const RunRepository = {
 
   finishActiveRun(endedAt: string): Promise<RunRecord | null> {
     return serialized(async () => {
+      await checkpoints.flush();
       const stored = await (await database()).getDraft();
       if (!stored) return null;
 

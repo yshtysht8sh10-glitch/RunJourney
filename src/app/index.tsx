@@ -10,6 +10,7 @@ import { analyzePace } from '@/utils/pace-analysis';
 import { BuildInfo } from '@/components/build-info';
 import { RunService } from '@/services/run-service';
 import { ActiveRun } from '@/types/run';
+import { StartSettingsSummary } from '@/components/start-settings-summary';
 import { FinishGoalSettings } from '@/components/finish-goal-settings';
 
 function formatElapsed(durationMs: number): string {
@@ -130,6 +131,7 @@ export default function RunScreen() {
             <>
               <Text style={styles.readyTitle}>今日の一歩を{`\n`}記録しよう。</Text>
               <Text style={styles.description}>START後は画面をOFFにしても記録が続きます。位置情報は「常に許可」を選択してください。</Text>
+              <StartSettingsSummary />
               <FinishGoalSettings onReady={setFinishReady} />
               <Pressable accessibilityRole="button" disabled={busy || !finishReady} onPress={start} style={({ pressed }) => [styles.startButton, pressed && styles.pressed, (busy || !finishReady) && styles.disabled]}>
                 <Text style={styles.startButtonText}>{busy ? '準備中…' : 'START'}</Text>

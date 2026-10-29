@@ -49,7 +49,7 @@ module.exports = ({ config }) => {
     ],
     extra: {
       ...config.extra,
-      buildGitHash: `${getGitCommitHash()}+${process.env.RUNJOURNEY_PACE_ISOLATED === '1' ? 'pace-workout' : 'cloud-sync-v20'}`,
+      buildGitHash: `${getGitCommitHash()}+${process.env.RUNJOURNEY_PACE_ISOLATED === '1' ? 'pace-workout' : 'cloud-sync-v21'}`,
       buildId: process.env.EAS_BUILD_ID || "local",
       persistenceSchema: "sqlite-v2",
       cloudSyncProject,

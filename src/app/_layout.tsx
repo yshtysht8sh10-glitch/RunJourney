@@ -1,4 +1,5 @@
 import { Tabs } from 'expo-router';
+import { paceEditorDirty, requestPaceLeave } from '@/services/pace-edit-guard';
 import { StatusBar } from 'expo-status-bar';
 
 import '@/tasks/location-task';
@@ -8,6 +9,9 @@ export default function TabLayout() {
     <>
       <StatusBar style="light" />
       <Tabs
+        screenListeners={({ navigation, route }) => ({ tabPress: event => {
+          if (route.name !== 'settings' && paceEditorDirty()) { event.preventDefault(); requestPaceLeave(() => navigation.navigate(route.name)); }
+        } })}
         screenOptions={{
           headerShown: false,
           tabBarActiveTintColor: '#E85D2A',

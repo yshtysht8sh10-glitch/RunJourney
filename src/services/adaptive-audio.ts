@@ -1,3 +1,4 @@
+import { diagnosticLog } from './diagnostic-log';
 import { AppState, PermissionsAndroid, Platform } from 'react-native';
 import SettingsStorage from '@/repositories/storage';
 const KEY = '@runjourney/noise-volume/v1';
@@ -6,6 +7,9 @@ function native() {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   return require('../../modules/run-announcer').default as typeof import('../../modules/run-announcer').default;
 }
+let appObserver: { remove(): void } | undefined;
+let observedRunId = '';
+let observedConfigured = false;
 export const AdaptiveAudio = {
   async enabled() { return (await SettingsStorage.getItem(KEY)) === 'on'; },
   async setEnabled(value: boolean) {
@@ -24,13 +28,20 @@ export const AdaptiveAudio = {
   },
   async start(runId: string, workoutVoice = false) {
     try {
-      if (AppState.currentState !== 'active' || !await this.enabled()) return;
+      const configured = await this.enabled();
+      observedRunId = runId; observedConfigured = configured;
+      diagnosticLog('NOISE_CONFIGURATION', runId + ':noise-config:' + Date.now(), 'RUN_START_OR_RESTORE', { runId, configured, appState: AppState.currentState, native: this.diagnostics() });
+      if (AppState.currentState !== 'active' || !configured) return;
       if (!workoutVoice && await SettingsStorage.getItem('@runjourney/voice-announcement/v1') !== 'on') return;
-      return native()?.noiseControl?.('start', runId);
+      observedRunId = runId;
+      if (!appObserver) appObserver = AppState.addEventListener('change', state => diagnosticLog('NOISE_APP_STATE', observedRunId + ':app:' + Date.now(), state, { runId: observedRunId, configured: true, native: this.diagnostics() }));
+      const result = native()?.noiseControl?.('start', runId);
+      diagnosticLog('NOISE_START', runId + ':noise:' + Date.now(), result ?? 'UNSUPPORTED', { runId, configured, native: this.diagnostics() });
+      return result;
     } catch { /* Normal speech / GPS remain available. */ }
   },
-  finish() { try { native()?.noiseControl?.('finish', ''); } catch { /* bounded microphone lease */ } },
-  stop() { try { native()?.noiseControl?.('stop', ''); } catch { /* optional feature */ } },
+  finish(runId = '') { appObserver?.remove(); appObserver = undefined; diagnosticLog('NOISE_RUN_SUMMARY', runId + ':noise-end', 'RUN_END', { runId, configured: observedRunId === runId ? observedConfigured : null, native: this.diagnostics() }); try { native()?.noiseControl?.('finish', ''); } catch { /* bounded microphone lease */ } },
+  stop() { appObserver?.remove(); appObserver = undefined; try { native()?.noiseControl?.('stop', ''); } catch { /* optional feature */ } },
   async preview() {
     if (!await this.enabled()) return 'OFF';
     return native()?.noiseControl?.('preview', 'preview') ?? 'UNSUPPORTED';

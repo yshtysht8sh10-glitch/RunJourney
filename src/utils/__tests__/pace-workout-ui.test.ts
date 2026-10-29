@@ -1,6 +1,7 @@
 import { createElement } from 'react';
 import { act, create, ReactTestRenderer } from 'react-test-renderer';
-import { TextInput, Switch } from 'react-native';
+import { Alert, TextInput, Switch } from 'react-native';
+import { paceEditorDirty, requestPaceLeave } from '@/services/pace-edit-guard';
 import PaceWorkoutSettings, { parseWorkoutClock } from '@/components/pace-workout-settings';
 import { PaceWorkoutCard } from '@/components/pace-workout-card';
 import PaceWorkoutReport from '@/components/pace-workout-report';
@@ -9,6 +10,7 @@ import { DEFAULT_PACE_SETTINGS, createPaceWorkout } from '@/domain/pace-workout'
 import { sourceFromRun } from '@/domain/pages';
 import { RunRepository } from '@/repositories/run-repository';
 import { ActiveRun } from '@/types/run';
+jest.mock('expo-router', () => ({ useNavigation: () => ({ addListener: jest.fn(() => () => {}), canGoBack: () => true }), useFocusEffect: (effect: () => void) => { jest.requireActual('react').useEffect(effect, [effect]); } }));
 jest.mock('@/repositories/pace-settings', () => ({ PaceSettingsRepository: { get: jest.fn(), save: jest.fn() } }));
 jest.mock('@/repositories/run-repository', () => ({ RunRepository: { pagedSource: jest.fn() } }));
 let tree: ReactTestRenderer;
@@ -63,4 +65,20 @@ test('report displays valid-time-only ratio and unknown intervals without readin
   expect(JSON.stringify(tree.toJSON())).toContain('50.0%');
   expect(JSON.stringify(tree.toJSON())).toContain('GPS_QUALITY');
   expect(read.mock.calls.every(([kind]) => kind !== 'gps')).toBe(true);
+});
+
+test('editing and reverting a field clears dirty; failed save keeps dirty and blocks leaving', async () => {
+  await act(async () => { tree = create(createElement(PaceWorkoutSettings)); });
+  const frequency = () => tree.root.findAllByType(TextInput).find(n=>n.props.accessibilityLabel==='音声の最小間隔（秒・60〜600）')!;
+  expect(paceEditorDirty()).toBe(false);
+  await act(async()=>{frequency().props.onChangeText('60');}); expect(paceEditorDirty()).toBe(true);
+  await act(async()=>{frequency().props.onChangeText(String(settings.voiceIntervalSec));});expect(paceEditorDirty()).toBe(false);
+  await act(async()=>{frequency().props.onChangeText('60');});
+  jest.mocked(PaceSettingsRepository.save).mockRejectedValueOnce(Error('disk full'));
+  const alert=jest.spyOn(Alert,'alert').mockImplementation(()=>{}),destination=jest.fn();
+  requestPaceLeave(destination);
+  const save=alert.mock.calls.at(-1)![2]!.find(b=>b.text==='保存して移動')!;
+  await act(async()=>{save.onPress!();});
+  expect(destination).not.toHaveBeenCalled();expect(paceEditorDirty()).toBe(true);
+  alert.mockRestore();
 });
