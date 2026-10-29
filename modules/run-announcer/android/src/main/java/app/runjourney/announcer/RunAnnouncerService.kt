@@ -496,8 +496,8 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   }
 
   private fun finishUtterance(status: String) {
-    clearAdaptive()
-    currentNotice?.let { audit(it, status) }; currentNotice = null
+    currentNotice?.let { audit(it, status) }
+    clearAdaptive(); currentNotice = null
     lastSpeechAt = System.currentTimeMillis()
     preferences.edit().putString("ttsStatus", status).apply()
     debugPrefs.edit().putLong("lastSpeechAt", lastSpeechAt).putInt("lastPriority", lastPriority).apply()
