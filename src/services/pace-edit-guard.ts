@@ -8,7 +8,7 @@ export function requestPaceLeave(action: () => void): boolean {
   if (!binding?.dirty) { action(); return false; }
   if (prompting) return true;
   const current = binding; prompting = true;
-  const proceed = () => { if(binding === current) binding = undefined; prompting = false; action(); };
+  const proceed = () => { binding = undefined; prompting = false; action(); };
   Alert.alert('ペース走の変更が未保存です', '次のSTARTには保存済みの設定が使われます。', [
     { text: '編集に戻る', style: 'cancel', onPress: () => { prompting = false; } },
     { text: '破棄して移動', style: 'destructive', onPress: () => { current.discard(); proceed(); } },

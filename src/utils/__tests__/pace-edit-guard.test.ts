@@ -14,3 +14,13 @@ test('save must succeed before navigation; failure stays editable and does not m
   requestPaceLeave(action);choose('保存して移動');await Promise.resolve();await Promise.resolve();expect(action).not.toHaveBeenCalled();expect(paceEditorDirty()).toBe(true);
   fail=false;requestPaceLeave(action);choose('保存して移動');await Promise.resolve();expect(action).toHaveBeenCalledTimes(1);expect(paceEditorDirty()).toBe(false);cleanup();
 });
+
+test('save-time re-render registration cannot re-prompt the replayed navigation',async()=>{
+  let resolve!:()=>void; const saved=new Promise<void>(r=>{resolve=r;});
+  const destination=jest.fn();bindPaceEditor({dirty:true,save:()=>saved,discard:()=>{}});
+  const replay=()=>requestPaceLeave(destination);
+  requestPaceLeave(replay);choose('保存して移動');
+  bindPaceEditor({dirty:true,save:async()=>{},discard:()=>{}}); // busy render before save completes
+  resolve();await Promise.resolve();
+  expect(destination).toHaveBeenCalledTimes(1);expect(Alert.alert).toHaveBeenCalledTimes(1);
+});
