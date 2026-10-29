@@ -17,6 +17,8 @@ class RunAnnouncerModule : Module() {
     Function("noiseControl") { action: String, runId: String ->
       val context = requireNotNull(appContext.reactContext)
       val preferences = context.getSharedPreferences(RunAnnouncerService.PREFS, 0)
+      // Existing v20 users may already have the JS setting ON without this new audit preference.
+      if (action == "start" || action == "preview") preferences.edit().putBoolean("noiseConfigured", true).apply()
       if (action == "enable") {
         preferences.edit().putBoolean("noiseUserStopped", false).putBoolean("noiseConfigured", true).apply(); "READY"
       } else if (action == "stop") {
@@ -38,7 +40,7 @@ class RunAnnouncerModule : Module() {
         if (action == "preview") Handler(Looper.getMainLooper()).postDelayed({
           val speech = Intent(context, RunAnnouncerService::class.java).setAction(RunAnnouncerService.ACTION_TEST)
             .putExtra("message", "騒音に合わせた音量のテストです。周囲が騒がしくなると案内の音量を少し上げ、静かになるとゆっくり戻します。音量は端末の設定が上限です。")
-          try { context.startForegroundService(speech) } catch (_: Exception) { }
+          try { context.startForegroundService(speech) } catch (_: Exception) { NoiseState.audit(context, "PREVIEW_VOICE_START_FAILED", runId) }
         }, 2500)
         "STARTING"
       } catch (_: Exception) { NoiseState.audit(context, "START_RESTRICTED", runId); "START_RESTRICTED" }
