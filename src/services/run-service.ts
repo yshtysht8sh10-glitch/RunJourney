@@ -192,7 +192,7 @@ export const RunService = {
         state: frozen.events?.at(-1)?.state ?? 'RUNNING', endedAt: frozen.endedAt, distanceMeters: frozen.distanceMeters });
       FinishClock.stop();
       VoiceAnnouncement.stop(frozen.id);
-      AdaptiveAudio.finish();
+      AdaptiveAudio.finish(frozen.id);
       if (await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME)) {
         await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
       }

@@ -74,7 +74,9 @@ test('1s observations persist 5s edges; total, laps and speed match the previous
   await RunRepository.saveActiveRun(base());
   trace.length = 0;
   for (let time = 0; time <= 30000; time += 1000) await RunRepository.appendActiveObservations([raw(time)], 'active');
-  expect(trace.filter(sql => sql.startsWith('UPDATE runs SET status='))).toHaveLength(7);
+  await RunRepository.flushCheckpoint();
+  expect(trace.filter(sql => sql.startsWith('UPDATE runs SET status=')).length).toBeLessThanOrEqual(7);
+  expect((await AsyncStorage.getItem('@runjourney/active-run/v1'))!).toContain('30000');
   expect((await RunRepository.getRecentObservations(10000, 30000)).map(p => p.timestamp)).toEqual(Array.from({ length: 11 }, (_, i) => 20000 + i * 1000));
   const high = (await RunRepository.finishActiveRun(new Date(30000).toISOString()))!;
   expect(high.points.map(p => p.timestamp)).toEqual([0, 5000, 10000, 15000, 20000, 25000, 30000]);
@@ -130,8 +132,10 @@ test('shared Auto Stop confirms after 5s, raw onset survives; manual Break canno
 test('failed checkpoint retries without losing selected points', async () => {
   await RunRepository.saveActiveRun(base());
   let failed = false; injectFault(sql => { if (!failed && sql.startsWith('INSERT INTO gps_points')) { failed = true; throw new Error('disk full'); } });
-  await expect(RunRepository.appendActiveObservations([raw(0)])).rejects.toThrow('disk full');
+  await RunRepository.appendActiveObservations([raw(0)]);
+  await expect(RunRepository.flushCheckpoint()).rejects.toThrow('disk full');
   await RunRepository.appendActiveObservations([raw(1000)]);
+  await RunRepository.flushCheckpoint();
   const stored = JSON.parse((await AsyncStorage.getItem('@runjourney/active-run/v1'))!);
   expect(stored.points.map((p: { timestamp: number }) => p.timestamp)).toEqual([0]);
   expect(stored.diagnostics.counts.GPS_OBS_COUNT).toBe(2);

@@ -9,6 +9,7 @@ import { VoiceAnnouncement } from '@/services/voice-announcement';
 import { DEFAULT_VOICE_ITEMS, VoiceItems } from '@/utils/voice-format';
 import { isStandaloneTest } from '@/utils/build';
 import PaceWorkoutSettings from '@/components/pace-workout-settings';
+import { requestPaceLeave } from '@/services/pace-edit-guard';
 import { NoiseVolumeSettings } from '@/components/noise-volume-settings';
 
 export default function SettingsScreen() {
@@ -55,10 +56,10 @@ export default function SettingsScreen() {
   };
 
   return <View style={styles.background}><SafeAreaView style={styles.container}><ScrollView>
-    <Pressable onPress={() => router.push('./cloud-sync')} accessibilityRole="button"><Text style={{ color: '#A4D8B5', paddingVertical: 16 }}>Cloud Sync（本番Firebase・手動同期）</Text></Pressable>
+    <Pressable onPress={() => requestPaceLeave(() => router.push('./cloud-sync'))} accessibilityRole="button"><Text style={{ color: '#A4D8B5', paddingVertical: 16 }}>Cloud Sync（本番Firebase・手動同期）</Text></Pressable>
     <Text style={styles.title}>設定</Text>
     <PaceWorkoutSettings />
-    <Pressable accessibilityRole="button" onPress={() => router.push('./data-transfer')} style={styles.testButton}><Text style={styles.label}>データ / Export・Import</Text></Pressable>
+    <Pressable accessibilityRole="button" onPress={() => requestPaceLeave(() => router.push('./data-transfer'))} style={styles.testButton}><Text style={styles.label}>データ / Export・Import</Text></Pressable>
     <Text style={styles.section}>走行中の機能（次のSTARTから適用）</Text>
     <View style={styles.row}><View style={styles.copy}><Text style={styles.label}>自動停止（Auto Stop）</Text><Text style={styles.detail}>信号待ちなどで停止すると、走行時計を自動的に停止します。走り出すと自動的に再開します。</Text></View><Switch value={features.autoStop} disabled={busy} onValueChange={value => changeFeature('autoStop', value)} /></View>
     <View style={styles.row}><View style={styles.copy}><Text style={styles.label}>休憩（Break）</Text><Text style={styles.detail}>走行中に休憩ボタンを表示します。自分の意思で休憩を開始・終了できます。</Text></View><Switch value={features.break} disabled={busy} onValueChange={value => changeFeature('break', value)} /></View>
@@ -77,7 +78,7 @@ export default function SettingsScreen() {
     <Pressable accessibilityRole="button" onPress={() => VoiceAnnouncement.test().catch((error) => Alert.alert('音声テストに失敗しました', String(error)))} style={styles.testButton}>
       <Text style={styles.label}>音声通知をテスト</Text>
     </Pressable>
-    {isStandaloneTest() && <Pressable accessibilityRole="button" onPress={() => router.push('/diagnostics')} style={styles.testButton}><Text style={styles.label}>Auto Stop Diagnostics（Test）</Text></Pressable>}
+    {isStandaloneTest() && <Pressable accessibilityRole="button" onPress={() => requestPaceLeave(() => router.push('/diagnostics'))} style={styles.testButton}><Text style={styles.label}>Auto Stop Diagnostics（Test）</Text></Pressable>}
   </ScrollView></SafeAreaView></View>;
 }
 

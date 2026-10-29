@@ -18,9 +18,9 @@ class RunAnnouncerModule : Module() {
       val context = requireNotNull(appContext.reactContext)
       val preferences = context.getSharedPreferences(RunAnnouncerService.PREFS, 0)
       if (action == "enable") {
-        preferences.edit().putBoolean("noiseUserStopped", false).apply(); "READY"
+        preferences.edit().putBoolean("noiseUserStopped", false).putBoolean("noiseConfigured", true).apply(); "READY"
       } else if (action == "stop") {
-        preferences.edit().putBoolean("noiseUserStopped", true).apply()
+        preferences.edit().putBoolean("noiseUserStopped", true).putBoolean("noiseConfigured", false).apply()
         context.stopService(Intent(context, NoiseMonitorService::class.java)); "OFF"
       } else if (action == "finish") {
         // Only shorten an already-running lease; never start a microphone from background.
@@ -46,7 +46,8 @@ class RunAnnouncerModule : Module() {
     Function("noiseDiagnostics") {
       mapOf("status" to NoiseState.status, "running" to NoiseState.running, "gain" to NoiseState.gain,
         "dbfs" to NoiseState.dbfs, "baselineDbfs" to NoiseState.baseline, "inputType" to NoiseState.inputType,
-        "outputType" to NoiseState.outputType, "updatedAt" to NoiseState.updatedAt)
+        "outputType" to NoiseState.outputType, "updatedAt" to NoiseState.updatedAt,
+        "summary" to NoiseState.snapshot(requireNotNull(appContext.reactContext)).toString())
     }
     Function("appendDiagnostic") { payload: String ->
       VoiceLogStorage.append(requireNotNull(appContext.reactContext), payload, System.currentTimeMillis())

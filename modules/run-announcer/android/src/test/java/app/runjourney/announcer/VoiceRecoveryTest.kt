@@ -164,4 +164,24 @@ class VoiceRecoveryTest {
     assertEquals("AUTO_STOP_CONFIRMED", (get("currentNotice") as JSONObject).optString("type"))
     assertTrue(get("chimeActive") as Boolean)
   }
+
+  @Test fun hundredMinuteInformationQueueKeepsAcceptingAndCompletingEvents() {
+    var count = 0
+    for (minute in 1..100) {
+      org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofMinutes(1))
+      set("ready", false)
+      val notices = mutableListOf(notice("PACE_WARNING", "long-pace-$minute"))
+      if (minute % 5 == 0) notices.add(notice("FIVE_MINUTES", "long-five-$minute"))
+      if (minute % 6 == 0) notices.add(notice("KILOMETER_LAP", "long-km-$minute"))
+      batch("RUNNING", *notices.toTypedArray())
+      set("ready", true)
+      service.javaClass.getDeclaredMethod("speakNext").apply { isAccessible = true }.invoke(service)
+      while (get("currentNotice") != null) {
+        count++
+        service.javaClass.getDeclaredMethod("finishUtterance", String::class.java).apply { isAccessible = true }.invoke(service, "DONE")
+      }
+      assertTrue(queue().isEmpty())
+    }
+    assertEquals(136, count)
+  }
 }

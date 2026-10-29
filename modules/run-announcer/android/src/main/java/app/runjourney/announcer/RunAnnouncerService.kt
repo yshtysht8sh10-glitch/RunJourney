@@ -91,6 +91,10 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       val now = System.currentTimeMillis()
       val record = JSONObject(n.toString()).put("status", status).put("loggedAt", now)
       if (n.has("nativeQueuedAt")) record.put("queueWaitMs", (n.optLong("startedAt", now) - n.optLong("nativeQueuedAt")).coerceAtLeast(0))
+      val adaptive = n.optString("playbackMode") == "adaptive-local-synthesis"
+      record.put("audio", NoiseState.snapshot(this).put("adaptiveApplied", adaptive)
+        .put("appliedGain", if(adaptive) adaptiveGain else 1f)
+        .put("fallbackReason", if(adaptive) "" else if(!NoiseState.available()) "MICROPHONE_INACTIVE_OR_STALE" else "IMMEDIATE_STATE_NOTICE_OR_DIRECT_FALLBACK"))
       if (!record.has("startedAt")) record.put("startedAt", JSONObject.NULL)
       VoiceLogStorage.append(applicationContext, record.toString(), now)
     } catch (e: Exception) { Log.w(TAG, "Voice audit unavailable", e) }
