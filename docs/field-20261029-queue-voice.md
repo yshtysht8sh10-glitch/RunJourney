@@ -102,3 +102,5 @@ JS449tests/52suites、型チェック、Expo lint（警告なし）成功。nati
 更新後Backupは11,058,962bytes、端末/PC SHA256一致 `174e81b1846c8fc494ec31fd7bef47438c1db8d7dc407057211f7190f0a77a4b`。内部SHA検証、PCの新しい隔離SQLiteへの復元全snapshot一致、integrity_check=ok、foreign_key_check違反0。更新前SHA不変も再確認。端末Restore/Import/消去/アンインストールなし、Production/Pace操作なし。私有`backup-after.json`・`restore-after.sqlite`・`verification-after.json`・`voice-after-device.json`に証跡を保持した。
 
 次RUNでは現在の保存済み15km/5:20kmペース/許容±5秒/Pace音声60秒以上間隔と、ユーザーが有効化済みの騒音連動ONを開始画面で確認して使用できる。次RUNでSTOP_PIPELINEのキュー分布とTTL・PACE_EVALUATION・VOICE_GENERATED、NOISE_CONFIGURATION/NOISE_APP_STATE/NOISE_RUN_SUMMARY・各音声audio欄を確認する。実装済みの診断項目でも、実走における新RUN終了summary/画面OFFの値は今回まだ取得していない。
+
+最終再実行でもJS全450tests/52suitesが成功（約40秒）。最終EAS状態はIN_PROGRESSで、クラウドAPKの完成/署名検証は未完了。次RUNには署名検証・導入済みのローカル最終APKを使用できる。
