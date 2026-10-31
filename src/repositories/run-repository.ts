@@ -156,7 +156,7 @@ export const RunRepository = {
         next.paceWorkout = { ...active.paceWorkout, workout: { ...active.paceWorkout.workout, segments: [segment] }, notice: undefined,
           reached: segmentReached(segment, active.distanceMeters, timeModel(active, at).activeRunningTime / 1000) };
       }
-      next.goalChanges = [...(active.goalChanges ?? []), { at, before: active.finishGoal ?? { kind: 'manual' }, after: { ...goal }, autoBefore: active.finishAutoEnabled !== false && active.finishGoal?.kind !== 'manual', autoAfter: autoEnabled }];
+      next.goalChanges = [...(active.goalChanges ?? []), { at, before: active.finishGoal ?? { kind: 'manual' }, after: { ...goal }, autoBefore: active.finishAutoEnabled !== false && active.finishGoal?.kind !== 'manual', autoAfter: autoEnabled, paceTargetBefore: active.paceWorkout?.workout.segments[0]?.target, paceTargetAfter: next.paceWorkout?.workout.segments[0]?.target }];
       await db.saveDraft(next);
       if (observationSession) observationSession.active = next;
       diagnosticLog('RUN_GOAL_CHANGED', runId + ':goal:' + next.goalChanges.length, 'SAVED_AND_APPLIED', { runId, ...next.goalChanges.at(-1), distanceMeters: next.distanceMeters });

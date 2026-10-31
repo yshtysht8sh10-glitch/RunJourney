@@ -17,6 +17,7 @@ test('7→12km preserves GPS, elapsed, laps and events; only new goal ends run',
  const changed=await RunRepository.updateFinishGoal(r.id,{kind:'distance',meters:12000},true);
  expect(changed.paceWorkout?.workout.segments[0].target).toEqual({type:'distance',meters:12000});
  expect(changed.paceWorkout?.workout.segments[0].targetPaceSecPerKm).toBe(r.paceWorkout?.workout.segments[0].targetPaceSecPerKm);
+ expect(changed.goalChanges?.[0]).toMatchObject({paceTargetBefore:{type:'distance',meters:7000},paceTargetAfter:{type:'distance',meters:12000}});
  expect(changed.points).toEqual(first.points);expect(changed.events).toEqual(first.events);
  expect(timeModel(changed,3000000)).toEqual(timeModel(first,3000000));expect(kilometerLaps(changed,3000000)).toEqual(beforeLaps);
  expect(goalAchievement({...changed,points:r.points.slice(0,702)},3505000)).toBeNull();
