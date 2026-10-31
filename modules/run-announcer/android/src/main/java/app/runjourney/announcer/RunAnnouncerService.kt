@@ -59,6 +59,9 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   private var adaptivePlayer: MediaPlayer? = null
   private var speechFile: File? = null
   private var adaptiveGain = 1f
+  private var lastAudioAuditAt = 0L
+  private var lastAudioRoute = -1
+  private var lastAudioGain = -1f
   private val volumeTick = object : Runnable {
     override fun run() {
       val player = adaptivePlayer ?: return
@@ -70,6 +73,11 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
         val gain = if (NoiseState.available()) NoiseState.gain.coerceIn(.65f, 1f) else 1f
         adaptiveGain = gain.coerceIn(adaptiveGain - .1f, adaptiveGain + .1f).coerceIn(.65f, 1f)
         player.setVolume(adaptiveGain, adaptiveGain)
+        val now = System.currentTimeMillis()
+        if (route != lastAudioRoute || kotlin.math.abs(adaptiveGain - lastAudioGain) >= .05f || now - lastAudioAuditAt >= 5000) {
+          lastAudioAuditAt = now; lastAudioRoute = route; lastAudioGain = adaptiveGain
+          currentNotice?.let { audit(it, "ADAPTIVE_APPLIED") }
+        }
         handler.postDelayed(this, 200)
       } catch (_: Exception) { currentNotice?.let { finishUtterance("ADAPTIVE_VOLUME_ERROR") } }
     }
@@ -94,6 +102,12 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       val adaptive = n.optString("playbackMode") == "adaptive-local-synthesis"
       record.put("audio", NoiseState.snapshot(this).put("adaptiveApplied", adaptive)
         .put("appliedGain", if(adaptive) adaptiveGain else 1f)
+        .put("gainCeilingReached", adaptive && adaptiveGain >= .99f)
+        .put("relativeToQuiet", if(adaptive) adaptiveGain / .65f else 1f)
+        .put("exceedsNormalPlayback", false)
+        .put("streamAtMaximum", audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) >= audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC))
+        .put("adaptiveFallback", n.optString("adaptiveFallback"))
+        .put("effectLimitation", if (!adaptive) "DIRECT_PLAYBACK_NO_ADAPTATION" else if(adaptiveGain >= .99f) "GAIN_CEILING_NO_FURTHER_HEADROOM" else if(NoiseState.outputType == 0) "OUTPUT_ROUTE_UNKNOWN" else "LISTENING_EFFECT_REQUIRES_FIELD_ACCEPTANCE")
         .put("fallbackReason", if(adaptive) "" else if(!NoiseState.available()) "MICROPHONE_INACTIVE_OR_STALE" else "IMMEDIATE_STATE_NOTICE_OR_DIRECT_FALLBACK"))
       if (!record.has("startedAt")) record.put("startedAt", JSONObject.NULL)
       VoiceLogStorage.append(applicationContext, record.toString(), now)
@@ -430,7 +444,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     notice.put("synthesisKey", key)
     fun fallback(reason: String) {
       if (currentNotice !== notice || speechFile !== file) return
-      audit(notice, reason); tts?.stop(); clearAdaptive(); speakDirect(notice, attributes)
+      notice.put("adaptiveFallback", reason); audit(notice, reason); tts?.stop(); clearAdaptive(); speakDirect(notice, attributes)
     }
     tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
       override fun onStart(id: String?) { if (id == key) handler.post { if (speechFile === file) audit(notice, "SYNTHESIS_STARTED") } }
@@ -448,6 +462,8 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
                 adaptiveGain = gain.coerceIn(.65f, 1f)
                 player.setVolume(gain, gain); NoiseState.playback = true
                 player.start(); started = true
+                NoiseState.outputType = player.routedDevice?.type ?: 0
+                lastAudioAuditAt = 0; lastAudioRoute = -1; lastAudioGain = -1f
                 notice.put("startedAt", System.currentTimeMillis()).put("playbackMode", "adaptive-local-synthesis")
                 audit(notice, "STARTED"); handler.post(volumeTick)
               } catch (_: Exception) { fallback("ADAPTIVE_START_FAILED") }

@@ -139,6 +139,7 @@ class VoiceRecoveryTest {
     shadowOf(Looper.getMainLooper()).idle()
     assertEquals("test", shadowOf(tts).lastSpokenText)
     assertNull(get("speechFile")); assertNull(get("adaptivePlayer"))
+    assertEquals("SYNTHESIS_REJECTED", (get("currentNotice") as JSONObject).optString("adaptiveFallback"))
   }
   @Test fun lateSynthesisCallbackCannotResurrectInterruptedInformation() {
     val tts = get("tts") as TextToSpeech
