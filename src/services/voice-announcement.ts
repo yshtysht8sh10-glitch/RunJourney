@@ -181,7 +181,7 @@ async function updateGuidance(run: ActiveRun, stateOnly: boolean) {
   };
   const running = stateOf(run) === 'RUNNING' && !run.endedAt;
   const observations = (await RunRepository.getRecentObservations(4000, now)).slice(-6).map(p => ({ ...p, accuracy: p.accuracy ?? undefined, speed: p.speed ?? undefined }));
-  const candidate = running && !!run.features?.autoStop && stopHint(observations, now);
+  const candidate = (periodic || workout) && running && !!run.features?.autoStop && stopHint(observations, now);
   if (candidate && !hintSession.active) {
     hintSession.active = true;
     hintSession.detectedAt = now;
@@ -199,6 +199,7 @@ async function updateGuidance(run: ActiveRun, stateOnly: boolean) {
     add(`hint-cancel:${now}`, 'STOP_CANDIDATE_CANCELLED', '', now, 4000, 100, { reason: running ? 'movement, GPS quality, or stale observations' : 'state changed' });
   }
   (run.events ?? []).forEach((e, index) => {
+    if (!periodic && !workout) return;
     if (e.state === 'AUTO_STOP' && !run.features?.autoStop || e.state === 'BREAK' && !run.features?.break) return;
     const type = e.state === 'AUTO_STOP' ? 'AUTO_STOP_CONFIRMED' : e.state === 'BREAK' ? 'BREAK' : e.source === 'sensor' ? 'AUTO_RESUME_CONFIRMED' : 'RESUME';
     add(`event:${index}:${e.timestamp}`, type, e.state === 'AUTO_STOP' ? '走行タイマーを一時停止しました。' : e.state === 'BREAK' ? '休憩します。' : e.source === 'sensor' ? '走行再開を検知しました。走行タイマーを再開します。' : '走行タイマーを再開します。', e.confirmedAt ?? e.timestamp, 15000, 100,

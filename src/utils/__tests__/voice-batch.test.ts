@@ -1,3 +1,4 @@
+import { ClockSettingsRepository } from '@/repositories/clock-settings';
 import native from '../../../modules/run-announcer';
 import { VoiceAnnouncement } from '@/services/voice-announcement';
 import { RunRepository } from '@/repositories/run-repository';
@@ -129,3 +130,13 @@ test('manual finish has saved-result speech when enabled, and silence when both 
   expect(batch.ended).toBe(true); expect(batch.notices[0].data.savedEndedAt).toBe(r.endedAt);
 });
 
+
+test('clock-only preference does not enable existing transition or pace voices',async()=>{
+ const r=run();r.paceWorkout=undefined;
+ r.events=[{state:'AUTO_STOP',source:'sensor',timestamp:start+55000,confirmedAt:start+60000}];
+ await VoiceAnnouncement.setEnabled(false,null);
+ await ClockSettingsRepository.save({enabled:true,minutes:10});
+ try { await VoiceAnnouncement.updateRun(r);expect(notices()).toEqual([]);
+ expect(JSON.parse(jest.mocked(native.notifyBatch!).mock.calls.at(-1)![0]).clock).toMatchObject({enabled:true,minutes:10,startedAt:start});
+ } finally { await ClockSettingsRepository.save({enabled:false,minutes:10}); }
+});
