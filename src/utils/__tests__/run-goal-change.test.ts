@@ -1,0 +1,45 @@
+import { createPaceWorkout, DEFAULT_PACE_SETTINGS } from '@/domain/pace-workout';
+import { RunRepository } from '@/repositories/run-repository';
+import { goalAchievement } from '@/domain/finish-goal';
+import { effectiveDistance, timeModel } from '@/utils/run-model';
+import { kilometerLaps } from '@/domain/voice-guidance';
+import { database } from '@/repositories/database';
+import { resetNative, injectFault } from '@/test/native-driver';
+import type { ActiveRun } from '@/types/run';
+const draft=():ActiveRun=>({id:'goal-change',startedAt:new Date(0).toISOString(),createdAt:'',updatedAt:'',distanceMeters:0,points:[],finishGoal:{kind:'distance',meters:7000},events:[]});
+beforeEach(async()=>{resetNative();await RunRepository.clearActiveRun();jest.spyOn(Date,'now').mockReturnValue(600000);});
+afterEach(()=>{injectFault();jest.restoreAllMocks();});
+test('7→12km preserves GPS, elapsed, laps and events; only new goal ends run',async()=>{
+ const r=draft(); r.paceWorkout=createPaceWorkout({...DEFAULT_PACE_SETTINGS,enabled:true,distanceKm:7},0); r.points=Array.from({length:1203},(_,i)=>({timestamp:i*5000,latitude:35+i*10/111195,longitude:139,accuracy:5}));
+ r.distanceMeters=effectiveDistance(r); r.finishAutoEnabled=false;
+ const first={...r,points:r.points.slice(0,601)}; first.distanceMeters=effectiveDistance(first); await RunRepository.saveActiveRun(first);
+ const beforeLaps=kilometerLaps(first,3000000);
+ const changed=await RunRepository.updateFinishGoal(r.id,{kind:'distance',meters:12000},true);
+ expect(changed.paceWorkout?.workout.segments[0].target).toEqual({type:'distance',meters:12000});
+ expect(changed.paceWorkout?.workout.segments[0].targetPaceSecPerKm).toBe(r.paceWorkout?.workout.segments[0].targetPaceSecPerKm);
+ expect(changed.points).toEqual(first.points);expect(changed.events).toEqual(first.events);
+ expect(timeModel(changed,3000000)).toEqual(timeModel(first,3000000));expect(kilometerLaps(changed,3000000)).toEqual(beforeLaps);
+ expect(goalAchievement({...changed,points:r.points.slice(0,702)},3505000)).toBeNull();
+ expect(goalAchievement({...changed,points:r.points},6010000)?.distanceMeters).toBeCloseTo(12000,1);
+ await RunRepository.appendActivePoints(r.points.slice(601));
+ const saved=await RunRepository.finishActiveRun(new Date(6000000).toISOString());
+ expect(saved?.goalChanges).toHaveLength(1);expect(saved?.finishGoal).toEqual({kind:'distance',meters:12000});
+});
+test('reached goal ON rejected without mutation; OFF retains target, enabling future time goal works',async()=>{
+ await RunRepository.saveActiveRun(draft());
+ const off=await RunRepository.updateFinishGoal('goal-change',{kind:'time',activeMs:60000},false);
+ expect(goalAchievement(off,9000000)).toBeNull();
+ await expect(RunRepository.updateFinishGoal('goal-change',{kind:'time',activeMs:60000},true)).rejects.toThrow('既に到達済み');
+ expect(await RunRepository.getActiveRun()).toEqual(off);
+ const on=await RunRepository.updateFinishGoal('goal-change',{kind:'time',activeMs:1200000},true);
+ expect(goalAchievement(on,1199999)).toBeNull();expect(goalAchievement(on,1200000)).not.toBeNull();
+ const stored=await (await database()).getDraft();expect(stored).toEqual(on);
+});
+test('frozen finish wins race, failed save never changes active target',async()=>{
+ await RunRepository.saveActiveRun(draft());
+ injectFault(sql=>{if(sql.startsWith('UPDATE runs SET'))throw Error('disk full');});
+ await expect(RunRepository.updateFinishGoal('goal-change',{kind:'time',activeMs:1200000},true)).rejects.toThrow();
+ injectFault();expect((await RunRepository.getActiveRun())?.finishGoal).toEqual({kind:'distance',meters:7000});
+ await RunRepository.prepareFinish(new Date(600000).toISOString());
+ await expect(RunRepository.updateFinishGoal('goal-change',{kind:'distance',meters:12000},true)).rejects.toThrow('終了処理');
+});

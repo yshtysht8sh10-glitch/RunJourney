@@ -1,3 +1,4 @@
+import { ClockSettingsRepository } from '@/repositories/clock-settings';
 import SettingsStorage from '@/repositories/storage';
 import { Platform } from 'react-native';
 
@@ -62,11 +63,11 @@ export const VoiceAnnouncement = {
     if (periodicPreference) periodicPreference.value = enabled;
     if (!enabled && !activeRun?.paceWorkout?.voice) AdaptiveAudio.stop();
     if (enabled && activeRun) this.start(activeRun);
-    else nativeAnnouncer()?.stop();
+    else if (!(await ClockSettingsRepository.get()).enabled) nativeAnnouncer()?.stop();
   },
   async restore(activeRun: ActiveRun | null): Promise<void> {
     try {
-      if (activeRun && await this.enabled()) this.start(activeRun);
+      if (activeRun && (await this.enabled() || (await ClockSettingsRepository.get()).enabled)) this.start(activeRun);
       else this.stop();
     } catch (error) {
       console.warn('Voice announcement could not be restored', error);
@@ -162,11 +163,12 @@ async function updateGuidance(run: ActiveRun, stateOnly: boolean) {
   const native = nativeAnnouncer();
   if (periodicPreference?.runId !== run.id) periodicPreference = { runId: run.id, value: await VoiceAnnouncement.enabled() };
   const periodic = periodicPreference.value;
+  const clockSettings = await ClockSettingsRepository.get();
   // Preference I/O may queue behind a long GPS checkpoint. Evaluate freshness
   // after that wait, so a stale observation cannot create a new stop hint.
   const now = Date.now();
   const workout = validPaceState(run.paceWorkout) && run.paceWorkout.voice;
-  if (!periodic && !workout) return;
+  if (!periodic && !workout && !clockSettings.enabled) return;
   if (hintSession.runId !== run.id) hintSession = { runId: run.id, active: false, lastAt: -Infinity, detectedAt: 0, lowSpeedAt: 0 };
   const snapshot = voiceSnapshot(run, now);
   const notices: Record<string, unknown>[] = [];
@@ -209,7 +211,7 @@ async function updateGuidance(run: ActiveRun, stateOnly: boolean) {
   const send = async () => {
     if (finishedRuns.has(run.id)) return;
     notices.forEach(n => { n.dispatchedAt = Date.now(); });
-    await native?.notifyBatch?.(JSON.stringify({ notices: notices.splice(0), recovery: recoveryGuidance(run, now), cancelCandidate: !candidate, paused: !running, state: stateOf(run), latestEventIndex: (run.events?.length ?? 0) - 1, runId: run.id }));
+    await native?.notifyBatch?.(JSON.stringify({ clock: { ...clockSettings, startedAt: Date.parse(run.startedAt) }, notices: notices.splice(0), recovery: recoveryGuidance(run, now), cancelCandidate: !candidate, paused: !running, state: stateOf(run), latestEventIndex: (run.events?.length ?? 0) - 1, runId: run.id }));
     lastBatchState = batchState;
   };
   // State feedback must leave JS before kilometer interpolation or voice-item I/O.

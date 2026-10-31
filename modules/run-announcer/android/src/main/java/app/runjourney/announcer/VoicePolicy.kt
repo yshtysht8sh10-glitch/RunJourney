@@ -6,6 +6,7 @@ internal object VoicePolicy {
   fun validState(type: String, candidateCancelled: Boolean, state: String, ended: Boolean, eventIndex: Int, latestEventIndex: Int): Boolean = when {
     ended -> type == "RUN_GOAL_FINISHED"
     type == "STOP_CANDIDATE_ANNOUNCED" -> !candidateCancelled && state == "RUNNING"
+    type == "CURRENT_TIME" -> state == "RUNNING"
     type == "PACE_WARNING" -> true
     type in listOf("AUTO_STOP_CONFIRMED", "AUTO_RESUME_CONFIRMED", "BREAK", "RESUME") ->
       (latestEventIndex < 0 || eventIndex == latestEventIndex) && when(type) {

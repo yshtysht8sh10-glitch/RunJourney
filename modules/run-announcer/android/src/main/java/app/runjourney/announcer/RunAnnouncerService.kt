@@ -56,6 +56,23 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   private var chime: MediaPlayer? = null
   private var chimeActive = false
   private var recovery: JSONObject? = null
+  private val clockTick = object : Runnable {
+    override fun run() {
+      if (!preferences.getBoolean("clockEnabled", false) || ended) return
+      val now = System.currentTimeMillis()
+      val due = CurrentTimePolicy.boundary(preferences.getLong("clockStarted", 0), now, preferences.getInt("clockMinutes", 10))
+      if (due > preferences.getLong("clockBoundary", 0)) {
+        preferences.edit().putLong("clockBoundary", due).apply()
+        val n = JSONObject().put("id", "$batchRunId:clock:$due").put("type", "CURRENT_TIME").put("priority", 30)
+          .put("message", CurrentTimePolicy.message(now)).put("expiresAt", now + 5000).put("nativeQueuedAt", now)
+          .put("data", JSONObject().put("runId", batchRunId).put("sampledAt", now))
+        val late = (now - preferences.getLong("clockStarted", 0)) % (preferences.getInt("clockMinutes", 10) * 60000L) > 5000
+        if (late || batchState != "RUNNING" || speaking || messages.isNotEmpty() || !ready) audit(n, "SKIPPED_CLOCK_BUSY_PAUSED_OR_LATE")
+        else { messages.add(n); audit(n, "QUEUED"); speakNext() }
+      }
+      handler.postDelayed(this, 1000)
+    }
+  }
   private var adaptivePlayer: MediaPlayer? = null
   private var speechFile: File? = null
   private var adaptiveGain = 1f
@@ -122,6 +139,15 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     val cancel = batch.optBoolean("cancelCandidate")
     val paused = batch.optBoolean("paused")
     val incoming = batch.getJSONArray("notices")
+    batch.optJSONObject("clock")?.let { c ->
+      val started = c.optLong("startedAt")
+      val minutes = c.optInt("minutes", 10)
+      val same = preferences.getLong("clockStarted", 0) == started && preferences.getInt("clockMinutes", 10) == minutes && preferences.getBoolean("clockEnabled", false)
+      preferences.edit().putLong("clockStarted", started).putInt("clockMinutes", minutes).putBoolean("clockEnabled", c.optBoolean("enabled"))
+        .putLong("clockBoundary", if(same) preferences.getLong("clockBoundary", 0) else CurrentTimePolicy.boundary(started, System.currentTimeMillis(), minutes)).apply()
+      handler.removeCallbacks(clockTick)
+      if (c.optBoolean("enabled")) handler.post(clockTick)
+    }
     if (debugPrefs.getString("finishedRun", "") == runId && !batch.optBoolean("ended")) {
       (0 until incoming.length()).forEach { audit(incoming.getJSONObject(it), "RUN_ENDED") }; return
     }
@@ -490,7 +516,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
 
   private fun speakDirect(notice: JSONObject, attributes: AudioAttributes) {
     NoiseState.playback = true; NoiseState.externalOutput = false
-    val message = notice.getString("message")
+    val message = if (notice.optString("type") == "CURRENT_TIME") CurrentTimePolicy.message(System.currentTimeMillis()).also { notice.put("message", it) } else notice.getString("message")
     tts?.setAudioAttributes(attributes)
     val utteranceKey = "runjourney-${System.nanoTime()}"
     tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
@@ -536,6 +562,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   override fun onDestroy() {
     stopRunning = null
     handler.removeCallbacks(tick)
+    handler.removeCallbacks(clockTick)
     if (chimeActive) currentNotice?.let { audit(it, "CHIME_INTERRUPTED_SERVICE_DESTROYED") }
     chime?.release(); chime = null; chimeActive = false
     clearAdaptive()

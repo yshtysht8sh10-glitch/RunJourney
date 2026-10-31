@@ -11,6 +11,7 @@ import { BuildInfo } from '@/components/build-info';
 import { RunService } from '@/services/run-service';
 import { ActiveRun } from '@/types/run';
 import { StartSettingsSummary } from '@/components/start-settings-summary';
+import { RunGoalEditor } from '@/components/run-goal-editor';
 import { FinishGoalSettings } from '@/components/finish-goal-settings';
 
 function formatElapsed(durationMs: number): string {
@@ -122,6 +123,7 @@ export default function RunScreen() {
               <Text style={styles.status}>{stateOf(activeRun) === 'AUTO_STOP' ? '停止しています。走り出すと自動再開' : stateOf(activeRun) === 'BREAK' ? `休憩中 ${formatElapsed(time!.breakDuration)}` : pace ? `${Math.floor(pace / 60)}:${String(Math.floor(pace % 60)).padStart(2, '0')} /km` : 'GPSを記録中'}</Text>
               {activeRun.features?.break && !activeRun.endedAt && <Pressable accessibilityRole="button" disabled={busy} onPress={changeState} style={{ width: '100%', minHeight: 64, borderRadius: 16, backgroundColor: '#33424C', alignItems: 'center', justifyContent: 'center', marginBottom: 20 }}><Text style={styles.startButtonText}>{stateOf(activeRun) === 'BREAK' ? '再 開' : '休 憩'}</Text></Pressable>}
               <PaceWorkoutCard run={activeRun} now={now} />
+              {!activeRun.endedAt && <RunGoalEditor run={activeRun} onSaved={setActiveRun} />}
               {saveError || activeRun.endedAt ? <View style={{ width: '100%' }}>
                 <Text accessibilityRole="alert" style={styles.description}>{saveError || '終了した記録の保存が未完了です。'}</Text>
                 <Pressable testID="retry-save" accessibilityRole="button" disabled={busy} onPress={stop} style={styles.startButton}><Text style={styles.startButtonText}>{busy ? '保存中…' : '保存を再試行'}</Text></Pressable>
