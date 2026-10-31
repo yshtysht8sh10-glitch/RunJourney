@@ -36,26 +36,44 @@ GPS/距離/経過時間/ラップ/イベント/ペース集計/目標ペース�
 
 46履歴/17,480 GPS点/設定7キー/draftなしを新しい隔離SQLiteへ復元し、全snapshotのcanonical一致。integrity_check=ok、foreign_key_check=0。署名一致したv21 APKと私有ログを保管。Production APK SHAを更新前に保存、Pace packageは今回端末に存在しない。Production/Paceのビルド配布・更新・データ操作は行わない。
 
-## 実機・APKの現状（未完了事項を含む）
+## 実機検証・最終導入（2026-11-01 JST）
 
-- 導入確認済み：Test v22/187af15。112,558,619 bytes、SHA256 88d357c1d9111b627fb7f4c69bc3ea2194c118bc1079f82dd130e16c633cae74。同一署名fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c、package app.runjourney.mobile.test。adb install -r成功、画面にGitを表示。
-- 検証用RUNを2026-11-01 05:12:50頃JSTに開始。開始前にAuto Stopを一時OFF、既存5分音声を一時OFF、現在時刻をON/5分へ変更。元の設定はBackupに保持。ペース走設定7km/7:00/km/±5秒/音声60秒と騒音ONは表示値を維持。
-- RUN中7→12km/自動終了OFFの確認ダイアログと適用操作を実施。保存後のExport照合はまだ行えていない。
-- 画面OFF/Dozingと音声foreground service継続を確認。05:17:50.700 JSTにnative logcatの「現在、午前5時17分です」を取得。背景でのTTS開始の証拠であり、聴取/DONEを証明しない。
-- セキュリティロックに戻ったため、ユーザーへロック解除を依頼。**検証RUNは継続中。RUN終了・設定復元・更新後Backup取得は未完了。** 元46件の消去/Import/復元はしていない。検証記録は既存実走と区別して扱う。
-- この操作で既存の別問題を特定：VoiceAnnouncementの通常停止がAdaptiveAudio.stop→noiseControl(stop)を呼び、マイクの明示的なユーザー停止と同じ永続フラグを立てていた。騒音JS設定ONでもその後USER_STOPPEDとなる経路。今回12kmの計測失敗原因ではない。最終332edffでライフサイクル用pause（マイクサービスだけ停止、設定/ユーザー停止フラグは維持）と明示OFFを分離。通知上のユーザー停止は引き続き尊重。既に停止フラグがある場合は騒音設定を明示的にOFF→ONする必要があり、無断で解除しない。
-- 最終APK：332edff / Test v22、SHA256 66e264433002497d17291c56bf674988f20d9c1b24ffd56ab5320c0ebee0647e、同一署名確認済み。私有test-v22-332edff.apk。build/native成功。**端末へは未導入**（上記RUNの終了待ち）。
-- 最終EAS：[e4375ebc](https://expo.dev/accounts/yshtysht8sh10/projects/RunJourney/builds/e4375ebc-cef6-4db7-8bd8-99cc7c556270)。旧候補3件は取消し、実装332edffのクラウドビルドを依頼。最終状態/クラウドAPKは別途確認。
+ユーザーのロック解除後に未完了作業を再開した。中間Test v22/187af15で開始した検証RUN（私有ログでID管理）は05:12:49.530開始、05:47:49.530終了。有効35分ちょうど、283 GPS点、距離0mの室内静止試験。交通騒音・実走と混同しない。
 
-### ロック解除後に残る実機検証
+### 現在時刻
 
-1. 現在の検証RUNの時刻/IDを確認し、目標12kmの保存状態・距離/時間継続を照合。到達済み時間目標ONの拒否、未来の時間目標ON/OFF、自動終了を試験して検証RUNを正常保存。
-2. 最終332edff APKへ署名/ID再確認のうえ更新。騒音設定ONと通常ライフサイクルpauseからの再開、20秒マイク/音声テスト、出力route/gain/fallback欄を実機で確認。
-3. 元のAuto Stop ON、5分音声ON、騒音ON、現在時刻OFF/10分へ復元（新しい現在時刻設定キーだけ追加され得る）。次STARTの元7km/7:00/km設定は変更しない。
-4. 標準Backupと音声Exportを私有保存し、元46履歴/17,480点/全既存設定/保護IDのcanonical比較と隔離SQLite復元を実施。検証用新規記録はIDで明確に分離。
-5. Production APK SHA/更新日時とPace未操作を確認。今回のTest検証記録を既存実走ログと混同しない。
+05:17/22/27/32/37/42の6境界でQUEUED→STARTED→DONEを確認。最初の5分案内は05:17:50.700、Dozingと音声foreground service継続を確認した画面OFF状態。35分境界05:47はRUN終了と競合し、STARTED後にINTERRUPTED_STATE_CHANGED/DISCARDEDとなり再試行なし。発話の完了callbackは聴取の証明ではない。
 
-実走で未検証：交通騒音下の聴取差、Bluetooth/本体ごとの実効音量、風/装着/電池、長時間の実機新機能動作、GPS上の7→12km終了実走。これらとロック解除待ちの実機項目が残るため、第1〜3件の作業完了条件を全て達成したとは報告しない。全IssueはOPEN維持。
+### RUN中の目標変更
+
+7kmのペース到達目標から12km/自動終了OFFへ適用し、32分以上の背景継続後も保存・適用表示と12km目標を保持。既に到達済みの1分/自動終了ONは説明を表示して拒否し、旧目標を維持。続いて35分/自動終了ONを確認・保存し、背景で35分ちょうどに自動終了。保存履歴には2回の変更前後（終了目標・自動終了・ペース到達目標）があり、距離・時間・GPS・ラップをリセットしていない。次STARTの7km/7:00/km/±5秒/音声60秒設定は不変。終了到達時刻との差は検出213msで、遅れても保存終了境界は目標時刻。
+
+### 騒音・最終APK
+
+実機操作で別の再開阻害も特定した。通常の音声ライフサイクル停止がnoiseControl(stop)を経由し、マイクの明示ユーザー停止と同じ永続フラグを立てていた。JS騒音設定ONでも以降USER_STOPPEDとなり得る。今回12kmでは計測済みなので、その体感不良の原因とは扱わない。332edffでpause（サービス停止だけ、設定/ユーザー停止フラグは維持）と明示OFF/通知STOPを分離し回帰を追加。既存の明示停止フラグは無断解除せず、今回の試験では騒音OFF→ONの明示操作で再有効化した。
+
+最終EAS [e4375ebc](https://expo.dev/accounts/yshtysht8sh10/projects/RunJourney/builds/e4375ebc-cef6-4db7-8bd8-99cc7c556270) はFINISHED、commit `332edff30fbe2ff6e31ce9438899be8d1c48a711`。実APK package `app.runjourney.mobile.test` / versionCode22 / minSdk26 / targetSdk36。署名SHA256 `fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c` は更新前Testと一致。adb install -r成功、実画面で `332edff+cloud-sync-v22` / `EAS: e4375ebc` を確認。初回インストール日を維持。Production APK SHA不変、Pace未操作。
+
+- **導入したクラウドAPK SHA256**：`01342855a53e7364fb04891362f2f084b025113581ee39ed4cffbfb4c1123f21`。
+- 同じ332edffのローカル検証APK：`66e264433002497d17291c56bf674988f20d9c1b24ffd56ab5320c0ebee0647e`。クラウドAPKと区別する。
+
+最終APKで20秒プレビューを実行し、背景のマイクservice起動、内蔵マイクtype15、34有効サンプル、dBFS min -78.20/max -55.86/mean -70.64、合成再生STARTED/DONE、再生中ADAPTIVE_APPLIEDを確認。出力type2（本体スピーカー）、適用gain約0.857、静音基準比約1.318、端末media音量14/最大30。speakerFeedbackHoldで自分の音を補正へ取り込まない。20秒後STOPPED・測定service停止。生マイク音声保存なし、端末stream音量の変更なし。これは自然な室内環境での機能確認であり、制御された交通騒音/聴取比較ではない。
+
+### データ保全・検証記録の片付け
+
+最終導入後Backupは、既存46履歴・GPS17,480点・全既存設定7キー・保護IDが更新前と完全一致し、追加は検証RUN1件と現在時刻OFF/10分の新設定キーのみだった。検証RUNと変更履歴・音声ログを私有保全先へ保存後、その検証RUNだけをID照合して削除。
+
+**検証中の問題と回復**：ごみ箱画面の既存7日保持処理により、元の古いごみ箱記録1件（28 GPS点、元は保護対象外）が自動削除されたことを全件照合で検出した。片付けでこの画面を通した判断ミス。更新前Backupからその1件だけのSHA検証済み復元ファイルを作成し、標準Importで1件のみ追加した。既存45件・設定・draft・保護フラグを上書きせず、元のごみ箱状態/日時/全GPS/全フィールドを復元。保持ポリシーや保護対象は勝手に変更しない。
+
+**最終結果**：46履歴/17,480 GPS点、全記録をID単位でcanonical比較し全フィールド完全一致、既存設定7キーと保護ID完全一致、draftなし、検証RUNなし。追加キーは `@runjourney/current-time/v1={"enabled":false,"minutes":10}` のみ。復元した1件がBackupの配列末尾に移ったため、配列順そのものは一致しない。履歴画面の `started_at DESC` 順序と記録内容は不変。これをsnapshot全体完全一致とは表現しない。
+
+最終Backupは12,222,504 bytes、端末/PC SHA256一致 `7c6b1ce78a993c4be6af86f15ceb2caf3a26558dc239b99b7c82e1c27a5f1f17`。decodeBackupで内部SHA/構造検証、新しい隔離SQLiteへ復元して最終snapshot全一致、integrity_check=ok、foreign_key_check=0。`backup-final-restored.json` / `verification-final-restored.json` / `restore-final-restored.sqlite` を私有保全。削除直前の検証RUNを含むBackupも別途保持している。
+
+Auto Stop ON、Break ON、5分音声ON、騒音ON、現在時刻OFF/10分、次STARTの元7km/7:00/km設定へ復元。TestをSTART待機へ戻し、音声/マイク/終了時計service停止、試験のため一時変更した端末stay-awake設定も元の7へ戻した。
+
+### 実走受入に残る事項
+
+交通騒音下の聴取差、Bluetoothでの最終版の実効音量、風/装着/電池影響、GPS移動を伴う7→12kmの実走自動終了、長時間の実機動作は次回実走で確認する。PC95分/native100分や室内35分試験を屋外実走と同じ証拠とは扱わない。全Issueは実走/設計受入までOPEN維持。
 
 ## 第4・5件の成果物
 
