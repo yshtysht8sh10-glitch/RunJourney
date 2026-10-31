@@ -467,7 +467,10 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     val file = try { File.createTempFile("runjourney-tts-", ".wav", cacheDir) } catch (_: Exception) { speakDirect(notice, attributes); return }
     speechFile = file
     val key = "synthesis-${System.nanoTime()}"
-    notice.put("synthesisKey", key)
+    val synthesisRequestedAt = System.currentTimeMillis()
+    val synthesisTimeoutMs = SynthesisBudget.timeoutMs(notice.getString("message"))
+    notice.put("synthesisKey", key).put("synthesisRequestedAt", synthesisRequestedAt)
+      .put("synthesisTimeoutMs", synthesisTimeoutMs)
     fun fallback(reason: String) {
       if (currentNotice !== notice || speechFile !== file) return
       notice.put("adaptiveFallback", reason); audit(notice, reason); tts?.stop(); clearAdaptive(); speakDirect(notice, attributes)
@@ -476,6 +479,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       override fun onStart(id: String?) { if (id == key) handler.post { if (speechFile === file) audit(notice, "SYNTHESIS_STARTED") } }
       override fun onDone(id: String?) { if (id == key) handler.post {
         if (currentNotice !== notice || speechFile !== file) return@post
+        notice.put("synthesisDurationMs", System.currentTimeMillis() - synthesisRequestedAt)
         audit(notice, "SYNTHESIS_COMPLETED")
         try {
           val player = MediaPlayer(); adaptivePlayer = player
@@ -511,7 +515,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     try {
       if (tts?.synthesizeToFile(notice.getString("message"), Bundle(), file, key) != TextToSpeech.SUCCESS) fallback("SYNTHESIS_REJECTED")
     } catch (_: Exception) { fallback("SYNTHESIS_FAILED") }
-    handler.postDelayed({ if (speechFile === file && adaptivePlayer == null) fallback("SYNTHESIS_TIMEOUT") }, 3000)
+    handler.postDelayed({ if (speechFile === file && adaptivePlayer == null) fallback("SYNTHESIS_TIMEOUT") }, synthesisTimeoutMs)
   }
 
   private fun speakDirect(notice: JSONObject, attributes: AudioAttributes) {

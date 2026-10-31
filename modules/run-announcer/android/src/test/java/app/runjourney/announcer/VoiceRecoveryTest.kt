@@ -175,6 +175,19 @@ class VoiceRecoveryTest {
     assertNull(get("adaptivePlayer"))
     assertEquals("AUTO_STOP_CONFIRMED", (get("currentNotice") as JSONObject).optString("type"))
   }
+  @Test fun longSummaryWaitsBeyondThreeSecondsThenFallsBackAndDeletesFile() {
+    // No engine callback: exercise the actual service deadline, not only the budget formula.
+    val item = notice("FIVE_MINUTES").put("message", "あ".repeat(90))
+    set("currentNotice", item); set("speaking", true)
+    service.javaClass.getDeclaredMethod("synthesizeAdaptive", JSONObject::class.java, android.media.AudioAttributes::class.java)
+      .apply { isAccessible = true }.invoke(service, item, android.media.AudioAttributes.Builder().build())
+    val file = get("speechFile") as java.io.File
+    shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(3001))
+    assertSame(file, get("speechFile")); assertFalse(item.has("adaptiveFallback"))
+    shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(2400))
+    assertEquals("SYNTHESIS_TIMEOUT", item.optString("adaptiveFallback"))
+    assertNull(get("speechFile")); assertFalse(file.exists())
+  }
   @Test fun candidateChimeAlsoWaitsForCompletionButNeverSpeaksAfterConfirmation() {
     set("ready", true)
     batch("RUNNING", notice("STOP_CANDIDATE_ANNOUNCED"), candidate = true)

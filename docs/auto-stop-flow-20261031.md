@@ -176,7 +176,7 @@ runId / state / eventIndexを更新]
 - 情報通知はFIVE_MINUTES/KILOMETER_LAP/PACE_WARNINGの3種。同種の古い待機情報は新しいものへ置換。deferはTTLをその時点から120秒へ変更し、最大1回再試行。元の文言をそのまま再読せず、120秒以内の最新recovery payloadへ統合する。停止中のdeferは「RUNNINGになるまで待つ」ゲートではなく、状態通知後に停止中でも最新総量を読む経路がある。
 - チャイム再生中は原子的に完了待ち。状態変化や終了が来ても途中で止めず、完了後にTTSの有効性を再確認。音声を待ってRUNの保存/停止を遅らせない。
 - 予告TTSは確定通知で割り込める。両者が短時間に連続することはあり得る。予告の音声成功は正式停止の条件ではない。
-- 情報の騒音連動はTTSを一時WAVへ合成しMediaPlayerで再生する。合成timeout3秒/prepare timeout2秒/再生timeout45秒。失敗時は直接TTSへfallback。生マイク音声の保存ではない。チャイムと状態TTSは直接経路。
+- 情報の騒音連動はTTSを一時WAVへ合成しMediaPlayerで再生する。合成timeout3〜8秒/prepare timeout2秒/再生timeout45秒。11/1の長文timeout修正（Test v23）は1文字60ms・最短3秒/最長8秒。失敗時は直接TTSへfallback。生マイク音声の保存ではない。チャイムと状態TTSは直接経路。Auto Stopの判定・通知仕様は変更していない。
 - 重複ID保持はJS/native各最大2,048。nativeで旧runが終了済みなら後着の非終了batchを拒否。失効は再生前に検査し、チャイム後にも検査する。STARTED/DONEはOS再生コールバックで、聴取保証ではない。
 
 ## 5. 停止中に再開を誤判定し得る経路（現行からの推論）
