@@ -13,6 +13,7 @@ export function validFinishGoal(value: unknown): value is FinishGoal {
 /** Only accepted effective edges contribute; raw fixes remain untouched. */
 export function goalAchievement(run: ActiveRun, now: number): GoalAchievement | null {
   const goal = run.finishGoal;
+  if (run.finishAutoEnabled === false) return null;
   if (!validFinishGoal(goal) || goal.kind === 'manual' || run.endedAt) return null;
   let activeMs: number;
   if (goal.kind === 'time') {

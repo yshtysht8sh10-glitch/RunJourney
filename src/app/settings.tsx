@@ -10,6 +10,7 @@ import { DEFAULT_VOICE_ITEMS, VoiceItems } from '@/utils/voice-format';
 import { isStandaloneTest } from '@/utils/build';
 import PaceWorkoutSettings from '@/components/pace-workout-settings';
 import { requestPaceLeave } from '@/services/pace-edit-guard';
+import { CurrentTimeSettings } from '@/components/clock-settings';
 import { NoiseVolumeSettings } from '@/components/noise-volume-settings';
 
 export default function SettingsScreen() {
@@ -68,6 +69,7 @@ export default function SettingsScreen() {
         <Text style={styles.detail}>記録中、走行時間の5分ごとに時間と距離を読み上げます</Text></View>
       <Switch value={enabled} disabled={busy} onValueChange={change} />
     </Pressable>
+    <CurrentTimeSettings />
     <Text style={styles.section}>読み上げ内容</Text>
     {isStandaloneTest() && <NoiseVolumeSettings />}
     {(Object.keys(labels) as (keyof VoiceItems)[]).map((key) =>

@@ -21,6 +21,9 @@ class RunAnnouncerModule : Module() {
       if (action == "start" || action == "preview") preferences.edit().putBoolean("noiseConfigured", true).apply()
       if (action == "enable") {
         preferences.edit().putBoolean("noiseUserStopped", false).putBoolean("noiseConfigured", true).apply(); "READY"
+      } else if (action == "pause") {
+        // A lifecycle/voice pause must not impersonate the user's microphone STOP.
+        context.stopService(Intent(context, NoiseMonitorService::class.java)); "PAUSED"
       } else if (action == "stop") {
         preferences.edit().putBoolean("noiseUserStopped", true).putBoolean("noiseConfigured", false).apply()
         context.stopService(Intent(context, NoiseMonitorService::class.java)); "OFF"

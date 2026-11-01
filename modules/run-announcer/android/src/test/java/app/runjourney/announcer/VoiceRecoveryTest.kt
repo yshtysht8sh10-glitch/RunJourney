@@ -41,6 +41,26 @@ class VoiceRecoveryTest {
     set("ready", false)
   }
   @After fun destroy() { service.onDestroy(); NoiseState.running = false }
+  @Test fun currentClockConsumesPausedOrBusyBoundariesWithoutReplay() {
+    val prefs = service.getSharedPreferences(RunAnnouncerService.PREFS, 0)
+    batch("AUTO_STOP")
+    prefs.edit().putBoolean("clockEnabled", true).putLong("clockStarted", System.currentTimeMillis()-600000).putInt("clockMinutes",10).putLong("clockBoundary",0).commit()
+    (get("clockTick") as Runnable).run()
+    assertEquals(1L,prefs.getLong("clockBoundary",0)); assertTrue(queue().isEmpty())
+    batch("RUNNING"); (get("clockTick") as Runnable).run(); assertTrue(queue().isEmpty())
+    prefs.edit().putLong("clockStarted",System.currentTimeMillis()-1200000).commit()
+    set("speaking",true); (get("clockTick") as Runnable).run()
+    assertEquals(2L,prefs.getLong("clockBoundary",0)); assertTrue(queue().isEmpty())
+    set("speaking",false); (get("clockTick") as Runnable).run(); assertTrue(queue().isEmpty())
+  }
+  @Test fun currentClockIsDiscardedOnStopRatherThanDeferredOrRetried() {
+    batch("RUNNING",notice("CURRENT_TIME"))
+    assertEquals(1,queue().size)
+    batch("AUTO_STOP"); assertTrue(queue().isEmpty())
+    batch("RUNNING"); set("currentNotice",notice("CURRENT_TIME")); set("speaking",true)
+    batch("AUTO_STOP",notice("AUTO_STOP_CONFIRMED"))
+    assertFalse(queue().any { it.optString("type")=="CURRENT_TIME" })
+  }
   @Test fun interruptedFiveMinuteKilometerAndSavingsAreRetainedOnce() {
     for (type in listOf("FIVE_MINUTES", "KILOMETER_LAP", "PACE_WARNING")) {
       queue().clear(); set("currentNotice", notice(type)); set("speaking", true)
@@ -139,6 +159,7 @@ class VoiceRecoveryTest {
     shadowOf(Looper.getMainLooper()).idle()
     assertEquals("test", shadowOf(tts).lastSpokenText)
     assertNull(get("speechFile")); assertNull(get("adaptivePlayer"))
+    assertEquals("DONE", service.getSharedPreferences(RunAnnouncerService.PREFS, 0).getString("ttsStatus", ""))
   }
   @Test fun lateSynthesisCallbackCannotResurrectInterruptedInformation() {
     val tts = get("tts") as TextToSpeech
@@ -153,6 +174,19 @@ class VoiceRecoveryTest {
     listener.onDone(first.getString("synthesisKey")); shadowOf(Looper.getMainLooper()).idle()
     assertNull(get("adaptivePlayer"))
     assertEquals("AUTO_STOP_CONFIRMED", (get("currentNotice") as JSONObject).optString("type"))
+  }
+  @Test fun longSummaryWaitsBeyondThreeSecondsThenFallsBackAndDeletesFile() {
+    // No engine callback: exercise the actual service deadline, not only the budget formula.
+    val item = notice("FIVE_MINUTES").put("message", "あ".repeat(90))
+    set("currentNotice", item); set("speaking", true)
+    service.javaClass.getDeclaredMethod("synthesizeAdaptive", JSONObject::class.java, android.media.AudioAttributes::class.java)
+      .apply { isAccessible = true }.invoke(service, item, android.media.AudioAttributes.Builder().build())
+    val file = get("speechFile") as java.io.File
+    shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(3001))
+    assertSame(file, get("speechFile")); assertFalse(item.has("adaptiveFallback"))
+    shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(2400))
+    assertEquals("SYNTHESIS_TIMEOUT", item.optString("adaptiveFallback"))
+    assertNull(get("speechFile")); assertFalse(file.exists())
   }
   @Test fun candidateChimeAlsoWaitsForCompletionButNeverSpeaksAfterConfirmation() {
     set("ready", true)

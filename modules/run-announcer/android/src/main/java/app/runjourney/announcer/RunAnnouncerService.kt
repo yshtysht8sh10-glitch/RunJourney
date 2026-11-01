@@ -56,9 +56,29 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   private var chime: MediaPlayer? = null
   private var chimeActive = false
   private var recovery: JSONObject? = null
+  private val clockTick = object : Runnable {
+    override fun run() {
+      if (!preferences.getBoolean("clockEnabled", false) || ended) return
+      val now = System.currentTimeMillis()
+      val due = CurrentTimePolicy.boundary(preferences.getLong("clockStarted", 0), now, preferences.getInt("clockMinutes", 10))
+      if (due > preferences.getLong("clockBoundary", 0)) {
+        preferences.edit().putLong("clockBoundary", due).apply()
+        val n = JSONObject().put("id", "$batchRunId:clock:$due").put("type", "CURRENT_TIME").put("priority", 30)
+          .put("message", CurrentTimePolicy.message(now)).put("expiresAt", now + 5000).put("nativeQueuedAt", now)
+          .put("data", JSONObject().put("runId", batchRunId).put("sampledAt", now))
+        val late = (now - preferences.getLong("clockStarted", 0)) % (preferences.getInt("clockMinutes", 10) * 60000L) > 5000
+        if (late || batchState != "RUNNING" || speaking || messages.isNotEmpty() || !ready) audit(n, "SKIPPED_CLOCK_BUSY_PAUSED_OR_LATE")
+        else { messages.add(n); audit(n, "QUEUED"); speakNext() }
+      }
+      handler.postDelayed(this, 1000)
+    }
+  }
   private var adaptivePlayer: MediaPlayer? = null
   private var speechFile: File? = null
   private var adaptiveGain = 1f
+  private var lastAudioAuditAt = 0L
+  private var lastAudioRoute = -1
+  private var lastAudioGain = -1f
   private val volumeTick = object : Runnable {
     override fun run() {
       val player = adaptivePlayer ?: return
@@ -70,6 +90,11 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
         val gain = if (NoiseState.available()) NoiseState.gain.coerceIn(.65f, 1f) else 1f
         adaptiveGain = gain.coerceIn(adaptiveGain - .1f, adaptiveGain + .1f).coerceIn(.65f, 1f)
         player.setVolume(adaptiveGain, adaptiveGain)
+        val now = System.currentTimeMillis()
+        if (route != lastAudioRoute || kotlin.math.abs(adaptiveGain - lastAudioGain) >= .05f || now - lastAudioAuditAt >= 5000) {
+          lastAudioAuditAt = now; lastAudioRoute = route; lastAudioGain = adaptiveGain
+          currentNotice?.let { audit(it, "ADAPTIVE_APPLIED") }
+        }
         handler.postDelayed(this, 200)
       } catch (_: Exception) { currentNotice?.let { finishUtterance("ADAPTIVE_VOLUME_ERROR") } }
     }
@@ -94,6 +119,12 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       val adaptive = n.optString("playbackMode") == "adaptive-local-synthesis"
       record.put("audio", NoiseState.snapshot(this).put("adaptiveApplied", adaptive)
         .put("appliedGain", if(adaptive) adaptiveGain else 1f)
+        .put("gainCeilingReached", adaptive && adaptiveGain >= .99f)
+        .put("relativeToQuiet", if(adaptive) adaptiveGain / .65f else 1f)
+        .put("exceedsNormalPlayback", false)
+        .put("streamAtMaximum", audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) >= audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC))
+        .put("adaptiveFallback", n.optString("adaptiveFallback"))
+        .put("effectLimitation", if (!adaptive) "DIRECT_PLAYBACK_NO_ADAPTATION" else if(adaptiveGain >= .99f) "GAIN_CEILING_NO_FURTHER_HEADROOM" else if(NoiseState.outputType == 0) "OUTPUT_ROUTE_UNKNOWN" else "LISTENING_EFFECT_REQUIRES_FIELD_ACCEPTANCE")
         .put("fallbackReason", if(adaptive) "" else if(!NoiseState.available()) "MICROPHONE_INACTIVE_OR_STALE" else "IMMEDIATE_STATE_NOTICE_OR_DIRECT_FALLBACK"))
       if (!record.has("startedAt")) record.put("startedAt", JSONObject.NULL)
       VoiceLogStorage.append(applicationContext, record.toString(), now)
@@ -108,6 +139,15 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     val cancel = batch.optBoolean("cancelCandidate")
     val paused = batch.optBoolean("paused")
     val incoming = batch.getJSONArray("notices")
+    batch.optJSONObject("clock")?.let { c ->
+      val started = c.optLong("startedAt")
+      val minutes = c.optInt("minutes", 10)
+      val same = preferences.getLong("clockStarted", 0) == started && preferences.getInt("clockMinutes", 10) == minutes && preferences.getBoolean("clockEnabled", false)
+      preferences.edit().putLong("clockStarted", started).putInt("clockMinutes", minutes).putBoolean("clockEnabled", c.optBoolean("enabled"))
+        .putLong("clockBoundary", if(same) preferences.getLong("clockBoundary", 0) else CurrentTimePolicy.boundary(started, System.currentTimeMillis(), minutes)).apply()
+      handler.removeCallbacks(clockTick)
+      if (c.optBoolean("enabled")) handler.post(clockTick)
+    }
     if (debugPrefs.getString("finishedRun", "") == runId && !batch.optBoolean("ended")) {
       (0 until incoming.length()).forEach { audit(incoming.getJSONObject(it), "RUN_ENDED") }; return
     }
@@ -427,15 +467,19 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     val file = try { File.createTempFile("runjourney-tts-", ".wav", cacheDir) } catch (_: Exception) { speakDirect(notice, attributes); return }
     speechFile = file
     val key = "synthesis-${System.nanoTime()}"
-    notice.put("synthesisKey", key)
+    val synthesisRequestedAt = System.currentTimeMillis()
+    val synthesisTimeoutMs = SynthesisBudget.timeoutMs(notice.getString("message"))
+    notice.put("synthesisKey", key).put("synthesisRequestedAt", synthesisRequestedAt)
+      .put("synthesisTimeoutMs", synthesisTimeoutMs)
     fun fallback(reason: String) {
       if (currentNotice !== notice || speechFile !== file) return
-      audit(notice, reason); tts?.stop(); clearAdaptive(); speakDirect(notice, attributes)
+      notice.put("adaptiveFallback", reason); audit(notice, reason); tts?.stop(); clearAdaptive(); speakDirect(notice, attributes)
     }
     tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
       override fun onStart(id: String?) { if (id == key) handler.post { if (speechFile === file) audit(notice, "SYNTHESIS_STARTED") } }
       override fun onDone(id: String?) { if (id == key) handler.post {
         if (currentNotice !== notice || speechFile !== file) return@post
+        notice.put("synthesisDurationMs", System.currentTimeMillis() - synthesisRequestedAt)
         audit(notice, "SYNTHESIS_COMPLETED")
         try {
           val player = MediaPlayer(); adaptivePlayer = player
@@ -448,6 +492,8 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
                 adaptiveGain = gain.coerceIn(.65f, 1f)
                 player.setVolume(gain, gain); NoiseState.playback = true
                 player.start(); started = true
+                NoiseState.outputType = player.routedDevice?.type ?: 0
+                lastAudioAuditAt = 0; lastAudioRoute = -1; lastAudioGain = -1f
                 notice.put("startedAt", System.currentTimeMillis()).put("playbackMode", "adaptive-local-synthesis")
                 audit(notice, "STARTED"); handler.post(volumeTick)
               } catch (_: Exception) { fallback("ADAPTIVE_START_FAILED") }
@@ -469,12 +515,12 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     try {
       if (tts?.synthesizeToFile(notice.getString("message"), Bundle(), file, key) != TextToSpeech.SUCCESS) fallback("SYNTHESIS_REJECTED")
     } catch (_: Exception) { fallback("SYNTHESIS_FAILED") }
-    handler.postDelayed({ if (speechFile === file && adaptivePlayer == null) fallback("SYNTHESIS_TIMEOUT") }, 3000)
+    handler.postDelayed({ if (speechFile === file && adaptivePlayer == null) fallback("SYNTHESIS_TIMEOUT") }, synthesisTimeoutMs)
   }
 
   private fun speakDirect(notice: JSONObject, attributes: AudioAttributes) {
     NoiseState.playback = true; NoiseState.externalOutput = false
-    val message = notice.getString("message")
+    val message = if (notice.optString("type") == "CURRENT_TIME") CurrentTimePolicy.message(System.currentTimeMillis()).also { notice.put("message", it) } else notice.getString("message")
     tts?.setAudioAttributes(attributes)
     val utteranceKey = "runjourney-${System.nanoTime()}"
     tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
@@ -520,6 +566,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   override fun onDestroy() {
     stopRunning = null
     handler.removeCallbacks(tick)
+    handler.removeCallbacks(clockTick)
     if (chimeActive) currentNotice?.let { audit(it, "CHIME_INTERRUPTED_SERVICE_DESTROYED") }
     chime?.release(); chime = null; chimeActive = false
     clearAdaptive()

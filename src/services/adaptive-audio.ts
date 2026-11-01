@@ -41,7 +41,7 @@ export const AdaptiveAudio = {
     } catch { /* Normal speech / GPS remain available. */ }
   },
   finish(runId = '') { appObserver?.remove(); appObserver = undefined; diagnosticLog('NOISE_RUN_SUMMARY', runId + ':noise-end', 'RUN_END', { runId, configured: observedRunId === runId ? observedConfigured : null, native: this.diagnostics() }); try { native()?.noiseControl?.('finish', ''); } catch { /* bounded microphone lease */ } },
-  stop() { appObserver?.remove(); appObserver = undefined; try { native()?.noiseControl?.('stop', ''); } catch { /* optional feature */ } },
+  stop() { appObserver?.remove(); appObserver = undefined; try { native()?.noiseControl?.('pause', ''); } catch { /* optional feature */ } },
   async preview() {
     if (!await this.enabled()) return 'OFF';
     return native()?.noiseControl?.('preview', 'preview') ?? 'UNSUPPORTED';

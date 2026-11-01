@@ -28,3 +28,9 @@ test('native microphone restriction is isolated from normal recording', async ()
   jest.mocked(native.noiseControl!).mockImplementation(() => { throw Error('microphone restricted'); });
   expect(() => AdaptiveAudio.finish()).not.toThrow(); expect(() => AdaptiveAudio.stop()).not.toThrow();
 });
+
+test('lifecycle pause preserves explicit microphone configuration and does not latch user STOP',async()=>{
+ jest.mocked(native.noiseControl!).mockImplementation(()=> 'STARTING');
+ AdaptiveAudio.stop();expect(native.noiseControl).toHaveBeenLastCalledWith('pause','');
+ await AdaptiveAudio.setEnabled(false);expect(native.noiseControl).toHaveBeenLastCalledWith('stop','');
+});

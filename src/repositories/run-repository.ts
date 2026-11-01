@@ -7,11 +7,11 @@ import { validateSnapshot } from './sqlite-backup';
 
 import { isTrashedRun, TrashedRun, TRASH_RETENTION_MS } from '@/utils/run-trash';
 import { ActiveRun, LocationPoint, RunRecord, RunState } from '@/types/run';
-import { detectStop, effectiveDistance, recordDiagnostic, stateOf, stopIntervals, transition } from '@/utils/run-model';
+import { detectStop, timeModel, effectiveDistance, recordDiagnostic, stateOf, stopIntervals, transition } from '@/utils/run-model';
 import { validateRuns } from '@/utils/run-backup';
 import { GpsObservationSession, incrementObservationCount, RawLocationObservation } from '@/utils/gps-observation';
-import { safelyAdvancePaceWorkout } from '@/domain/pace-workout';
-import { goalAchievement } from '@/domain/finish-goal';
+import { validPaceState, segmentReached, safelyAdvancePaceWorkout } from '@/domain/pace-workout';
+import { validFinishGoal, type FinishGoal, goalAchievement } from '@/domain/finish-goal';
 import { StopLatencyTracker, stopDecisionEvidence } from '@/domain/stop-latency';
 import { diagnosticLog } from '@/services/diagnostic-log';
 import { LatestCheckpoint } from './latest-checkpoint';
@@ -138,6 +138,30 @@ export const RunRepository = {
 
   saveActiveRun(run: ActiveRun): Promise<void> {
     return serialized(async () => { await checkpoints.flush(); await (await database()).saveDraft(run); observationSession = null; pendingFinish = null; });
+  },
+
+  updateFinishGoal(runId: string, goal: FinishGoal, autoEnabled: boolean): Promise<ActiveRun> {
+    return serialized(async () => {
+      await checkpoints.flush();
+      const db = await database();
+      const active = pendingFinish ?? observationSession?.active ?? await db.getDraft();
+      if (!active || active.id !== runId || active.endedAt) throw new Error('終了処理が始まっています。履歴を確認してください。');
+      if (!validFinishGoal(goal) || typeof autoEnabled !== 'boolean') throw new Error('距離0.1〜200km、時間1〜2880分で指定してください');
+      if ((active.goalChanges?.length ?? 0) >= 256) throw new Error('このRUNの目標変更上限256回に達しました');
+      const at = Date.now();
+      const next: ActiveRun = { ...active, finishGoal: { ...goal }, finishAutoEnabled: autoEnabled, updatedAt: new Date(at).toISOString() };
+      if (autoEnabled && goalAchievement(next, at)) throw new Error('既に到達済みの目標です。自動終了をOFFにして保存するか、先の目標を指定してください。');
+      if (goal.kind !== 'manual' && validPaceState(active.paceWorkout)) {
+        const segment = { ...active.paceWorkout.workout.segments[0], target: goal.kind === 'distance' ? { type: 'distance' as const, meters: goal.meters } : { type: 'duration' as const, seconds: goal.activeMs / 1000 } };
+        next.paceWorkout = { ...active.paceWorkout, workout: { ...active.paceWorkout.workout, segments: [segment] }, notice: undefined,
+          reached: segmentReached(segment, active.distanceMeters, timeModel(active, at).activeRunningTime / 1000) };
+      }
+      next.goalChanges = [...(active.goalChanges ?? []), { at, before: active.finishGoal ?? { kind: 'manual' }, after: { ...goal }, autoBefore: active.finishAutoEnabled !== false && active.finishGoal?.kind !== 'manual', autoAfter: autoEnabled, paceTargetBefore: active.paceWorkout?.workout.segments[0]?.target, paceTargetAfter: next.paceWorkout?.workout.segments[0]?.target }];
+      await db.saveDraft(next);
+      if (observationSession) observationSession.active = next;
+      diagnosticLog('RUN_GOAL_CHANGED', runId + ':goal:' + next.goalChanges.length, 'SAVED_AND_APPLIED', { runId, ...next.goalChanges.at(-1), distanceMeters: next.distanceMeters });
+      return next;
+    });
   },
 
   clearActiveRun(): Promise<void> {

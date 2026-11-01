@@ -11,7 +11,7 @@ import { isStandaloneTest } from '@/utils/build';
 import { PaceSettingsRepository } from '@/repositories/pace-settings';
 import { createPaceWorkout } from '@/domain/pace-workout';
 import { FinishSettings } from '@/repositories/finish-settings';
-import { goalAchievement } from '@/domain/finish-goal';
+import { type FinishGoal, goalAchievement } from '@/domain/finish-goal';
 import { AdaptiveAudio } from '@/services/adaptive-audio';
 import { FinishClock } from '@/services/finish-clock';
 import { completionLog } from '@/services/completion-log';
@@ -155,6 +155,13 @@ export const RunService = {
       id: row.id, startedAt: row.started_at, endedAt: row.ended_at!, distanceMeters: row.effective_distance,
       activeRunningTime: row.effective_time, kmPerHour: row.effective_time > 0 && row.effective_distance > 0 ? row.effective_distance / row.effective_time * 3600 : null,
     }));
+  },
+
+  async updateFinishGoal(runId: string, goal: FinishGoal, autoEnabled: boolean) {
+    const run = await RunRepository.updateFinishGoal(runId, goal, autoEnabled);
+    if (goal.kind === 'time' && autoEnabled) FinishClock.start(() => RunService.checkGoal());
+    else FinishClock.stop();
+    return run;
   },
 
   async breakRun() {
