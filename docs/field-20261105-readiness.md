@@ -10,6 +10,16 @@ PR #57（OPEN/Draft、head ecbbe6a）へ積み重ねるDraft PR。指定基準33
 
 新式relative-continuous-v2：相対差3〜18dBをgain0.65〜1.0へ連続的に対応、上昇時定数0.4秒・下降3秒。基準は通常30秒、騒音中120秒で追従する。持続する交通騒音の後にも車両通過への余地を戻すが、持続騒音への補正が次第に減るトレードオフがある。絶対値-60dBFS以下は静音扱いを維持。dBFSは校正されたdB SPLではない。ユーザーのstream音量を操作せず、gain上限1.0を維持する。通常TTS以上の音量増幅は実装していない。
 
+|その時点の基準との相対差|平滑化前の目標gain|静音0.65との倍率|
+|---|---:|---:|
+|3dB以下|0.650|1.00|
+|6dB|0.720|1.11|
+|10dB|0.813|1.25|
+|15dB|0.930|1.43|
+|18dB以上|1.000|1.54|
+
+これはレベルが-60dBFSより大きい場合の計算例。実適用値は基準追従と平滑化で遅れて変化し、最終出音の測定値ではない。
+
 通常TTS fallbackも、情報通知では開始時のgainをKEY_PARAM_VOLUMEへ渡す。発話中は動的追従できず、状態通知/チャイムは従来どおり。合成失敗時のファイル削除・復旧を維持。ログはrequestedGainとappliedGain（MediaPlayerへの適用値）を区別し、directの実適用値は不明/null、outputLoudnessMeasured=false。古いログ形式へフィールドを追加し、Export version2を維持する。
 
 Androidの[KEY_PARAM_VOLUME](https://developer.android.com/reference/android/speech/tts/TextToSpeech.Engine#KEY_PARAM_VOLUME)はstreamに対する0〜1の相対値で、Bluetoothだけを上限超過させる指定ではない。[MediaPlayer.setVolume](https://developer.android.com/reference/android/media/MediaPlayer#setVolume(float,%20float))も0〜1のスカラー。A2DPで最終的に何dB出たかはこれらの設定値から測れない。端末・イヤホン側の音量、装着、風、他アプリなどを含む聴取受入は実走へ残す。
@@ -30,7 +40,11 @@ node scripts/compare-field-runs.cjs v20.json v21.json v22.json v24.json > privat
 
 GPS Repository待ちp50/p95/max、候補・確定・再開、30秒以内の交互遷移数、音声ID別生成/開始/完了/中断/TTL失効/無効化、fallback、チャイム各段階、現在時刻成功/見送り、騒音の有効計測時間とgain分位・帯域件数を含む。30秒は集計用で判定条件ではない。v24のvalidMeasurementMsは校正・自己音holdを除くPCM処理時間。旧版は5秒ログ間の観測時間だけを推定し、6秒超gapを加算しない。
 
+交互遷移の30秒判定はSTOP_PIPELINEのloggedAt（処理ログ時刻）を使う通知競合の指標。旧版でGPS処理が滞留している場合、身体の停止/再開周期とは一致しない。実際の観測周期はentries.data.pipeline.sampleAt、遡及した記録境界は保存events.timestampと併読する。現PoCの本人ペース中央値は偶数件で上側中央値を採る簡易代表値であり、同条件での疲労モデルではない。
+
 旧版の欠測はnull/coverage=false。件数0は保持された行での観測0であり、実際の全RUNで0だった保証ではない。7日/20MB/20,000行のローテーション、RUN長、版、ログ範囲を揃えて比較する。DONEは聴取成功の証明ではない。
+
+既に私有保全済みのv20/21/22 Exportを同じCLIで再集計した結果：v20の選択RUNのRepository待ちは2,740/103,125/151,610ms（p50/p95/max、5,012行）、v21の12kmは0/1/7ms（5,221行）、v22の5kmは0/1/1ms（1,657行）。v20の保存待ち改善は前提PR #50の変更であり、今回の新しい変更による改善とは扱わない。v21/v22はgain中央値ほぼ1、fallback14/5イベント。騒音計測のなかった旧版はgain不明。別のExportに同じRUNが含まれるため、sourceとrunIdを単位に比較し、ファイルをまたいで単純合算しない。
 
 ## START前
 
@@ -74,3 +88,45 @@ Test専用の履歴ヘッダー。画面ごとに初期OFF、明示ONで最新RU
 - 終了後に標準Backupと対象RUN診断Exportを保存し、同じ集計で旧版と比較。
 
 Auto Stopの再開継続時間/変位/速度整合/精度抑制/最低保持、音声FAST/適正/SLOWの項目/重複/優先度は既存設計資料のレビュー待ち。実走・聴取未検証を完了扱いにしない。
+
+## 追加実走ログの確認（更新前v23）
+
+11/2・11/3の最新Exportを私有保全し、同じ比較CLIへ入力した。11/2のRepository待ちp50/p95/max=0/1/13ms、停止7/再開7、30秒以内交互遷移5、音声60開始/55完了、TTL失効0、fallback0、現在時刻4完了。11/3は0/1/1ms、停止16/再開16、交互遷移12、111開始/107完了、TTL失効1、fallback0、現在時刻3完了。これらは保持ログ内の件数。gainの中央値は両日ほぼ1、上限サンプルは11/2が440/453、11/3が825/876。
+
+11/3の停止確定16・再開16の全チャイムは開始/完了。予告は9キュー投入→8チャイム開始/完了、うちTTS4完了/4状態変更中断。残る1件は投入2,589ms後にCANCELLED_STATE_OR_CANDIDATEで再生前取消。別にcooldown抑制2件。再生処理の欠落や復旧不能を示す記録ではなく、現行の状態有効性検査で通知しない経路の実例である。聴取の成否は判断できない。
+
+## Auto Stopの未承認案を分離比較
+
+|案|誤再開を抑える期待|真の再開を見つける遅れ・弱点|
+|---|---|---|
+|再開の連続観測時間を延ばす|短時間の一方向ドリフトを拒否しやすい|追加した観測時間とGPS配送待ちが必要。長く続くドリフトは残る|
+|停止位置からの移動距離を要求|小範囲の位置ぶれを拒否しやすい|ゆっくり歩き始める場合ほど距離が貯まらず遅れる。accuracyに対して有意かも要判断|
+|GNSS速度と位置変位の一致|座標だけが滑る場合を拒否しやすい|速度欠損/0/精度不明の場合の扱い次第で見逃し・遅延。位置と速度が同時に誤る場合は残る|
+|GPS精度不良時に再開を抑制|粗いGPSでの誤判定を減らす期待|都市部で真の再開も待ち続ける可能性。表示accuracy自体も真の誤差ではない|
+|停止確定後の最低保持時間|短い停止→再開→停止の反復数を制限|すぐに走り出した場合も保持時間まで通知が遅れる。記録境界の遡及の扱いも要レビュー|
+
+現時点では停止中の身体位置の正解ラベルがないため、誤再開率の改善%は算出しない。次RUNの手動時刻メモとGPSリプレイで、偽の再開件数/停止場面数と真の再開から検出までのp50/p95を同時評価して採否を決める。今回いずれも未実装。
+
+## 自動検証の最終結果
+
+実装SHA 29e822c5c2175ee1eef7a855b791363e492595eb。JS57 suites/462 tests、native43 tests、実SQLite13 tests、TypeScript/Lint成功。95分GPS seed1105は12遷移、135音声/Pace71、失効0、90分以降の案内あり。PC仮想Repositoryキューp50/p95/max=0/0/0ms。保存遅延は最小6秒で注入し、協調スケジューリングで仮想checkpointはさらに長くなるため、実機の所要時間として引用しない。native既存100分キュー回帰も含む。自動テストの再生callbackを実際の出音と混同しない。
+
+Draft PR #59は#57をbaseとする積み重ね、MERGEABLE確認。最終APK・導入・実機確認・再Backup照合の結果は以下。
+
+## 最終APK・実機確認（11月4日21時台 JST）
+
+[Test v24 APK](https://expo.dev/artifacts/eas/Hqoyvo16Zt5dwbLK1szGo7u8bn88Cd0iR2n1LopuaZQ.apk)、[EAS 7f97dbd6](https://expo.dev/accounts/yshtysht8sh10/projects/RunJourney/builds/7f97dbd6-3660-4537-935a-eb4d107633a3) FINISHED。実装29e822c5c2175ee1eef7a855b791363e492595eb。APK SHA256 `d08f8945955852a880308f724cec24923f8ceb9836cf3381c48d215d0109e36c`、package app.runjourney.mobile.test/versionCode24/minSdk26/targetSdk36。署名SHA256 fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9cは旧Testと一致。adb install -r成功、初回導入日時を保持、実画面Git 29e822c+cloud-sync-v24/EAS 7f97dbd6と端末内APK SHA一致を確認。
+
+START前表示：ペース目標10km・6:00/km・±5秒・音声最小60秒、騒音ON、Auto Stop ON、5分/距離音声ON、現在時刻ON/10分、マイク許可、出力先未確定を確認。既存終了条件は距離10km・自動終了ONと表示。スクロールでSTARTへ到達でき、設定を書き換えていない。
+
+履歴PoCは初期OFFを確認後に明示ON。実画面で4/7/14/28日集計・前後半367→480秒/km・停止16区間・推定見送りを確認し、PC保全データの計算と一致。確認後OFFへ戻した。画面画像は私有保全先のstart-v24.png/recovery-v24.pngに保存し、位置情報を含む原本やログと同様Git/EASへ追加しない。
+
+騒音20秒プレビュー後HOMEへ移動し、アプリ背景/画面ONで合成981ms→STARTED→DONE、再生中ADAPTIVE_APPLIED、gain0.65、出力type2（本体スピーカー）、内蔵マイクtype15、media15/30不変を確認。32有効サンプル、校正/自己音holdを除く計測4,400ms、rawAudioStored=false。20秒後STOPPED、音声/マイク/終了時計serviceなし。これは自然な静かな室内での機能試験であり、制御された交通騒音・急変・Bluetooth・画面OFFの実機試験や聴取の証明ではない。交通騒音/急変/長時間飽和/失敗fallbackはnative回帰で検証し、実機聴取は次RUNへ残す。fallbackの相対音量指定がイヤホンでどの程度効くかも未受入。
+
+v24実機の診断JSONで既存version2/entries/verification/latencySummaryを保持し、fieldSummaryが同じentriesに対するPC集計と完全一致することをassertで確認。Exportの端末-PC SHA一致 `332857de889394576ec9cbb6b7dd1ead1d1f1327073b658bd0f144d4540e3568`。
+
+最終Backupは15,204,647 bytes、端末-PC SHA一致 `9024f8c017f49fdef3591668f729d4288061a6904590cebf05f12c296aa90599`。内部SHA検証、新規隔離SQLiteへ復元してsnapshot全体一致、integrity_check=ok/FK違反0。さらに更新前snapshotとの全体完全一致（配列順を含む）：48履歴/ごみ箱18/19,234GPS点/設定8キー/保護情報/draftなし。検証RUNの作成・削除、Import、ごみ箱/期限処理の起動は行っていない。
+
+Production APK SHA `30a956d9b5197475c1226d10ac39a82c580c4f25e6e84218f8470b9316086d3a`は更新前後不変、Pace packageは端末に存在せず未操作。TestをSTART待機へ戻し、元の設定を保持。バックアップ・旧APK・診断原本・隔離SQLite・比較結果・画面・試験ログはD:/working/RunJourney-preservation/field-20261105に保管。
+
+未完了は屋外/Bluetooth/画面OFFでの聴取効果と電池影響、実移動を伴う停止/再開通知、疲労推定の正解ラベルに基づく精度評価、AI方式/同意UXとAuto Stop/音声仕様のユーザーレビュー。Issueは受入までOPEN、PR #59はDraftのままとする。
