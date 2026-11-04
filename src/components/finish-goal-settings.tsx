@@ -26,6 +26,7 @@ export function FinishGoalSettings({ onReady }: { onReady: (ready: boolean) => v
   };
   return <View style={{ width: '100%', gap: 10, marginVertical: 24 }}>
     <Text style={{ color: '#F5F2EB', fontSize: 18 }}>終了条件（ペース走の目標とは別設定）</Text>
+    <Text style={{ color: '#A6A7A9', lineHeight: 24 }}>適用：{loading ? '読込中…' : kind === 'manual' ? '自動終了 OFF（手動終了のみ）' : `目標${kind === 'distance' ? '距離' : '時間'} ${value || '未入力'}${kind === 'distance' ? 'km' : '分'}・自動終了 ON`}</Text>
     {(['manual', 'distance', 'time'] as const).map(k => <Pressable key={k} disabled={loading} accessibilityRole="radio" accessibilityState={{ checked: kind === k }} onPress={() => void change(k, k === kind ? value : '')} style={{ padding: 12, borderWidth: 1, borderColor: kind === k ? '#E85D2A' : '#777B80', borderRadius: 8 }}>
       <Text style={{ color: '#F5F2EB' }}>{k === 'manual' ? '手動終了のみ' : k === 'distance' ? '目標距離に到達したら終了' : '目標時間に到達したら終了'}</Text>
     </Pressable>)}

@@ -8,7 +8,6 @@ internal class NoiseGain {
   var baselineDb = -90.0; private set
   var calibrated = false; private set
   private val calibration = mutableListOf<Double>()
-  private var noisy = false
   fun update(db: Double, dtSeconds: Double = .2, hold: Boolean = false): Float {
     if (!db.isFinite() || hold) return gain
     val level = db.coerceIn(-90.0, 0.0)
@@ -17,12 +16,15 @@ internal class NoiseGain {
       if (calibration.size >= 10) { baselineDb = calibration.sorted()[2]; calibrated = true; calibration.clear() }
       return gain
     }
-    if (!noisy && level >= baselineDb + 6 && level > -60) noisy = true
-    if (noisy && level <= baselineDb + 3) noisy = false
-    if (!noisy) baselineDb += (level - baselineDb) * (1 - exp(-dtSeconds / 30))
-    val target = if (noisy) 1f else .65f
+    // The former binary latch could stay at 1.0 for an entire outdoor RUN:
+    // its quiet baseline never recovered while noisy. Track a bounded, slow
+    // baseline and use headroom across 3..18 dB, rather than a 6 dB step.
+    val dt = if (dtSeconds.isFinite()) dtSeconds.coerceIn(.01, 1.0) else .2
+    val delta = level - baselineDb
+    val target = if (level <= -60) .65f else (.65 + .35 * ((delta - 3) / 15).coerceIn(0.0, 1.0)).toFloat()
+    baselineDb += (level - baselineDb) * (1 - exp(-dt / if (delta > 3) 120.0 else 30.0))
     val tau = if (target > gain) .4 else 3.0
-    gain = (gain + (target - gain) * (1 - exp(-dtSeconds.coerceIn(.01, 1.0) / tau))).toFloat().coerceIn(.65f, 1f)
+    gain = (gain + (target - gain) * (1 - exp(-dt / tau))).toFloat().coerceIn(.65f, 1f)
     return gain
   }
   companion object {

@@ -26,6 +26,7 @@ internal object NoiseState {
   @Volatile var minDbfs = 0.0
   @Volatile var maxDbfs = -90.0
   @Volatile var screenOffSamples = 0L
+  @Volatile var validMeasurementMs = 0L
   @Volatile var startedAt = 0L
   fun snapshot(context: Context): JSONObject {
     val manager = context.getSystemService(AudioManager::class.java)
@@ -35,6 +36,7 @@ internal object NoiseState {
       .put("dbfs", dbfs).put("baselineDbfs", baseline).put("inputType", inputType).put("outputType", outputType)
       .put("screenInteractive", context.getSystemService(PowerManager::class.java).isInteractive)
       .put("mediaVolume", manager.getStreamVolume(AudioManager.STREAM_MUSIC)).put("mediaVolumeMax", manager.getStreamMaxVolume(AudioManager.STREAM_MUSIC))
+      .put("gainPolicy", "relative-continuous-v2").put("validMeasurementMs", validMeasurementMs)
       .put("samples", samples).put("meanDbfs", if(samples > 0) sumDbfs / samples else JSONObject.NULL)
       .put("minDbfs", if(samples > 0) minDbfs else JSONObject.NULL).put("maxDbfs", if(samples > 0) maxDbfs else JSONObject.NULL)
       .put("screenOffSamples", screenOffSamples).put("startedAt", startedAt).put("updatedAt", updatedAt)
@@ -76,6 +78,7 @@ class NoiseMonitorService : Service() {
         .setContentTitle("RunJourney 騒音レベル測定中").setContentText("音声は保存しません。音量は端末の設定が上限です。")
         .addAction(Notification.Action.Builder(null, "測定を停止", stop).build()).setOngoing(true).build())
       NoiseState.measurementRunId = runId
+      NoiseState.validMeasurementMs = 0
       NoiseState.samples = 0; NoiseState.sumDbfs = 0.0; NoiseState.minDbfs = 0.0; NoiseState.maxDbfs = -90.0; NoiseState.screenOffSamples = 0; NoiseState.startedAt = System.currentTimeMillis()
       capture = true
       worker = Thread({ measure() }, "RunJourneyNoise").also { it.start() }
@@ -114,6 +117,7 @@ class NoiseMonitorService : Service() {
           NoiseState.minDbfs = minOf(NoiseState.minDbfs, level); NoiseState.maxDbfs = maxOf(NoiseState.maxDbfs, level)
           if (!getSystemService(PowerManager::class.java).isInteractive) NoiseState.screenOffSamples++
         }
+        if (!hold && policy.calibrated) NoiseState.validMeasurementMs += count * 1000L / 16000
         NoiseState.gain = policy.update(level, count / 16000.0, hold)
         NoiseState.dbfs = if (hold) NoiseState.dbfs else level
         NoiseState.baseline = policy.baselineDb; NoiseState.updatedAt = System.currentTimeMillis()

@@ -3,6 +3,8 @@ import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'rea
 import { router, useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { RecoveryExperiment } from '@/components/recovery-experiment';
+import * as Application from 'expo-application';
 import { BuildInfo } from '@/components/build-info';
 import { RunService } from '@/services/run-service';
 import { RunHistoryItem } from '@/types/run';
@@ -52,6 +54,7 @@ export default function HistoryScreen() {
         <Pressable testID="open-trash" accessibilityRole="button" onPress={() => router.push('/trash')} style={{ paddingHorizontal: 24, paddingVertical: 14 }}><Text style={styles.date}>ごみ箱 ›</Text></Pressable>
         <View style={styles.buildInfo}><BuildInfo /></View>
         <FlatList
+          ListHeaderComponent={Application.applicationId === 'app.runjourney.mobile.test' ? <RecoveryExperiment /> : null}
           data={runs}
           keyExtractor={(item) => item.id}
           onEndReached={() => { void more(); }}

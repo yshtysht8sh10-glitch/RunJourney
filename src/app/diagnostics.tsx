@@ -13,6 +13,7 @@ import { exportVoiceLog } from '@/services/run-export';
 import { verifyVoiceLog } from '@/domain/voice-log';
 import { VoiceAnnouncement } from '@/services/voice-announcement';
 import { summarizeStopLatency } from '@/domain/stop-latency';
+import { summarizeFieldRun } from '@/domain/field-summary';
 import { AdaptiveAudio } from '@/services/adaptive-audio';
 
 export default function Diagnostics() {
@@ -51,7 +52,7 @@ export default function Diagnostics() {
       const full = await VoiceAnnouncement.debugLog(20000);
       const summary = summarizeStopLatency(JSON.parse(full), run?.id);
       setLatency(summary);
-      await exportVoiceLog(JSON.stringify({ version: 2, entries: JSON.parse(full), verification: verifyVoiceLog(full), latencySummary: summary, noise: AdaptiveAudio.diagnostics() }));
+      await exportVoiceLog(JSON.stringify({ version: 2, entries: JSON.parse(full), verification: verifyVoiceLog(full), latencySummary: summary, fieldSummary: run ? summarizeFieldRun(JSON.parse(full), run.id) : null, noise: AdaptiveAudio.diagnostics() }));
     } catch (e) { Alert.alert('出力できませんでした', String(e)); }
     finally { voiceExportLock.current = false; setExportingVoice(false); }
   };
