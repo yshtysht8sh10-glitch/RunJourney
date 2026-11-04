@@ -129,6 +129,20 @@ class VoiceRecoveryTest {
     assertEquals("AUTO_STOP_CONFIRMED", (get("currentNotice") as JSONObject).optString("type"))
     assertTrue(get("speaking") as Boolean)
   }
+  @Test fun chimeTimeoutRecoversAndRapidResumeCannotReplayOldStopSpeech() {
+    ShadowMediaPlayer.setMediaInfoProvider { ShadowMediaPlayer.MediaInfo(10000, 0) }
+    set("ready", true)
+    batch("AUTO_STOP", notice("AUTO_STOP_CONFIRMED"))
+    val stop = get("chime") as MediaPlayer
+    batch("RUNNING", notice("AUTO_RESUME_CONFIRMED", index = 1), index = 1)
+    assertSame(stop, get("chime"))
+    shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(2001))
+    assertNotSame(stop, get("chime"))
+    assertEquals("AUTO_RESUME_CONFIRMED", (get("currentNotice") as JSONObject).optString("type"))
+    val resume = get("chime") as? MediaPlayer
+    if (resume != null) shadowOf(resume).invokeErrorListener(1, 0)
+    assertFalse(get("chimeActive") as Boolean)
+  }
   @Test fun deferredInformationIsRegeneratedAndMergedAfterStateSpeech() {
     batch("AUTO_STOP", notice("AUTO_STOP_CONFIRMED"), notice("FIVE_MINUTES"), notice("KILOMETER_LAP"), notice("PACE_WARNING"))
     set("recovery", JSONObject().put("message", "fresh current totals").put("data", JSONObject().put("runId", "r").put("sampledAt", System.currentTimeMillis())))
@@ -155,8 +169,12 @@ class VoiceRecoveryTest {
     shadowOf(tts).simulateSynthesizeToFileResult(TextToSpeech.ERROR)
     NoiseState.running = true; NoiseState.updatedAt = System.currentTimeMillis(); NoiseState.gain = .8f
     set("ready", true)
-    batch("RUNNING", notice("FIVE_MINUTES"))
+    val item = notice("FIVE_MINUTES")
+    batch("RUNNING", item)
+    val active = get("currentNotice") as JSONObject
     shadowOf(Looper.getMainLooper()).idle()
+    assertEquals(.8, active.optDouble("directRequestedGain"), .001)
+    assertFalse(active.optBoolean("directGainDynamic"))
     assertEquals("test", shadowOf(tts).lastSpokenText)
     assertNull(get("speechFile")); assertNull(get("adaptivePlayer"))
     assertEquals("DONE", service.getSharedPreferences(RunAnnouncerService.PREFS, 0).getString("ttsStatus", ""))

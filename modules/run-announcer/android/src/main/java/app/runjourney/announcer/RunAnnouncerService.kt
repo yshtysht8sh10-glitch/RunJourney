@@ -64,8 +64,9 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       if (due > preferences.getLong("clockBoundary", 0)) {
         preferences.edit().putLong("clockBoundary", due).apply()
         val n = JSONObject().put("id", "$batchRunId:clock:$due").put("type", "CURRENT_TIME").put("priority", 30)
-          .put("message", CurrentTimePolicy.message(now)).put("expiresAt", now + 5000).put("nativeQueuedAt", now)
+          .put("message", CurrentTimePolicy.message(now)).put("generatedAt", now).put("expiresAt", now + 5000).put("nativeQueuedAt", now)
           .put("data", JSONObject().put("runId", batchRunId).put("sampledAt", now))
+        audit(n, "GENERATED")
         val late = (now - preferences.getLong("clockStarted", 0)) % (preferences.getInt("clockMinutes", 10) * 60000L) > 5000
         if (late || batchState != "RUNNING" || speaking || messages.isNotEmpty() || !ready) audit(n, "SKIPPED_CLOCK_BUSY_PAUSED_OR_LATE")
         else { messages.add(n); audit(n, "QUEUED"); speakNext() }
@@ -118,13 +119,15 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       if (n.has("nativeQueuedAt")) record.put("queueWaitMs", (n.optLong("startedAt", now) - n.optLong("nativeQueuedAt")).coerceAtLeast(0))
       val adaptive = n.optString("playbackMode") == "adaptive-local-synthesis"
       record.put("audio", NoiseState.snapshot(this).put("adaptiveApplied", adaptive)
-        .put("appliedGain", if(adaptive) adaptiveGain else 1f)
+        .put("appliedGain", if(adaptive) adaptiveGain else JSONObject.NULL)
+        .put("requestedGain", if(adaptive) adaptiveGain else n.optDouble("directRequestedGain", 1.0))
+        .put("outputLoudnessMeasured", false)
         .put("gainCeilingReached", adaptive && adaptiveGain >= .99f)
-        .put("relativeToQuiet", if(adaptive) adaptiveGain / .65f else 1f)
+        .put("relativeToQuiet", if(adaptive) adaptiveGain / .65f else JSONObject.NULL)
         .put("exceedsNormalPlayback", false)
         .put("streamAtMaximum", audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) >= audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC))
         .put("adaptiveFallback", n.optString("adaptiveFallback"))
-        .put("effectLimitation", if (!adaptive) "DIRECT_PLAYBACK_NO_ADAPTATION" else if(adaptiveGain >= .99f) "GAIN_CEILING_NO_FURTHER_HEADROOM" else if(NoiseState.outputType == 0) "OUTPUT_ROUTE_UNKNOWN" else "LISTENING_EFFECT_REQUIRES_FIELD_ACCEPTANCE")
+        .put("effectLimitation", if (!adaptive) "DIRECT_VOLUME_REQUEST_ONLY_NO_DYNAMIC_CONTROL" else if(adaptiveGain >= .99f) "GAIN_CEILING_NO_FURTHER_HEADROOM" else if(NoiseState.outputType == 0) "OUTPUT_ROUTE_UNKNOWN" else "LISTENING_EFFECT_REQUIRES_FIELD_ACCEPTANCE")
         .put("fallbackReason", if(adaptive) "" else if(!NoiseState.available()) "MICROPHONE_INACTIVE_OR_STALE" else "IMMEDIATE_STATE_NOTICE_OR_DIRECT_FALLBACK"))
       if (!record.has("startedAt")) record.put("startedAt", JSONObject.NULL)
       VoiceLogStorage.append(applicationContext, record.toString(), now)
@@ -421,6 +424,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   }
 
   private fun playChime(notice: JSONObject, attributes: AudioAttributes) {
+    audit(notice, "CHIME_PREPARING")
     chimeActive = true
     NoiseState.playback = true; NoiseState.externalOutput = false
     notice.put("chimePlayed", true)
@@ -519,8 +523,13 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   }
 
   private fun speakDirect(notice: JSONObject, attributes: AudioAttributes) {
+    notice.put("playbackMode", "direct-tts")
     NoiseState.playback = true; NoiseState.externalOutput = false
     val message = if (notice.optString("type") == "CURRENT_TIME") CurrentTimePolicy.message(System.currentTimeMillis()).also { notice.put("message", it) } else notice.getString("message")
+    val adaptiveEligible = VoicePolicy.information(notice.optString("type")) || notice.optString("type") in listOf("LEGACY", "RUN_GOAL_FINISHED")
+    val directGain = if (adaptiveEligible && NoiseState.available()) NoiseState.gain.coerceIn(.65f, 1f) else 1f
+    notice.put("directRequestedGain", directGain).put("directGainDynamic", false)
+    val params = Bundle().apply { putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, directGain) }
     tts?.setAudioAttributes(attributes)
     val utteranceKey = "runjourney-${System.nanoTime()}"
     tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
@@ -538,7 +547,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     handler.postDelayed({
       if (currentNotice === notice) { tts?.stop(); finishUtterance("PLAYBACK_TIMEOUT") }
     }, 30000)
-    if (tts?.speak(message, TextToSpeech.QUEUE_FLUSH, null, utteranceKey) != TextToSpeech.SUCCESS) finishUtterance("SPEAK_FAILED")
+    if (tts?.speak(message, TextToSpeech.QUEUE_FLUSH, params, utteranceKey) != TextToSpeech.SUCCESS) finishUtterance("SPEAK_FAILED")
   }
 
   private fun finishUtterance(status: String) {
