@@ -92,3 +92,19 @@ Backupは既存schema2のsettingsへ追加するため形式変更なし。復�
 型チェック/Lint、JS/native/実SQLite、開始/予告を含む95分GPSシミュレーションを実施。実機では履歴を作らないSTART設定/終了予告のテスト操作を診断画面へ追加し、実RUNの保存成功・GPS到達そのものの検証と区別する。最終SHA・APK・実機結果・更新前後照合は完成後に追記する。
 
 次RUN：STARTで適用目標・自動終了・Auto Stop・時刻間隔が正しく聞こえるか、距離500m/時間1分予告と目標延長の操作、現在時刻の見送り理由、連続RUNの計測lease継続、Bluetooth/交通騒音下の圧縮音声の明瞭度/違和感/電池を確認する。屋外実走・聴取は未受入。Auto StopのGPS判定、全体音声優先順位、時刻の再試行、端末音量自動変更は設計レビュー待ち。
+
+### Test v25 最終成果物・実機結果（2026-11-05 19:48 JST）
+
+- 実装SHA `61f9632adce7b6580eb35934ab74e71aacb38d20`。Draft [PR #63](https://github.com/yshtysht8sh10-glitch/RunJourney/pull/63) はPR #59をbaseとする積み重ね。merge未実施。
+- [EAS build 107ac6fb](https://expo.dev/accounts/yshtysht8sh10/projects/RunJourney/builds/107ac6fb-8aba-4213-aaf5-3a1dda57e1e6)、[Test v25 APK](https://expo.dev/artifacts/eas/VX_boGidfAPBBg9Gnut4qEgz88eAFps85g-OtI0H4gw.apk)。package `app.runjourney.mobile.test`、versionCode25、min26/target36。
+- APK SHA256 `a579a2499027d68fc721e1051c5851ce9b587d6992ffa86c4d78e9b96a858639`。署名SHA256 `fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c`。端末上APKハッシュ一致、初回インストール日時2026-09-30を保持。実画面 `61f9632+cloud-sync-v25` を確認。
+- JS61 suites/476 tests、native49、SQLite14、型チェック、Lint成功。95分GPS seed1106はSTART/終了予告各1回、音声137/Pace71/失効0/遷移12。再現テストは受入済み、屋外実走は別。
+- 更新直前の再Backupを隔離SQLiteへ復元し、午前の保存データと完全一致（51件/ごみ箱18件/GPS21,084点/設定8件/draftなし、保護情報含む）。更新後のグループ保存→解除のBackupも更新前snapshotと完全一致。最後に本人確認済み連続3RUNを再グループ化し、最終Backupの追加はgroup設定1件のみ。全元RUN/GPS/旧8設定/ごみ箱/保護ID/draftの完全一致と、最終Backupの別DB復元一致を確認。端末でのImportは既存データへ影響させないため未実施。
+- 実機履歴一覧は3RUNを1カードとして表示、元の3個別行との二重表示なし。管理画面でプレビュー/保存/解除/再保存を確認。最終状態は連続3RUN表示グループを保持。画面は私有保全先の `history-group-screen.png`。
+- 履歴なしSTART設定音声でGENERATED→QUEUED→STARTED→DONE、終了予告も同様にDONEを確認。2回目のSTARTテスト中に別preview RUNへ切り替えたケースはINTERRUPTED_RUN_CHANGED/DISCARDEDとなり古い発話を継続しない。HOME遷移を含む。実RUNのGPS開始成功、二重START、目標変更/OFFによる失効は自動テストで確認し、実機の実RUNでは未検証。画面OFFでの新通知も次RUN受入に残す。
+- 実機20秒の騒音テストはadaptive-local-synthesisでDONE。speechClarity APPLIED、RMS 0.130463→0.134027（約2.73%）、peak 0.679810→0.679810、DSP24ms、合成528ms。outputType2（端末スピーカー）でSELF_AUDIO_HOLD、gain0.65、media15/30。システム音量を変更する処理なし。端末外音圧/Bluetoothの実音量/聴取効果は測定しておらず、このRMS変化を実音量改善とは扱わない。Bluetooth未接続のため次RUNで確認。
+- 最後にNoiseMonitor/RunAnnouncer/FinishClockサービス停止を確認し、走行開始前画面へ戻した。検証RUNは作らず、ごみ箱/保持期限処理は起動しない。Production APK SHA256 `30a956d9b5197475c1226d10ac39a82c580c4f25e6e84218f8470b9316086d3a` 一致、Production/Paceへのインストールなし。
+
+私有保全先 `D:/working/RunJourney-preservation/field-20261105-run/` のpreinstall.json/after.json/grouped-device.json、各隔離SQLite、voice-after.json、旧/新APKに証跡を保存。位置情報を含むためGit/PR/EASへ添付しない。診断比較は `node scripts/analyze-field-session.cjs` のusageに従いBackupと音声Exportを入力し、同一RUN ID単位で確認する。過去版にないイベント/保持外ログは欠測とし0件扱いしない。
+
+未完了：実走中の開始/終了予告と設定変更、Bluetooth・交通騒音下の明瞭度/音量、連続RUNの新leaseを実走で確認する。時刻案内の短時間再試行、Auto Stop判定、全体音声優先順位、端末音量制御は未承認設計として保留。各IssueはCloseしない。
