@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import native from '../../../modules/run-announcer';
+import { VoiceAnnouncement } from '@/services/voice-announcement';
+import { GoalWarningSettingsRepository } from '@/repositories/goal-warning-settings';
 import { GpsSimulator } from '@/test/gps-simulator';
 import { ingestLocationBatch } from '@/tasks/location-task';
 import { RunRepository } from '@/repositories/run-repository';
@@ -19,7 +21,8 @@ test('95 minute seeded stream uses the device adapter, real repository/detector/
   jest.spyOn(Date,'now').mockImplementation(()=>sim.now);
   const db = await database(), originalSave = db.saveDraft.bind(db);
   await db.setSetting('@runjourney/voice-announcement/v1','on');
-  const r:ActiveRun={id:'SIMULATION-ONLY-'+sim.seed,startedAt:new Date(sim.now).toISOString(),createdAt:'',updatedAt:'',points:[],events:[],distanceMeters:0,features:{autoStop:true,break:true},diagnostics:{entries:[],counts:{},processed:0},paceWorkout:createPaceWorkout({...DEFAULT_PACE_SETTINGS,enabled:true,distanceKm:200,voice:true,voiceIntervalSec:60},sim.now)};
+  await GoalWarningSettingsRepository.save({distanceMeters:500,timeSeconds:600});
+  const r:ActiveRun={id:'SIMULATION-ONLY-'+sim.seed,startedAt:new Date(sim.now).toISOString(),createdAt:'',updatedAt:'',points:[],events:[],distanceMeters:0,finishGoal:{kind:'time',activeMs:100*60000},features:{autoStop:true,break:true},diagnostics:{entries:[],counts:{},processed:0},paceWorkout:createPaceWorkout({...DEFAULT_PACE_SETTINGS,enabled:true,distanceKm:200,voice:true,voiceIntervalSec:60},sim.now)};
   await RunRepository.saveActiveRun(r);
   let held: {at:number;release:()=>void}[]=[];
   jest.spyOn(db,'saveDraft').mockImplementation(async value=>{await new Promise<void>(release=>{held.push({at:sim.now+6000,release});});await originalSave(value);});
@@ -27,6 +30,7 @@ test('95 minute seeded stream uses the device adapter, real repository/detector/
   jest.mocked(native.notifyBatch!).mockImplementation(payload=>{
     const batch=JSON.parse(payload); for(const n of batch.notices) events.push({id:n.id,type:n.type,status:n.expiresAt < sim.now?'EXPIRED':'ACCEPTED_BY_FAKE_AUDIO',at:sim.now});
   });
+  await VoiceAnnouncement.started(r);
   const cpuStart=performance.now();
   for(let sec=0;sec<=95*60;sec++){
     const batch=sim.step();
@@ -38,6 +42,9 @@ test('95 minute seeded stream uses the device adapter, real repository/detector/
   for(let i=0;!flushed&&i<10000;i++){held.splice(0).forEach(h=>h.release());await Promise.resolve();}
   await barrier;
   jest.mocked(db.saveDraft).mockRestore();
+  await VoiceAnnouncement.beforeGoal((await RunRepository.getActiveRun())!);
+  expect(events.filter(e=>e.type==='RUN_STARTED')).toHaveLength(1);
+  expect(events.filter(e=>e.type==='GOAL_WARNING')).toHaveLength(1);
   const saved=await RunRepository.finishActiveRun(new Date(sim.now).toISOString());
   expect(saved).not.toBeNull();expect(saved!.points.length).toBeGreaterThan(1000);
   expect((await db.list(true)).map(r=>r.id)).toEqual([r.id]);

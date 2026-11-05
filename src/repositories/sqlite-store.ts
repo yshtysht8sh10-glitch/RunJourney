@@ -1,3 +1,4 @@
+import { HISTORY_GROUP_KEY, mergeHistoryGroups } from '../domain/history-groups';
 import type { ActiveRun, RunRecord } from '../types/run';
 import { effectiveRun } from '../utils/run-model';
 import { PAGE_SCHEMA, migratePageIndex, stampRow } from './paged-store';
@@ -307,7 +308,11 @@ export class SqliteStore {
         await s.writeRun(run, 'draft', true); await s.db.runAsync('INSERT INTO active_run(slot,run_id) VALUES(1,?)', run.id);
       }
     }
-    for (const [key, value] of Object.entries(snapshot.settings)) if (await s.readSetting(key) === null) await s.writeSetting(key, value);
+    for (const [key, value] of Object.entries(snapshot.settings)) {
+      const current = await s.readSetting(key);
+      if (key === HISTORY_GROUP_KEY) await s.writeSetting(key, mergeHistoryGroups(current, value));
+      else if (current === null) await s.writeSetting(key, value);
+    }
     for (const id of snapshot.protectedIds ?? (source ? [...snapshot.runs.map(run => run.id), ...(snapshot.draft ? [snapshot.draft.id] : [])] : [])) await s.db.runAsync('UPDATE runs SET protected=1 WHERE id=?',id);
     if (source) await s.db.runAsync('INSERT OR IGNORE INTO migration_log(source,report) VALUES(?,?)', source, JSON.stringify({ added, skipped, draft: snapshot.draft?.id ?? null, rule: 'preserve-ended-draft-no-auto-complete' }));
     return { added, skipped };

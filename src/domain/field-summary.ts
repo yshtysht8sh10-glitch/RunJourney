@@ -43,6 +43,7 @@ export function summarizeFieldRun(entries: Entry[], runId: string) {
       completed: ids(e => e.status === 'DONE'), interrupted: ids(e => /INTERRUPTED|SERVICE_DESTROYED/.test(e.status ?? '')),
       expired: ids(e => /EXPIRED/.test(e.status ?? '')),
       invalidatedOrSkipped: ids(e => /DISCARDED|STALE_STATE|SKIPPED/.test(e.status ?? '')),
+      adaptiveUnavailable: ids(e => e.status === 'STARTED' && ['FIVE_MINUTES','KILOMETER_LAP','PACE_WARNING','RUN_GOAL_FINISHED','RUN_STARTED','GOAL_WARNING'].includes(e.type ?? '') && e.audio?.configured === true && e.audio?.fallbackReason === 'MICROPHONE_INACTIVE_OR_STALE'),
       fallback: ids(e => Boolean(e.audio?.adaptiveFallback) || /SYNTHESIS_(FAILED|TIMEOUT|REJECTED)|ADAPTIVE_(PREPARE|START|PLAYER)_FAILED/.test(e.status ?? '')) },
     chime: Object.fromEntries(['CHIME_PREPARING', 'CHIME_STARTED', 'CHIME_COMPLETED', 'CHIME_FAILED', 'CHIME_TIMEOUT'].map(s => [s, ids(e => e.status === s)])),
     noise: { validMeasurementMs: measurementSessions.size ? [...measurementSessions.values()].reduce((a,b) => a+b,0) : null, observedValidMs, gain: distribution(gains), atCeilingSamples: gains.filter(g => g >= .99).length,

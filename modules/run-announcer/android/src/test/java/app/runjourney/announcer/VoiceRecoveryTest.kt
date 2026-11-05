@@ -217,6 +217,32 @@ class VoiceRecoveryTest {
     assertTrue(get("chimeActive") as Boolean)
   }
 
+  @Test fun obsoleteGoalWarningIsRemovedAndCannotReturnAfterGoalChange() {
+    batch("RUNNING")
+    set("goalRevision", "a"); set("goalRevisionIndex", 0)
+    val warning=notice("GOAL_WARNING").apply {getJSONObject("data").put("goalRevision","a")}
+    batch("RUNNING", warning)
+    assertEquals(1,queue().size)
+    val payload=JSONObject().put("runId","r").put("state","RUNNING").put("goalRevision","b").put("goalRevisionIndex",1).put("notices",JSONArray())
+    service.javaClass.getDeclaredMethod("receiveBatch",String::class.java).apply{isAccessible=true}.invoke(service,payload.toString())
+    assertTrue(queue().isEmpty())
+    batch("RUNNING",notice("GOAL_WARNING","old-again").apply{getJSONObject("data").put("goalRevision","a")})
+    assertTrue(queue().isEmpty())
+  }
+  @Test fun lateEndedRunBatchCannotRestartItsClock() {
+    batch("RUNNING",notice("RUN_GOAL_FINISHED"),ended=true)
+    val prefs=service.getSharedPreferences(RunAnnouncerService.PREFS,Context.MODE_PRIVATE)
+    prefs.edit().putBoolean("clockEnabled",false).commit()
+    val payload=JSONObject().put("runId","r").put("notices",JSONArray()).put("clock",JSONObject().put("enabled",true).put("minutes",5).put("startedAt",System.currentTimeMillis()))
+    service.javaClass.getDeclaredMethod("receiveBatch",String::class.java).apply{isAccessible=true}.invoke(service,payload.toString())
+    assertFalse(prefs.getBoolean("clockEnabled",false))
+  }
+  @Test fun startNoticeIsDeduplicatedEvenAcrossRepeatedBatches() {
+    batch("RUNNING",notice("RUN_STARTED","start"));batch("RUNNING",notice("RUN_STARTED","start"))
+    assertEquals(1,queue().count{it.optString("type")=="RUN_STARTED"})
+    batch("RUNNING",notice("RUN_GOAL_FINISHED"),ended=true)
+    assertFalse(queue().any{it.optString("type")=="RUN_STARTED"})
+  }
   @Test fun hundredMinuteInformationQueueKeepsAcceptingAndCompletingEvents() {
     var count = 0
     for (minute in 1..100) {

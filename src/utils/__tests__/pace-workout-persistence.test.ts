@@ -21,7 +21,7 @@ jest.mock('expo-location', () => ({ Accuracy: { High: 4 }, ActivityType: { Fitne
   requestForegroundPermissionsAsync: async () => ({ status: 'granted' }), requestBackgroundPermissionsAsync: async () => ({ status: 'granted' }),
   getForegroundPermissionsAsync: async () => ({ status: 'granted' }), getBackgroundPermissionsAsync: async () => ({ status: 'granted' }),
   hasStartedLocationUpdatesAsync: async () => true, startLocationUpdatesAsync: jest.fn(), stopLocationUpdatesAsync: jest.fn() }));
-jest.mock('@/services/voice-announcement', () => ({ VoiceAnnouncement: { restore: jest.fn(), updateRun: jest.fn(), stop: jest.fn() } }));
+jest.mock('@/services/voice-announcement', () => ({ VoiceAnnouncement: { goalChanged: jest.fn(), started: jest.fn(), beforeGoal: jest.fn().mockResolvedValue(undefined), restore: jest.fn(), updateRun: jest.fn(), stop: jest.fn() } }));
 const settings = { ...DEFAULT_PACE_SETTINGS, enabled: true };
 const start = Date.parse('2026-10-20T00:00:00Z');
 function draft(): ActiveRun {

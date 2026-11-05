@@ -109,3 +109,19 @@ test('updated-app initialization failure leaves previous SQLite data readable',(
   await assert.rejects(updated.store.atomic(async()=>{}),/startup failed/);updated.close();
   const reopen=open(path.join(root,'db.sqlite'));assert.equal(canonical(await reopen.store.snapshot()),before);reopen.close();
 }));
+
+test('display group backup round-trip preserves original RUNs and rollback rejects overlapping membership',()=>using(async(db,root)=>{
+  const {HISTORY_GROUP_KEY,encodeHistoryGroups}=require('../src/domain/history-groups.ts');
+  await db.store.importRuns([run('group-a'),run('group-b'),run('group-c')]);
+  const original=await db.store.snapshot();
+  const g={id:'g',memberIds:['group-a','group-b'],createdAt:new Date(0).toISOString(),continuous:true};
+  await db.store.setSetting(HISTORY_GROUP_KEY,encodeHistoryGroups([g]));
+  assert.equal(canonical((await db.store.snapshot()).runs),canonical(original.runs));
+  const backup=await encodeBackup(db.store,digest),decoded=await decodeBackup(backup,digest);
+  const restored=open(path.join(root,'group-restored.sqlite'));
+  await restored.store.restore(decoded.snapshot);assert.equal(canonical(await restored.store.snapshot()),canonical(await db.store.snapshot()));
+  const before=canonical(await restored.store.snapshot());
+  const conflicting={...decoded.snapshot,settings:{[HISTORY_GROUP_KEY]:encodeHistoryGroups([{...g,id:'overlap',memberIds:['group-b','group-c']}])}};
+  await assert.rejects(restored.store.restore(conflicting),/重複/);assert.equal(canonical(await restored.store.snapshot()),before);
+  await db.store.setSetting(HISTORY_GROUP_KEY,null);assert.equal(canonical(await db.store.snapshot()),canonical(original));restored.close();
+}));

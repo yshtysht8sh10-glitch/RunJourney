@@ -4,7 +4,7 @@ import { RunService } from '@/services/run-service';
 import { RunRepository } from '@/repositories/run-repository';
 import { ActiveRun } from '@/types/run';
 jest.mock('@/tasks/location-task', () => ({ LOCATION_TASK_NAME: 'test-location' }));
-jest.mock('@/services/voice-announcement', () => ({ VoiceAnnouncement: { stop: jest.fn(), restore: jest.fn() } }));
+jest.mock('@/services/voice-announcement', () => ({ VoiceAnnouncement: { goalChanged: jest.fn(), started: jest.fn(), beforeGoal: jest.fn().mockResolvedValue(undefined), stop: jest.fn(), restore: jest.fn() } }));
 jest.mock('expo-location', () => ({ Accuracy: { High: 4 }, ActivityType: { Fitness: 3 }, hasStartedLocationUpdatesAsync: jest.fn(), stopLocationUpdatesAsync: jest.fn(), startLocationUpdatesAsync: jest.fn(), getForegroundPermissionsAsync: jest.fn() }));
 const draft = (): ActiveRun => ({ id: 'service', startedAt: new Date(0).toISOString(), createdAt: '', updatedAt: '', distanceMeters: 0, points: [] });
 beforeEach(async () => { await AsyncStorage.clear(); jest.clearAllMocks(); await RunRepository.saveActiveRun(draft()); jest.mocked(Location.hasStartedLocationUpdatesAsync).mockResolvedValue(true); });

@@ -1,3 +1,4 @@
+import { HISTORY_GROUP_KEY, parseHistoryGroups } from '../domain/history-groups';
 import { ActiveRun, RunRecord } from '../types/run';
 import { validateRuns } from '../utils/run-backup';
 import { canonical, SqliteStore, SqlSnapshot } from './sqlite-store';
@@ -7,6 +8,7 @@ export type SqliteBackup = { format: 'runjourney-sqlite-backup'; schemaVersion: 
 export function validateSnapshot(snapshot: SqlSnapshot) {
   if (!snapshot || !Array.isArray(snapshot.runs) || !snapshot.settings || typeof snapshot.settings !== 'object' || Array.isArray(snapshot.settings)) throw new Error('SQLite backup構造が不正です');
   validateRuns(snapshot.runs);
+  if(snapshot.settings[HISTORY_GROUP_KEY]) parseHistoryGroups(snapshot.settings[HISTORY_GROUP_KEY]);
   if (snapshot.protectedIds && (!Array.isArray(snapshot.protectedIds) || snapshot.protectedIds.some(id => typeof id !== 'string' || ![...snapshot.runs.map(run => run.id), snapshot.draft?.id].includes(id)))) throw new Error('保護対象IDが不正です');
   if (new Set(snapshot.runs.map(r => r.id)).size !== snapshot.runs.length) throw new Error('Backup内で走行IDが重複しています');
   if (snapshot.draft !== null) {

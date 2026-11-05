@@ -20,7 +20,7 @@ jest.mock('expo-location', () => ({ Accuracy: { High: 4 }, ActivityType: { Fitne
   hasServicesEnabledAsync: async () => true, isBackgroundLocationAvailableAsync: async () => true,
   requestForegroundPermissionsAsync: async () => ({status:'granted'}), requestBackgroundPermissionsAsync: async () => ({status:'granted'}),
   hasStartedLocationUpdatesAsync: async () => true, startLocationUpdatesAsync: jest.fn(), stopLocationUpdatesAsync: jest.fn() }));
-jest.mock('@/services/voice-announcement', () => ({ VoiceAnnouncement: {restore:jest.fn(),updateRun:jest.fn(),stop:jest.fn()} }));
+jest.mock('@/services/voice-announcement', () => ({ VoiceAnnouncement: { goalChanged: jest.fn(), started: jest.fn(), beforeGoal: jest.fn().mockResolvedValue(undefined),restore:jest.fn(),updateRun:jest.fn(),stop:jest.fn()} }));
 
 beforeEach(async () => { resetNative(); await RunRepository.clearActiveRun(); jest.clearAllMocks(); jest.useFakeTimers(); jest.setSystemTime(new Date('2026-10-09T10:00:00Z')); });
 afterEach(() => { injectFault(); jest.restoreAllMocks(); jest.useRealTimers(); });
