@@ -20,7 +20,7 @@ export function NoiseVolumeSettings() {
       <Text style={{ color: '#F5F2EB', fontSize: 18, flex: 1 }}>騒音に合わせた音量調整（試験）</Text>
       <Switch value={enabled} disabled={busy} onValueChange={change} />
     </View>
-    <Text style={{ color: '#A6A7A9', lineHeight: 21, marginTop: 10 }}>初期OFF。走行中は端末マイクを使い、音声は保存・送信しません。イヤホン向けです。静かな時の音量を抑え、騒音時に端末の設定音量まで滑らかに戻します。端末音量を超える増幅はしません。スピーカー再生中は自己音声の影響を避けるため調整を保留します。電池消費が増えます。</Text>
+    <Text style={{ color: '#A6A7A9', lineHeight: 21, marginTop: 10 }}>初期OFF。走行中は端末マイクを使い、音声は保存・送信しません。イヤホン向けです。静かな時の音量を抑え、騒音時に端末の設定音量まで滑らかに戻します。端末音量を超える増幅はしません。スピーカー再生中は自己音声の影響を避けるため調整を保留します。合成音声では、元のピークを超えず弱い部分を持ち上げる明瞭度補正も行います。非対応形式は元の音声を使います。電池消費が増えます。</Text>
     {enabled && <Pressable accessibilityRole="button" disabled={busy} style={{ paddingVertical: 18 }} onPress={() => {
       void AdaptiveAudio.preview().then(status => {
         if (status !== 'STARTING') Alert.alert('測定を開始できませんでした', '画面を開いた状態とマイク権限を確認してください。通常の音声案内は継続します。');

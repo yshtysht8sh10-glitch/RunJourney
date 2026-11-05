@@ -8,6 +8,7 @@ export type LocationPoint = {
 };
 
 export type RunRecord = {
+  startClockSettings?: { enabled: boolean; minutes: number };
   finishGoal?: import('../domain/finish-goal').FinishGoal;
   finishAutoEnabled?: boolean;
   goalChanges?: { at: number; before: import('../domain/finish-goal').FinishGoal; after: import('../domain/finish-goal').FinishGoal; autoBefore: boolean; autoAfter: boolean; paceTargetBefore?: import('../domain/pace-workout').PaceSegment['target']; paceTargetAfter?: import('../domain/pace-workout').PaceSegment['target'] }[];

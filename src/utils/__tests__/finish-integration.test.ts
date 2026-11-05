@@ -8,7 +8,7 @@ import { FinishClock } from '@/services/finish-clock';
 import { injectFault } from '@/test/native-driver';
 jest.mock('@/tasks/location-task', () => ({ LOCATION_TASK_NAME: 'test-location' }));
 jest.mock('@/services/finish-clock', () => ({ FinishClock: { start: jest.fn(), stop: jest.fn() } }));
-jest.mock('@/services/voice-announcement', () => ({ VoiceAnnouncement: { stop: jest.fn(), restore: jest.fn(), finished: jest.fn() } }));
+jest.mock('@/services/voice-announcement', () => ({ VoiceAnnouncement: { goalChanged: jest.fn(), started: jest.fn(), beforeGoal: jest.fn().mockResolvedValue(undefined), stop: jest.fn(), restore: jest.fn(), finished: jest.fn() } }));
 jest.mock('expo-location', () => ({ Accuracy: { High: 4 }, ActivityType: { Fitness: 3 }, hasStartedLocationUpdatesAsync: jest.fn(), stopLocationUpdatesAsync: jest.fn() }));
 const draft = (): ActiveRun => ({ id: 'finish-integration', startedAt: new Date(0).toISOString(), createdAt: '', updatedAt: '', distanceMeters: 0, points: [], finishGoal: { kind: 'time', activeMs: 3600000 } });
 beforeEach(async () => { await AsyncStorage.clear(); jest.clearAllMocks(); await RunRepository.saveActiveRun(draft()); jest.spyOn(Date, 'now').mockReturnValue(3605000); jest.mocked(Location.hasStartedLocationUpdatesAsync).mockResolvedValue(true); });

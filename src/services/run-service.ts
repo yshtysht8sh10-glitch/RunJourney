@@ -10,6 +10,7 @@ import { VoiceAnnouncement } from '@/services/voice-announcement';
 import { isStandaloneTest } from '@/utils/build';
 import { PaceSettingsRepository } from '@/repositories/pace-settings';
 import { createPaceWorkout } from '@/domain/pace-workout';
+import { ClockSettingsRepository } from '@/repositories/clock-settings';
 import { FinishSettings } from '@/repositories/finish-settings';
 import { type FinishGoal, goalAchievement } from '@/domain/finish-goal';
 import { AdaptiveAudio } from '@/services/adaptive-audio';
@@ -33,6 +34,7 @@ const trackingOptions: Location.LocationTaskOptions = {
   },
 };
 
+let startInFlight: Promise<ActiveRun> | null = null;
 let stopInFlight: Promise<RunRecord | null> | null = null;
 let lastFinished: RunRecord | null = null;
 let manualStopAt: string | null = null;
@@ -73,7 +75,11 @@ async function startLocationTask(): Promise<void> {
 }
 
 export const RunService = {
-  async startRun(): Promise<ActiveRun> {
+  startRun(): Promise<ActiveRun> {
+    if (!startInFlight) startInFlight = RunService.startRunOnce().finally(() => { startInFlight = null; });
+    return startInFlight;
+  },
+  async startRunOnce(): Promise<ActiveRun> {
     await assertTrackingIsAvailable();
     await requestPermissions();
     const existing = await RunRepository.getActiveRun();
@@ -82,6 +88,7 @@ export const RunService = {
       await startLocationTask();
       if (existing.finishGoal?.kind === 'time') FinishClock.start(() => RunService.checkGoal());
       await VoiceAnnouncement.restore(existing);
+      await VoiceAnnouncement.started(existing);
       void AdaptiveAudio.start(existing.id, !!existing.paceWorkout?.voice);
       return existing;
     }
@@ -97,6 +104,7 @@ export const RunService = {
       startedAt: now,
       distanceMeters: 0,
       finishGoal,
+      startClockSettings: await ClockSettingsRepository.get(),
       points: [],
       ...(paceWorkout ? { paceWorkout } : {}),
       features: await RunSettings.get(),
@@ -111,6 +119,7 @@ export const RunService = {
     try {
       await startLocationTask();
       await VoiceAnnouncement.restore(active);
+      await VoiceAnnouncement.started(active);
       void AdaptiveAudio.start(active.id, !!active.paceWorkout?.voice);
       return active;
     } catch (error) {
@@ -161,6 +170,8 @@ export const RunService = {
     const run = await RunRepository.updateFinishGoal(runId, goal, autoEnabled);
     if (goal.kind === 'time' && autoEnabled) FinishClock.start(() => RunService.checkGoal());
     else FinishClock.stop();
+    await VoiceAnnouncement.goalChanged(run);
+    void VoiceAnnouncement.beforeGoal(run);
     return run;
   },
 
@@ -178,7 +189,8 @@ export const RunService = {
   subscribeFinish(listener: FinishListener) { finishListeners.add(listener); return () => { finishListeners.delete(listener); }; },
   async checkGoal(run?: ActiveRun | null): Promise<RunRecord | null> {
     const active = run ?? await RunRepository.getActiveRun();
-    if (!active || active.endedAt || !goalAchievement(active, Date.now())) return null;
+    if (!active || active.endedAt) return null;
+    if (!goalAchievement(active, Date.now())) { void VoiceAnnouncement.beforeGoal(active); return null; }
     return RunService.stopRun(true, active.id);
   },
   stopRun(automatic = false, expectedId?: string): Promise<RunRecord | null> {

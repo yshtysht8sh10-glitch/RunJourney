@@ -56,7 +56,7 @@ class NoiseMonitorService : Service() {
   @Volatile private var capture = false
   @Volatile private var recorder: AudioRecord? = null
   private var worker: Thread? = null
-  private var runId = ""
+  @Volatile private var runId = ""
   private val expiry = Runnable { stopSelf() }
   override fun onBind(intent: Intent?): IBinder? = null
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -65,6 +65,25 @@ class NoiseMonitorService : Service() {
       stopSelf(); return START_NOT_STICKY
     }
     if (intent?.action == "FINISH") { handler.removeCallbacks(expiry); handler.postDelayed(expiry, 40000); return START_NOT_STICKY }
+    if (worker != null && capture) {
+      // A new RUN can start during the previous RUN's 40-second finish lease.
+      // Renew it instead of letting that old expiry stop the new RUN's mic.
+      val nextRunId=intent?.getStringExtra("runId") ?: ""
+      if (nextRunId == "preview" && runId.isNotEmpty() && runId != "preview") return START_NOT_STICKY
+      if (getSharedPreferences(RunAnnouncerService.PREFS, 0).getBoolean("noiseUserStopped",false)) { stopSelf(); return START_NOT_STICKY }
+      handler.removeCallbacks(expiry)
+      if (nextRunId != runId) {
+        runId=nextRunId
+        synchronized(NoiseState) {
+          NoiseState.measurementRunId=runId; NoiseState.validMeasurementMs=0
+          NoiseState.samples=0; NoiseState.sumDbfs=0.0; NoiseState.minDbfs=0.0; NoiseState.maxDbfs=-90.0
+          NoiseState.screenOffSamples=0; NoiseState.startedAt=System.currentTimeMillis()
+        }
+      }
+      NoiseState.audit(this,"LEASE_RENEWED",runId)
+      handler.postDelayed(expiry,(intent?.getLongExtra("leaseMs",21600000) ?: 21600000).coerceIn(10000,21600000))
+      return START_NOT_STICKY
+    }
     if (worker != null) return START_NOT_STICKY
     if (getSharedPreferences(RunAnnouncerService.PREFS, 0).getBoolean("noiseUserStopped", false)) { stopSelf(); return START_NOT_STICKY }
     runId = intent?.getStringExtra("runId") ?: ""
@@ -112,12 +131,13 @@ class NoiseMonitorService : Service() {
         val level = NoiseGain.dbfs(pcm, count); pcm.fill(0)
         NoiseState.inputType = record.routedDevice?.type ?: 0
         val hold = NoiseState.playback && !NoiseState.externalOutput
-        if (!hold) {
+        synchronized(NoiseState) { if (!hold) {
           NoiseState.samples++; NoiseState.sumDbfs += level
           NoiseState.minDbfs = minOf(NoiseState.minDbfs, level); NoiseState.maxDbfs = maxOf(NoiseState.maxDbfs, level)
           if (!getSystemService(PowerManager::class.java).isInteractive) NoiseState.screenOffSamples++
         }
         if (!hold && policy.calibrated) NoiseState.validMeasurementMs += count * 1000L / 16000
+        }
         NoiseState.gain = policy.update(level, count / 16000.0, hold)
         NoiseState.dbfs = if (hold) NoiseState.dbfs else level
         NoiseState.baseline = policy.baselineDb; NoiseState.updatedAt = System.currentTimeMillis()

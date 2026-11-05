@@ -10,6 +10,7 @@ import { DEFAULT_VOICE_ITEMS, VoiceItems } from '@/utils/voice-format';
 import { isStandaloneTest } from '@/utils/build';
 import PaceWorkoutSettings from '@/components/pace-workout-settings';
 import { requestPaceLeave } from '@/services/pace-edit-guard';
+import { GoalWarningSettings } from '@/components/goal-warning-settings';
 import { CurrentTimeSettings } from '@/components/clock-settings';
 import { NoiseVolumeSettings } from '@/components/noise-volume-settings';
 
@@ -70,6 +71,7 @@ export default function SettingsScreen() {
       <Switch value={enabled} disabled={busy} onValueChange={change} />
     </Pressable>
     <CurrentTimeSettings />
+    <GoalWarningSettings />
     <Text style={styles.section}>読み上げ内容</Text>
     {isStandaloneTest() && <NoiseVolumeSettings />}
     {(Object.keys(labels) as (keyof VoiceItems)[]).map((key) =>

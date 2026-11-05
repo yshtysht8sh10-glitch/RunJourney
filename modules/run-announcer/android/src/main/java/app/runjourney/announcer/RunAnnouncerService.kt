@@ -49,6 +49,8 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   private var lastPriority = 0
   private var batchMode = false
   private var batchRunId = ""
+  private var goalRevision = ""
+  private var goalRevisionIndex = -1
   private var candidateCancelled = false
   private var batchState = "RUNNING"
   private var latestEventIndex = -1
@@ -61,13 +63,22 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       if (!preferences.getBoolean("clockEnabled", false) || ended) return
       val now = System.currentTimeMillis()
       val due = CurrentTimePolicy.boundary(preferences.getLong("clockStarted", 0), now, preferences.getInt("clockMinutes", 10))
-      if (due > preferences.getLong("clockBoundary", 0)) {
+      val previousBoundary = preferences.getLong("clockBoundary", 0)
+      if (due > previousBoundary) {
         preferences.edit().putLong("clockBoundary", due).apply()
         val n = JSONObject().put("id", "$batchRunId:clock:$due").put("type", "CURRENT_TIME").put("priority", 30)
           .put("message", CurrentTimePolicy.message(now)).put("generatedAt", now).put("expiresAt", now + 5000).put("nativeQueuedAt", now)
-          .put("data", JSONObject().put("runId", batchRunId).put("sampledAt", now))
+          .put("data", JSONObject().put("runId", batchRunId).put("sampledAt", now)
+            .put("scheduledAt", preferences.getLong("clockStarted",0)+due*preferences.getInt("clockMinutes",10)*60000L)
+            .put("intervalMinutes", preferences.getInt("clockMinutes",10)).put("skippedBoundaries", due-previousBoundary-1)
+            .put("state", batchState).put("competingType", currentNotice?.optString("type") ?: "")
+            .put("queueSize", messages.size))
         audit(n, "GENERATED")
         val late = (now - preferences.getLong("clockStarted", 0)) % (preferences.getInt("clockMinutes", 10) * 60000L) > 5000
+        n.getJSONObject("data").put("clockReason", when {
+          late -> "LATE"; batchState != "RUNNING" -> "PAUSED"; !ready -> "TTS_NOT_READY"
+          speaking -> "SPEAKING"; messages.isNotEmpty() -> "QUEUED_AUDIO"; else -> "ELIGIBLE"
+        })
         if (late || batchState != "RUNNING" || speaking || messages.isNotEmpty() || !ready) audit(n, "SKIPPED_CLOCK_BUSY_PAUSED_OR_LATE")
         else { messages.add(n); audit(n, "QUEUED"); speakNext() }
       }
@@ -142,22 +153,28 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     val cancel = batch.optBoolean("cancelCandidate")
     val paused = batch.optBoolean("paused")
     val incoming = batch.getJSONArray("notices")
+    if (debugPrefs.getString("finishedRun", "") == runId && !batch.optBoolean("ended")) {
+      (0 until incoming.length()).forEach { audit(incoming.getJSONObject(it), "RUN_ENDED") }; return
+    }
     batch.optJSONObject("clock")?.let { c ->
       val started = c.optLong("startedAt")
       val minutes = c.optInt("minutes", 10)
-      val same = preferences.getLong("clockStarted", 0) == started && preferences.getInt("clockMinutes", 10) == minutes && preferences.getBoolean("clockEnabled", false)
+      val same = preferences.getLong("clockStarted", 0) == started && preferences.getInt("clockMinutes", 10) == minutes && preferences.getBoolean("clockEnabled", false) == c.optBoolean("enabled")
       preferences.edit().putLong("clockStarted", started).putInt("clockMinutes", minutes).putBoolean("clockEnabled", c.optBoolean("enabled"))
         .putLong("clockBoundary", if(same) preferences.getLong("clockBoundary", 0) else CurrentTimePolicy.boundary(started, System.currentTimeMillis(), minutes)).apply()
+      if (!same) audit(JSONObject().put("id", "$runId:clock-config:$serviceReceivedAt").put("type", "CLOCK_CONFIGURATION")
+        .put("data", JSONObject().put("runId",runId).put("enabled",c.optBoolean("enabled")).put("minutes",minutes).put("startedAt",started)), "CONFIGURED")
       handler.removeCallbacks(clockTick)
       if (c.optBoolean("enabled")) handler.post(clockTick)
-    }
-    if (debugPrefs.getString("finishedRun", "") == runId && !batch.optBoolean("ended")) {
-      (0 until incoming.length()).forEach { audit(incoming.getJSONObject(it), "RUN_ENDED") }; return
     }
     if (batchRunId.isNotEmpty() && batchRunId != runId) {
       messages.forEach { audit(it, "DISCARDED_RUN_CHANGED") }; messages.clear()
       if (!chimeActive) interrupt("INTERRUPTED_RUN_CHANGED")
       recovery = null
+    }
+    if (batchRunId != runId) { goalRevision = ""; goalRevisionIndex = -1 }
+    if (batch.has("goalRevision") && batch.optInt("goalRevisionIndex", 0) >= goalRevisionIndex) {
+      goalRevision = batch.optString("goalRevision"); goalRevisionIndex = batch.optInt("goalRevisionIndex", 0)
     }
     batchRunId = runId; candidateCancelled = cancel
     batch.optJSONObject("recovery")?.let { recovery = it }
@@ -211,6 +228,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   }
   private fun validInState(n: JSONObject): Boolean {
     val type = n.optString("type")
+    if (type == "GOAL_WARNING" && n.optJSONObject("data")?.optString("goalRevision") != goalRevision) return false
     if (type == "LEGACY") return !ended
     if (n.optJSONObject("data")?.optString("runId") != batchRunId) return false
     return VoicePolicy.validState(type, candidateCancelled, batchState, ended,
@@ -461,7 +479,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   }
 
   private fun speakNotice(notice: JSONObject, attributes: AudioAttributes) {
-    if (NoiseState.available() && (VoicePolicy.information(notice.optString("type")) || notice.optString("type") in listOf("LEGACY", "RUN_GOAL_FINISHED"))) {
+    if (NoiseState.available() && (VoicePolicy.information(notice.optString("type")) || notice.optString("type") in listOf("LEGACY", "RUN_GOAL_FINISHED", "RUN_STARTED", "GOAL_WARNING"))) {
       synthesizeAdaptive(notice, attributes); return
     }
     speakDirect(notice, attributes)
@@ -481,9 +499,15 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     }
     tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
       override fun onStart(id: String?) { if (id == key) handler.post { if (speechFile === file) audit(notice, "SYNTHESIS_STARTED") } }
-      override fun onDone(id: String?) { if (id == key) handler.post {
+      override fun onDone(id: String?) { if (id == key) {
+        val synthesisCompletedAt=System.currentTimeMillis()
+        val clarity = SpeechClarity.process(file)
+        val clarityDurationMs=System.currentTimeMillis()-synthesisCompletedAt
+        handler.post {
         if (currentNotice !== notice || speechFile !== file) return@post
-        notice.put("synthesisDurationMs", System.currentTimeMillis() - synthesisRequestedAt)
+        notice.put("synthesisDurationMs", synthesisCompletedAt - synthesisRequestedAt)
+        notice.put("speechClarity", JSONObject().put("status",clarity.status).put("beforeRms",clarity.beforeRms).put("afterRms",clarity.afterRms)
+          .put("processingMs",clarityDurationMs).put("beforePeak",clarity.beforePeak).put("afterPeak",clarity.afterPeak).put("outputLoudnessMeasured",false))
         audit(notice, "SYNTHESIS_COMPLETED")
         try {
           val player = MediaPlayer(); adaptivePlayer = player
@@ -511,7 +535,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
           handler.postDelayed({ if (speechFile === file && !started) fallback("ADAPTIVE_PREPARE_TIMEOUT") }, 2000)
           handler.postDelayed({ if (speechFile === file && currentNotice === notice) finishUtterance("PLAYBACK_TIMEOUT") }, 45000)
         } catch (_: Exception) { fallback("ADAPTIVE_PLAYER_FAILED") }
-      } }
+      } } }
       override fun onError(id: String?) { if (id == key) handler.post { fallback("SYNTHESIS_FAILED") } }
       override fun onError(id: String?, errorCode: Int) { onError(id) }
     })
@@ -526,7 +550,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     notice.put("playbackMode", "direct-tts")
     NoiseState.playback = true; NoiseState.externalOutput = false
     val message = if (notice.optString("type") == "CURRENT_TIME") CurrentTimePolicy.message(System.currentTimeMillis()).also { notice.put("message", it) } else notice.getString("message")
-    val adaptiveEligible = VoicePolicy.information(notice.optString("type")) || notice.optString("type") in listOf("LEGACY", "RUN_GOAL_FINISHED")
+    val adaptiveEligible = VoicePolicy.information(notice.optString("type")) || notice.optString("type") in listOf("LEGACY", "RUN_GOAL_FINISHED", "RUN_STARTED", "GOAL_WARNING")
     val directGain = if (adaptiveEligible && NoiseState.available()) NoiseState.gain.coerceIn(.65f, 1f) else 1f
     notice.put("directRequestedGain", directGain).put("directGainDynamic", false)
     val params = Bundle().apply { putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, directGain) }

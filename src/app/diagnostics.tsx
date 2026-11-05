@@ -69,6 +69,7 @@ export default function Diagnostics() {
           .catch(error => Alert.alert('集計できませんでした', String(error))).finally(() => setExportingVoice(false));
       }}><Text style={styles.text}>停止・通知の遅延サマリーを集計</Text></Pressable>
       {latency && <Text selectable style={styles.log}>{JSON.stringify({ stages: latency.stages, reasons: latency.reasons, candidateCount: latency.candidates.length, limitations: latency.limitations, noise: AdaptiveAudio.diagnostics() }, null, 2)}</Text>}
+      {(['RUN_STARTED','GOAL_WARNING'] as const).map(type=><Pressable key={type} accessibilityRole="button" style={styles.button} onPress={()=>void VoiceAnnouncement.previewRunNotice(type).catch(e=>Alert.alert('テストできませんでした',String(e)))}><Text style={styles.text}>{type==='RUN_STARTED'?'START設定音声':'終了予告音声'}をテスト（履歴なし）</Text></Pressable>)}
       <Text selectable style={styles.log}>{JSON.stringify(JSON.parse(voiceLog).slice(-12), null, 2)}</Text>
       {!!error && <Text accessibilityRole="alert" style={styles.text}>{error}</Text>}
       {!report ? <Text style={styles.text}>{error || '記録がありません'}</Text> : <>

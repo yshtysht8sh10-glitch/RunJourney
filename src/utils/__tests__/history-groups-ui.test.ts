@@ -1,0 +1,38 @@
+import { createElement } from 'react';
+import { act, create, type ReactTestRenderer } from 'react-test-renderer';
+import { Alert, FlatList } from 'react-native';
+import GroupScreen from '@/app/history-groups';
+import History from '@/app/history';
+import { RunRepository } from '@/repositories/run-repository';
+import { HistoryGroupsRepository } from '@/repositories/history-groups';
+import { database } from '@/repositories/database';
+import { resetNative } from '@/test/native-driver';
+import type { RunRecord } from '@/types/run';
+jest.mock('expo-router',()=>({router:{push:jest.fn(),replace:jest.fn()},useFocusEffect:(effect:()=>void)=>jest.requireActual('react').useEffect(effect,[effect])}));
+jest.mock('expo-application',()=>({applicationId:'app.runjourney.mobile.test'}));
+jest.mock('@/components/build-info',()=>({BuildInfo:()=>null}));
+const run=(id:string,start:number,end:number):RunRecord=>({id,startedAt:new Date(start).toISOString(),endedAt:new Date(end).toISOString(),createdAt:'',updatedAt:'',distanceMeters:100,
+  points:[{latitude:35,longitude:139,timestamp:start,accuracy:3,speed:2},{latitude:35.001,longitude:139,timestamp:end,accuracy:3,speed:2}]});
+test('select, preview, group and ungroup preserve originals and do not purge old trash; history counts group once',async()=>{
+  resetNative();await RunRepository.clearActiveRun();
+  await RunRepository.importRuns([run('a',0,100000),run('b',150000,200000),{...run('trash',0,100000),trashedAt:1}]);
+  const db=await database(),before=await db.snapshot();let tree!:ReactTestRenderer;
+  await act(async()=>{tree=create(createElement(GroupScreen));});
+  const selected=tree.root.findAll(n=>n.props.accessibilityRole==='checkbox'&&typeof n.props.onPress==='function').filter((n,i,a)=>!a.some(parent=>parent!==n&&parent.findAll(x=>x===n).length>0));
+  expect(selected).toHaveLength(2);
+  await act(async()=>{selected[0].props.onPress();selected[1].props.onPress();});
+  const button=(phrase:string)=>tree.root.findAll(n=>typeof n.props.onPress==='function'&&n.findAll(t=>[t.props.children].flat(5).filter(v=>typeof v==='string'||typeof v==='number').join('').includes(phrase)).length>0)[0];
+  await act(async()=>{button('プレビュー').props.onPress();});
+  await act(async()=>{button('表示グループとして保存').props.onPress();});
+  expect(await HistoryGroupsRepository.get()).toHaveLength(1);
+  expect((await db.snapshot()).runs).toEqual(before.runs);
+  let history!:ReactTestRenderer;
+  await act(async()=>{history=create(createElement(History));});
+  expect(history.root.findByType(FlatList).props.data).toHaveLength(1);
+  const alert=jest.spyOn(Alert,'alert');
+  await act(async()=>{button('表示グループを解除').props.onPress();});
+  const confirm=alert.mock.calls.at(-1)![2]!.find(v=>v.text==='解除')!;
+  await act(async()=>{confirm.onPress!();});
+  expect(await db.snapshot()).toEqual(before);
+  act(()=>{tree.unmount();history.unmount();});alert.mockRestore();
+});

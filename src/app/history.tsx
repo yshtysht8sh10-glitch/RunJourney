@@ -5,6 +5,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { RecoveryExperiment } from '@/components/recovery-experiment';
 import * as Application from 'expo-application';
+import { HistoryGroupsRepository as Groups } from '@/repositories/history-groups';
+import { HistoryGroupCard } from '@/components/history-group-card';
+import type { summarizeGroup } from '@/domain/history-groups';
 import { BuildInfo } from '@/components/build-info';
 import { RunService } from '@/services/run-service';
 import { RunHistoryItem } from '@/types/run';
@@ -23,12 +26,20 @@ function formatRunDateTime(value: string | undefined) {
 
 export default function HistoryScreen() {
   const [runs, setRuns] = useState<RunHistoryItem[]>([]);
+  const [groupViews,setGroupViews]=useState<{id:string;value:ReturnType<typeof summarizeGroup>}[]>([]);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState('');
   const load = useCallback(async () => {
-    try { const page = await RunService.getHistoryPage(); setRuns(page); setHasMore(page.length === 100); setLoadError(''); }
+    try { const page = await RunService.getHistoryPage(); setRuns(page); setHasMore(page.length === 100); setLoadError('');
+      if(Application.applicationId === 'app.runjourney.mobile.test') {
+        const groups=await Groups.get();
+        const views=await Promise.allSettled(groups.map(async g=>({id:g.id,value:await Groups.preview(g.memberIds,g.continuous)})));
+        setGroupViews(views.filter((r):r is PromiseFulfilledResult<{id:string;value:ReturnType<typeof summarizeGroup>}>=>(r.status==='fulfilled')).map(r=>r.value));
+        if(views.some(r=>r.status==='rejected'))setLoadError('一部グループを確認できないため元RUNを個別表示します。');
+      }
+    }
     catch (error) { setLoadError(error instanceof Error ? error.message : '履歴を読み込めませんでした'); }
   }, []);
 
@@ -46,6 +57,10 @@ export default function HistoryScreen() {
     finally { setLoadingMore(false); }
   };
 
+  const visibleRows = [
+    ...runs.filter(r=>!groupViews.some(g=>g.value.memberIds.includes(r.id))),
+    ...groupViews.filter(g=>!hasMore || !runs.length || g.value.startedAt>=runs.at(-1)!.startedAt).map(g=>({id:'display:'+g.id,startedAt:g.value.startedAt,groupValue:g.value})),
+  ].sort((a,b)=>b.startedAt.localeCompare(a.startedAt));
   return (
     <View style={styles.background}>
       <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
@@ -54,8 +69,8 @@ export default function HistoryScreen() {
         <Pressable testID="open-trash" accessibilityRole="button" onPress={() => router.push('/trash')} style={{ paddingHorizontal: 24, paddingVertical: 14 }}><Text style={styles.date}>ごみ箱 ›</Text></Pressable>
         <View style={styles.buildInfo}><BuildInfo /></View>
         <FlatList
-          ListHeaderComponent={Application.applicationId === 'app.runjourney.mobile.test' ? <RecoveryExperiment /> : null}
-          data={runs}
+          ListHeaderComponent={Application.applicationId === 'app.runjourney.mobile.test' ? <><Pressable accessibilityRole="button" onPress={()=>router.push('./history-groups')} style={{paddingVertical:16}}><Text style={styles.date}>表示グループを作成・解除 ›</Text></Pressable><RecoveryExperiment /></> : null}
+          data={visibleRows}
           keyExtractor={(item) => item.id}
           onEndReached={() => { void more(); }}
           onEndReachedThreshold={0.5}
@@ -63,6 +78,7 @@ export default function HistoryScreen() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor="#E85D2A" />}
           ListEmptyComponent={loadError ? null : <View style={styles.empty}><Text style={styles.emptyTitle}>まだ記録がありません</Text><Text style={styles.emptyText}>最初のランニングを始めましょう。</Text></View>}
           renderItem={({ item }) => {
+            if ('groupValue' in item) return <Pressable accessibilityRole="button" onPress={()=>router.push('./history-groups')} style={{marginVertical:12}}><HistoryGroupCard value={item.groupValue}/></Pressable>;
             const started = formatRunDateTime(item.startedAt);
             const ended = formatRunDateTime(item.endedAt);
             const effective = { ...item, pace: { kmPerHour: item.kmPerHour } };

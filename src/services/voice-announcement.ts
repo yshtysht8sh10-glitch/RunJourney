@@ -1,3 +1,5 @@
+import { goalRevision, goalWarning, startMessage } from '@/domain/run-notices';
+import { GoalWarningSettingsRepository } from '@/repositories/goal-warning-settings';
 import { ClockSettingsRepository } from '@/repositories/clock-settings';
 import SettingsStorage from '@/repositories/storage';
 import { Platform } from 'react-native';
@@ -26,11 +28,58 @@ function nativeAnnouncer() {
   return require('../../modules/run-announcer').default as typeof import('../../modules/run-announcer').default;
 }
 
+const warningSeen = new Set<string>();
+const warningDecisions = new Map<string,string>();
+let warningInFlight: Promise<void> | undefined;
+let pendingWarning: ActiveRun | undefined;
+async function noticeContext(run: ActiveRun) { const observations=(await RunRepository.getRecentObservations(4000,Date.now())).slice(-6).map(p=>({...p,speed:p.speed??undefined,accuracy:p.accuracy??undefined})); return { runId: run.id, state: stateOf(run), paused: stateOf(run) !== 'RUNNING', ended: !!run.endedAt,
+  latestEventIndex: (run.events?.length ?? 0)-1, cancelCandidate: !run.features?.autoStop || !stopHint(observations,Date.now()), goalRevision: goalRevision(run), goalRevisionIndex: run.goalChanges?.length ?? 0 }; }
 export const VoiceAnnouncement = {
+  async goalChanged(run: ActiveRun) {
+    try { await nativeAnnouncer()?.notifyBatch?.(JSON.stringify({...(await noticeContext(run)),notices:[]})); }
+    catch(error) { console.warn('Goal voice invalidation unavailable; saved goal retained',error); }
+  },
+  async previewRunNotice(type: 'RUN_STARTED' | 'GOAL_WARNING') {
+    if (await RunRepository.getActiveRun()) throw Error('走行中はこのテストを使えません');
+    const now=Date.now(), run:ActiveRun={id:`preview-${type}-${now}`,startedAt:new Date(now).toISOString(),createdAt:'',updatedAt:'',points:[],distanceMeters:0,finishGoal:{kind:'distance',meters:10000},features:{autoStop:true,break:false}};
+    const message=type==='RUN_STARTED'?startMessage(run,{enabled:true,minutes:10}):'目標まで残り500メートルです。延長する場合は目標を変更してください。';
+    const id=run.id+':test';diagnosticLog('VOICE_GENERATED',id,type,{runId:run.id,simulation:true});
+    await nativeAnnouncer()?.notifyBatch?.(JSON.stringify({...(await noticeContext(run)),notices:[{id,type,priority:60,generatedAt:now,expiresAt:now+30000,message:'これは音声確認のテストです。'+message,data:{runId:run.id,simulation:true,goalRevision:goalRevision(run)}}]}));
+  },
+  async started(run: ActiveRun) {
+    try {
+      const now=Date.now(), id=`${run.id}:start`, expiresAt=Date.parse(run.startedAt)+30000;
+      const clock=run.startClockSettings ?? await ClockSettingsRepository.get();
+      diagnosticLog('VOICE_GENERATED',id,'RUN_STARTED',{runId:run.id,generatedAt:now,expiresAt,actualGoal:run.finishGoal,autoStop:run.features?.autoStop,clock});
+      await nativeAnnouncer()?.notifyBatch?.(JSON.stringify({...(await noticeContext(run)),clock:{...clock,startedAt:Date.parse(run.startedAt)},notices:[{id,type:'RUN_STARTED',priority:60,message:startMessage(run,clock),generatedAt:now,expiresAt,data:{runId:run.id}}]}));
+    } catch(error) { console.warn('Start voice unavailable; recording retained',error); }
+  },
+  beforeGoal(run: ActiveRun): Promise<void> {
+    pendingWarning = run;
+    const work=async(request: ActiveRun)=>{
+      try {
+        const settings = await GoalWarningSettingsRepository.get();
+        const run = await RunRepository.getActiveRun();
+        if (!run || run.endedAt || run.id !== request.id || goalRevision(run) !== goalRevision(request)) return;
+        const decision=goalWarning(run,settings,Date.now());
+        const key=run.id+':warning:'+goalRevision(run);
+        const status=decision.reason==='DUE'&&warningSeen.has(key)?'ALREADY_GENERATED_FOR_GOAL':decision.reason;
+        if(warningDecisions.get(run.id)!==status) { diagnosticLog('GOAL_WARNING_DECISION',key,status,{runId:run.id,revision:goalRevision(run),remaining:decision.remaining}); warningDecisions.set(run.id,status);while(warningDecisions.size>32)warningDecisions.delete(warningDecisions.keys().next().value!); }
+        if(decision.reason!=='DUE'||!decision.message||warningSeen.has(key))return;
+        warningSeen.add(key);while(warningSeen.size>2048)warningSeen.delete(warningSeen.values().next().value!);
+        const now=Date.now();
+        diagnosticLog('VOICE_GENERATED',key,'GOAL_WARNING',{runId:run.id,generatedAt:now,remaining:decision.remaining});
+        await nativeAnnouncer()?.notifyBatch?.(JSON.stringify({...(await noticeContext(run)),notices:[{id:key,type:'GOAL_WARNING',priority:60,message:decision.message,generatedAt:now,expiresAt:now+15000,data:{runId:run.id,goalRevision:goalRevision(run)}}]}));
+      } catch(error) { console.warn('Goal warning unavailable; goal detection retained',error); }
+    };
+    if(!warningInFlight) warningInFlight=(async()=>{while(pendingWarning){const next=pendingWarning;pendingWarning=undefined;await work(next);}})().finally(()=>{warningInFlight=undefined;});
+    return warningInFlight;
+  },
   async finished(run: RunRecord): Promise<void> {
     const allowed = await this.enabled() || validPaceState(run.paceWorkout) && run.paceWorkout.voice;
     if (!allowed) { diagnosticLog('RUN_FINISH_VOICE', `${run.id}:finish`, 'SUPPRESSED_VOICE_OFF', { runId: run.id }); return; }
     const summary = finishVoice(run), now = Date.now();
+    diagnosticLog('VOICE_GENERATED',`${run.id}:finish`,'RUN_GOAL_FINISHED',{runId:run.id,generatedAt:now});
     await nativeAnnouncer()?.notifyBatch?.(JSON.stringify({ runId: run.id, ended: true, cancelCandidate: true, paused: true,
       notices: [{ id: `${run.id}:finish`, type: 'RUN_GOAL_FINISHED', message: summary.message, generatedAt: now, dispatchedAt: now, queuedAt: now, expiresAt: now + 30000, priority: 110, data: summary.data }] }));
   },
@@ -212,7 +261,7 @@ async function updateGuidance(run: ActiveRun, stateOnly: boolean) {
   const send = async () => {
     if (finishedRuns.has(run.id)) return;
     notices.forEach(n => { n.dispatchedAt = Date.now(); });
-    await native?.notifyBatch?.(JSON.stringify({ clock: { ...clockSettings, startedAt: Date.parse(run.startedAt) }, notices: notices.splice(0), recovery: recoveryGuidance(run, now), cancelCandidate: !candidate, paused: !running, state: stateOf(run), latestEventIndex: (run.events?.length ?? 0) - 1, runId: run.id }));
+    await native?.notifyBatch?.(JSON.stringify({ clock: { ...clockSettings, startedAt: Date.parse(run.startedAt) }, notices: notices.splice(0), recovery: recoveryGuidance(run, now), cancelCandidate: !candidate, paused: !running, state: stateOf(run), goalRevision: goalRevision(run), goalRevisionIndex: run.goalChanges?.length ?? 0, latestEventIndex: (run.events?.length ?? 0) - 1, runId: run.id }));
     lastBatchState = batchState;
   };
   // State feedback must leave JS before kilometer interpolation or voice-item I/O.
