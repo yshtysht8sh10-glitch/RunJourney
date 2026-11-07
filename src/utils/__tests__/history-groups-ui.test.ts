@@ -36,3 +36,17 @@ test('select, preview, group and ungroup preserve originals and do not purge old
   expect(await db.snapshot()).toEqual(before);
   act(()=>{tree.unmount();history.unmount();});alert.mockRestore();
 });
+
+test('page boundary: a loaded later member keeps the older-started group visible and unique',async()=>{
+  resetNative();await RunRepository.clearActiveRun();
+  const originals=[run('old',0,100000),run('new',150000,200000),...Array.from({length:99},(_,i)=>run('later'+i,1000000+i*200000,1100000+i*200000))];
+  await RunRepository.importRuns(originals);await HistoryGroupsRepository.create(['old','new'],true);
+  const db=await database(),before=await db.snapshot();let tree!:ReactTestRenderer;
+  await act(async()=>{tree=create(createElement(History));});
+  const rows=()=>tree.root.findByType(FlatList).props.data;
+  expect(rows()).toHaveLength(100);expect(rows().filter((r:{groupValue?:unknown})=>r.groupValue)).toHaveLength(1);
+  expect(rows().at(-1).startedAt).toBe(new Date(0).toISOString());
+  await act(async()=>{await tree.root.findByType(FlatList).props.onEndReached();});
+  expect(rows()).toHaveLength(100);expect(rows().filter((r:{groupValue?:unknown})=>r.groupValue)).toHaveLength(1);
+  expect(await db.snapshot()).toEqual(before);act(()=>tree.unmount());
+});

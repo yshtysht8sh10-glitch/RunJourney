@@ -49,9 +49,11 @@ export function summarizeGroup(members: GroupMember[], continuous = false) {
     if (Math.abs(a!.timestamp - end) > 15000 || Math.abs(b!.timestamp - start) > 15000) return unknown('GPS_NOT_NEAR_BOUNDARY');
     const dt = b!.timestamp - a!.timestamp;
     if (a!.timestamp > end || b!.timestamp < start) return unknown('GPS_DOES_NOT_BRACKET_GAP');
-    const distance = distanceBetween(a!, b!) * gapMs / dt;
     if (dt <= 0) return unknown('GPS_TIME_REVERSED_OR_ZERO');
-    if (!Number.isFinite(distance) || distance / (dt / 1000) > 12.5) return unknown('IMPLAUSIBLE_SPEED');
+    const observedDistance = distanceBetween(a!, b!);
+    const observedSpeed = observedDistance / (dt / 1000);
+    if (!Number.isFinite(observedSpeed) || observedSpeed > 12.5) return unknown('IMPLAUSIBLE_SPEED');
+    const distance = observedDistance * gapMs / dt;
     if (gapMs === 0) return unknown('ZERO_GAP_UNRECORDED_PATH_UNKNOWN');
     // Do not interpret uncertain displacement as confirmed movement. Speed alone
     // is not proof; both endpoints must corroborate it and exceed uncertainty.

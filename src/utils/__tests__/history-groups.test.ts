@@ -27,3 +27,27 @@ test('group settings round-trip and conflict detection prevent double membership
   const text=encodeHistoryGroups([g]);expect(parseHistoryGroups(mergeHistoryGroups(text,text))).toEqual([g]);
   expect(()=>mergeHistoryGroups(text,encodeHistoryGroups([{...g,id:'g2'}]))).toThrow('重複');
 });
+
+test('reject 445m over 31s before scaling to the one-second unrecorded gap',()=>{
+ const a=m('a',0,100000),b=m('b',101000,200000);
+ a.last={latitude:35,longitude:139,timestamp:85000,accuracy:1,speed:2};
+ b.first={latitude:35+445/111195,longitude:139,timestamp:116000,accuracy:1,speed:2};
+ const result=summarizeGroup([a,b],true);
+ expect(result.gaps[0].reason).toBe('IMPLAUSIBLE_SPEED');
+ expect(result.estimatedDistanceMeters).toBeNull();expect(result.estimatedRunningMs).toBeNull();
+});
+
+test.each([12.5,12.50001,2])('original observation speed %s m/s is checked before interpolation',speed=>{
+ const a=m('a',0,100000),b=m('b',101000,200000);
+ a.last={latitude:0,longitude:0,timestamp:85000,accuracy:1,speed:2};
+ b.first={latitude:0,longitude:(speed*31/6371000)*180/Math.PI,timestamp:116000,accuracy:1,speed:2};
+ const result=summarizeGroup([a,b],true);
+ if(speed>12.5){expect(result.estimatedDistanceMeters).toBeNull();expect(result.estimatedRunningMs).toBeNull();}
+ else {expect(result.estimatedDistanceMeters).toBeCloseTo(speed,7);}
+});
+test.each(['zero','reverse','accuracy'] as const)('invalid observation %s remains unknown',kind=>{
+ const a=m('a',0,100000),b=m('b',100000,200000);
+ a.last!.timestamp=100000;b.first!.timestamp=kind==='reverse'?99999:100000;
+ if(kind==='accuracy')b.first!.accuracy=21;
+ const r=summarizeGroup([a,b],true);expect(r.estimatedDistanceMeters).toBeNull();expect(r.estimatedRunningMs).toBeNull();
+});

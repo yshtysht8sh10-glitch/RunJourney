@@ -8,6 +8,7 @@ import * as Application from 'expo-application';
 import { HistoryGroupsRepository as Groups } from '@/repositories/history-groups';
 import { HistoryGroupCard } from '@/components/history-group-card';
 import type { summarizeGroup } from '@/domain/history-groups';
+import { historyRows } from '@/domain/history-list';
 import { BuildInfo } from '@/components/build-info';
 import { RunService } from '@/services/run-service';
 import { RunHistoryItem } from '@/types/run';
@@ -57,10 +58,7 @@ export default function HistoryScreen() {
     finally { setLoadingMore(false); }
   };
 
-  const visibleRows = [
-    ...runs.filter(r=>!groupViews.some(g=>g.value.memberIds.includes(r.id))),
-    ...groupViews.filter(g=>!hasMore || !runs.length || g.value.startedAt>=runs.at(-1)!.startedAt).map(g=>({id:'display:'+g.id,startedAt:g.value.startedAt,groupValue:g.value})),
-  ].sort((a,b)=>b.startedAt.localeCompare(a.startedAt));
+  const visibleRows = historyRows(runs, groupViews);
   return (
     <View style={styles.background}>
       <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
