@@ -1,5 +1,7 @@
-import { useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { useCallback, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
+import { Text, View } from 'react-native';
+import { RecoverySettings } from '@/repositories/recovery-settings';
 import { RunService } from '@/services/run-service';
 import { RunRepository } from '@/repositories/run-repository';
 import { recoveryAnalysis } from '@/domain/recovery-analysis';
@@ -7,10 +9,14 @@ import { recoveryAnalysis } from '@/domain/recovery-analysis';
 export function RecoveryExperiment() {
   const [enabled, setEnabled] = useState(false), [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ReturnType<typeof recoveryAnalysis> | null>(null), [error, setError] = useState('');
-  const start = async () => {
-    if (busy) return;
-    if (enabled) { setEnabled(false); setResult(null); return; }
-    setEnabled(true); setBusy(true); setError('');
+  useFocusEffect(useCallback(()=>{
+    let live=true,revision=0;
+    const start = async () => {
+    const current=++revision;
+    const valid=()=>live&&current===revision;
+    setResult(null);setError('');
+    const on=await RecoverySettings.get();if(!valid())return;setEnabled(on);
+    if(!on){setBusy(false);return;}setBusy(true);
     try {
       const rows = await RunService.getHistoryPage(1000);
       if (!rows.length) throw Error('記録がありません。');
@@ -18,14 +24,16 @@ export function RecoveryExperiment() {
       if (summary.pointCount > 2048) throw Error('この実験では長大なRUNの分析を見送ります（GPS 2,048点まで）。');
       const run = await RunRepository.getRun(rows[0].id);
       if (!run || run.trashedAt) throw Error('対象記録を確認できません。');
-      setResult(recoveryAnalysis(rows, run, rows.length < 1000));
-    } catch (e) { setError(String(e)); }
-    finally { setBusy(false); }
-  };
+      if(valid())setResult(recoveryAnalysis(rows, run, rows.length < 1000));
+    } catch (e) { if(valid())setError(String(e)); }
+    finally { if(valid())setBusy(false); }
+    };
+    const load=()=>{void start().catch(e=>{if(live){setError(String(e));setBusy(false);}});};
+    load();const unsub=RecoverySettings.subscribe(load);return()=>{live=false;unsub();};
+  },[]));
+  if(!enabled)return null;
   return <View style={{ paddingHorizontal: 24, paddingVertical: 12 }}>
-    <Pressable accessibilityRole="switch" accessibilityState={{ checked: enabled, disabled: busy }} disabled={busy} onPress={() => void start()} style={{ minHeight: 48 }}>
-      <Text style={{ color: '#A4D8B5', lineHeight: 24 }}>疲労・回復分析（実験）{enabled ? 'ON' : 'OFF'} · {busy ? '分析中…' : '初期OFF・設定は保存しません'}</Text>
-    </Pressable>
+    <Text style={{color:'#A4D8B5',lineHeight:24}}>疲労・回復分析（実験）{busy?' · 分析中…':''}</Text>
     {enabled && <Text style={{ color: '#A6A7A9', lineHeight: 23 }}>端末内のルール・統計による観察です。外部AI送信・走行中の音声警告はありません。</Text>}
     {!!error && <Text accessibilityRole="alert" style={{ color: '#FFB398' }}>{error}</Text>}
     {result && <>

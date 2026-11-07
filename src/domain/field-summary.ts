@@ -45,7 +45,11 @@ export function summarizeFieldRun(entries: Entry[], runId: string) {
       invalidatedOrSkipped: ids(e => /DISCARDED|STALE_STATE|SKIPPED/.test(e.status ?? '')),
       adaptiveUnavailable: ids(e => e.status === 'STARTED' && ['FIVE_MINUTES','KILOMETER_LAP','PACE_WARNING','RUN_GOAL_FINISHED','RUN_STARTED','GOAL_WARNING'].includes(e.type ?? '') && e.audio?.configured === true && e.audio?.fallbackReason === 'MICROPHONE_INACTIVE_OR_STALE'),
       fallback: ids(e => Boolean(e.audio?.adaptiveFallback) || /SYNTHESIS_(FAILED|TIMEOUT|REJECTED)|ADAPTIVE_(PREPARE|START|PLAYER)_FAILED/.test(e.status ?? '')) },
-    chime: Object.fromEntries(['CHIME_PREPARING', 'CHIME_STARTED', 'CHIME_COMPLETED', 'CHIME_FAILED', 'CHIME_TIMEOUT'].map(s => [s, ids(e => e.status === s)])),
+    chime: {
+      ...Object.fromEntries(['CHIME_PREPARING', 'CHIME_STARTED', 'CHIME_COMPLETED', 'CHIME_FAILED', 'CHIME_TIMEOUT', 'CHIME_INTERRUPTED_BEFORE_BODY', 'BODY_REQUESTED_AFTER_CHIME', 'EXPIRED_OR_INVALID_BEFORE_BODY'].map(s => [s, ids(e => e.status === s)])),
+      completedChimeWithoutRetainedBodyStart: ids(e=>e.status==='CHIME_COMPLETED' && !retained.some(body=>body.id===e.id && body.status==='STARTED')),
+      missingBodyLimitation:'No retained STARTED may mean cancellation, expiry, pending playback or missing log coverage; inspect the same event ID.',
+    },
     noise: { validMeasurementMs: measurementSessions.size ? [...measurementSessions.values()].reduce((a,b) => a+b,0) : null, observedValidMs, gain: distribution(gains), atCeilingSamples: gains.filter(g => g >= .99).length,
       gainBuckets: { quiet: gains.filter(g => g <= .7).length, intermediate: gains.filter(g => g > .7 && g < .99).length, ceiling: gains.filter(g => g >= .99).length },
       sampleCount: gains.length, sampling: 'Retained 5-second monitoring rows; valid time is a conservative observed interval sum.' },

@@ -12,9 +12,9 @@ import { announcementClock, completedLapAnalysis, stateOf } from '@/utils/run-mo
 import { analyzePace, DEFAULT_LAP_MS } from '@/utils/pace-analysis';
 import { DEFAULT_VOICE_ITEMS, formatAnnouncement, VoiceItems } from '@/utils/voice-format';
 import { distanceBetween } from '@/utils/distance';
-import { activeBoundaryWallTime, kilometerLaps, recoveryGuidance, stopHint, voiceSnapshot } from '@/domain/voice-guidance';
+import { lapDifferenceMessage, activeBoundaryWallTime, kilometerLaps, recoveryGuidance, stopHint, voiceSnapshot } from '@/domain/voice-guidance';
 import { RunRepository } from '@/repositories/run-repository';
-import { validPaceState } from '@/domain/pace-workout';
+import { validPaceState, validPaceLapState } from '@/domain/pace-workout';
 
 const SETTING_KEY = '@runjourney/voice-announcement/v1';
 // Keep the trigger separate from the UI so distance and other intervals can be added later.
@@ -39,12 +39,14 @@ export const VoiceAnnouncement = {
     try { await nativeAnnouncer()?.notifyBatch?.(JSON.stringify({...(await noticeContext(run)),notices:[]})); }
     catch(error) { console.warn('Goal voice invalidation unavailable; saved goal retained',error); }
   },
-  async previewRunNotice(type: 'RUN_STARTED' | 'GOAL_WARNING') {
+  async previewRunNotice(type: 'RUN_STARTED' | 'GOAL_WARNING' | 'KILOMETER_LAP' | 'FIVE_MINUTES' | 'PACE_WARNING' | 'AUTO_STOP_CONFIRMED' | 'AUTO_RESUME_CONFIRMED') {
     if (await RunRepository.getActiveRun()) throw Error('走行中はこのテストを使えません');
     const now=Date.now(), run:ActiveRun={id:`preview-${type}-${now}`,startedAt:new Date(now).toISOString(),createdAt:'',updatedAt:'',points:[],distanceMeters:0,finishGoal:{kind:'distance',meters:10000},features:{autoStop:true,break:false}};
-    const message=type==='RUN_STARTED'?startMessage(run,{enabled:true,minutes:10}):'目標まで残り500メートルです。延長する場合は目標を変更してください。';
+    const message=type==='RUN_STARTED'?startMessage(run,{enabled:true,minutes:10}):type==='GOAL_WARNING'?'目標まで残り500メートルです。延長する場合は目標を変更してください。':type==='KILOMETER_LAP'?'5キロを通過しました。'+lapDifferenceMessage(-3,12):type==='FIVE_MINUTES'?'5分経過しました。走行距離は1キロメートルです。':type==='PACE_WARNING'?'目標より少しペースが遅いです。':type==='AUTO_STOP_CONFIRMED'?'走行タイマーを一時停止しました。':'走行タイマーを再開しました。';
+    const context=await noticeContext(run);
+    if(type==='AUTO_STOP_CONFIRMED'){context.state='AUTO_STOP';context.paused=true;}
     const id=run.id+':test';diagnosticLog('VOICE_GENERATED',id,type,{runId:run.id,simulation:true});
-    await nativeAnnouncer()?.notifyBatch?.(JSON.stringify({...(await noticeContext(run)),notices:[{id,type,priority:60,generatedAt:now,expiresAt:now+30000,message:'これは音声確認のテストです。'+message,data:{runId:run.id,simulation:true,goalRevision:goalRevision(run)}}]}));
+    await nativeAnnouncer()?.notifyBatch?.(JSON.stringify({...context,notices:[{id,type,priority:type.startsWith('AUTO_')?100:type==='KILOMETER_LAP'?70:type==='FIVE_MINUTES'?40:type==='PACE_WARNING'?20:60,generatedAt:now,expiresAt:now+30000,message:'これは音声確認のテストです。'+message,data:{runId:run.id,simulation:true,goalRevision:goalRevision(run)}}]}));
   },
   async started(run: ActiveRun) {
     try {
@@ -216,7 +218,7 @@ async function updateGuidance(run: ActiveRun, stateOnly: boolean) {
   // Preference I/O may queue behind a long GPS checkpoint. Evaluate freshness
   // after that wait, so a stale observation cannot create a new stop hint.
   const now = Date.now();
-  const workout = validPaceState(run.paceWorkout) && run.paceWorkout.voice;
+  const workout = validPaceLapState(run.paceWorkout) && run.paceWorkout.voice;
   if (!periodic && !workout && !clockSettings.enabled) return;
   if (hintSession.runId !== run.id) hintSession = { runId: run.id, active: false, lastAt: -Infinity, detectedAt: 0, lowSpeedAt: 0 };
   const snapshot = voiceSnapshot(run, now);
@@ -281,10 +283,11 @@ async function updateGuidance(run: ActiveRun, stateOnly: boolean) {
       const wallAt = activeBoundaryWallTime(run, lap.activeMs, now);
       add(`km:${lap.km}`, 'KILOMETER_LAP', lap.message, wallAt, 30000, 70,
         { lapDistanceMeters: 1000, km: lap.km, startActiveMs: lap.startActiveMs, startBoundary: lap.startBoundary, endBoundary: lap.endBoundary, lapMs: lap.lapMs, lapSavingsSec: lap.lapSavings,
+          targetLapSeconds:lap.targetLapSeconds,targetCumulativeSeconds:lap.targetCumulativeSeconds,
           cumulativeSavingsSec: lap.cumulativeSavings, distanceMeters: lap.km * 1000, activeMs: lap.activeMs,
           boundaryWallAt: wallAt, snapshotDistanceMeters: snapshot.distanceMeters, snapshotActiveMs: snapshot.activeMs });
     }
-    const notice = run.paceWorkout?.notice;
+    const notice = validPaceState(run.paceWorkout) ? run.paceWorkout.notice : undefined;
     if (notice) add(notice.key, notice.goal ? 'WORKOUT_GOAL' : 'PACE_WARNING', notice.message, notice.at, 20000, notice.goal ? 60 : 20);
   }
   if (periodic) {

@@ -6,8 +6,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { RecoveryExperiment } from '@/components/recovery-experiment';
 import * as Application from 'expo-application';
 import { HistoryGroupsRepository as Groups } from '@/repositories/history-groups';
-import { HistoryGroupCard } from '@/components/history-group-card';
 import type { summarizeGroup } from '@/domain/history-groups';
+import { historyRows } from '@/domain/history-list';
 import { BuildInfo } from '@/components/build-info';
 import { RunService } from '@/services/run-service';
 import { RunHistoryItem } from '@/types/run';
@@ -57,10 +57,7 @@ export default function HistoryScreen() {
     finally { setLoadingMore(false); }
   };
 
-  const visibleRows = [
-    ...runs.filter(r=>!groupViews.some(g=>g.value.memberIds.includes(r.id))),
-    ...groupViews.filter(g=>!hasMore || !runs.length || g.value.startedAt>=runs.at(-1)!.startedAt).map(g=>({id:'display:'+g.id,startedAt:g.value.startedAt,groupValue:g.value})),
-  ].sort((a,b)=>b.startedAt.localeCompare(a.startedAt));
+  const visibleRows = historyRows(runs, groupViews);
   return (
     <View style={styles.background}>
       <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
@@ -78,15 +75,19 @@ export default function HistoryScreen() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor="#E85D2A" />}
           ListEmptyComponent={loadError ? null : <View style={styles.empty}><Text style={styles.emptyTitle}>まだ記録がありません</Text><Text style={styles.emptyText}>最初のランニングを始めましょう。</Text></View>}
           renderItem={({ item }) => {
-            if ('groupValue' in item) return <Pressable accessibilityRole="button" onPress={()=>router.push('./history-groups')} style={{marginVertical:12}}><HistoryGroupCard value={item.groupValue}/></Pressable>;
+            const group = 'groupValue' in item ? item.groupValue : null;
+            const normal = 'groupValue' in item ? null : item;
             const started = formatRunDateTime(item.startedAt);
-            const ended = formatRunDateTime(item.endedAt);
-            const effective = { ...item, pace: { kmPerHour: item.kmPerHour } };
+            const ended = formatRunDateTime(group?.endedAt ?? normal?.endedAt);
+            const distance = group?.recordedDistanceMeters ?? normal!.distanceMeters;
+            const active = group?.recordedRunningMs ?? normal!.activeRunningTime;
+            const speed = group ? (active > 0 ? distance / active * 3600 : null) : normal!.kmPerHour;
             return (
-              <Pressable accessibilityRole="button" accessibilityLabel="走行履歴の詳細" onPress={() => router.push({ pathname: '/run-detail', params: { id: item.id } })} style={styles.row}>
+              <Pressable accessibilityRole="button" accessibilityLabel={group ? `表示グループ ${group.memberIds.length} RUNの詳細` : '走行履歴の詳細'} onPress={() => router.push(group ? { pathname: './history-group-detail', params: { id: item.id.slice(8) } } : { pathname: '/run-detail', params: { id: item.id } })} style={styles.row}>
                 <View testID="history-when" style={styles.when}>
                   <View style={styles.dateTime}>
                   <Text testID="history-date" style={styles.date}>{started ? dateFormatter.format(started) : '日付不明'}</Text>
+                  {group && <Text style={{color:'#A4D8B5',fontSize:12}}>● {group.memberIds.length} RUN</Text>}
                   <Text testID="history-times" style={styles.times}>
                     {started ? timeFormatter.format(started) : '開始時刻不明'} → {ended ? timeFormatter.format(ended) : '終了時刻不明'}
                   </Text>
@@ -95,9 +96,9 @@ export default function HistoryScreen() {
                   <Text testID="history-details" style={styles.details}>詳細 ›</Text>
                 </View>
                 <View testID="history-primary" style={styles.primary}>
-                  <Text testID="history-active-time" style={styles.activeTime}>実走 {Math.floor(effective.activeRunningTime / 60000)}分</Text>
-                  <Text testID="history-distance" style={styles.distance}>{(effective.distanceMeters / 1000).toFixed(2)} km</Text>
-                  <Text testID="history-speed" style={styles.activeTime}>平均 {effective.pace.kmPerHour !== null && Number.isFinite(effective.pace.kmPerHour) ? effective.pace.kmPerHour.toFixed(1) : '—'} km/h</Text>
+                  <Text testID="history-active-time" style={styles.activeTime}>実走 {Math.floor(active / 60000)}分</Text>
+                  <Text testID="history-distance" style={[styles.distance,group ? {color:'#A4D8B5'} : null]}>{(distance / 1000).toFixed(2)} km</Text>
+                  <Text testID="history-speed" style={styles.activeTime}>平均 {speed !== null && Number.isFinite(speed) ? speed.toFixed(1) : '—'} km/h</Text>
                 </View>
               </Pressable>
             );

@@ -169,7 +169,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     }
     if (batchRunId.isNotEmpty() && batchRunId != runId) {
       messages.forEach { audit(it, "DISCARDED_RUN_CHANGED") }; messages.clear()
-      if (!chimeActive) interrupt("INTERRUPTED_RUN_CHANGED")
+      if (!chimeActive || currentNotice?.let { VoicePolicy.commonChime(it.optString("type")) } == true) interrupt("INTERRUPTED_RUN_CHANGED")
       recovery = null
     }
     if (batchRunId != runId) { goalRevision = ""; goalRevisionIndex = -1 }
@@ -211,7 +211,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
             messages.remove(it); audit(it, "DISCARDED_NEWER_INFORMATION")
           }
           if (n.optInt("priority") >= 80) messages.filter { VoicePolicy.information(it.optString("type")) }.forEach { defer(it) }
-          if (VoicePolicy.information(type) && (paused || chimeActive || (currentNotice?.optInt("priority") ?: 0) >= 80 || messages.any { it.optInt("priority") >= 80 })) defer(n)
+          if (VoicePolicy.information(type) && (paused || (chimeActive && currentNotice?.let { !VoicePolicy.commonChime(it.optString("type")) } == true) || (currentNotice?.optInt("priority") ?: 0) >= 80 || messages.any { it.optInt("priority") >= 80 })) defer(n)
           messages.add(n)
         }
       }
@@ -220,7 +220,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     messages.sortByDescending { it.optInt("priority") }
     val nextPriority = messages.firstOrNull()?.optInt("priority") ?: 0
     // A short, valid stop hint must not wait behind a long lap/periodic notice.
-    if (speaking && !chimeActive && VoicePolicy.shouldPreempt(currentNotice?.optInt("priority") ?: 110, nextPriority)) {
+    if (speaking && (!chimeActive || currentNotice?.let { VoicePolicy.commonChime(it.optString("type")) } == true) && VoicePolicy.shouldPreempt(currentNotice?.optInt("priority") ?: 110, nextPriority)) {
       interrupt(if (nextPriority >= 100) "INTERRUPTED_BY_TRANSITION" else "INTERRUPTED_BY_STOP_HINT")
     }
     speakNext()
@@ -240,7 +240,11 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     audit(n, "DEFERRED")
   }
   private fun interrupt(status: String) {
-    if (chimeActive) { currentNotice?.let { audit(it, "CHIME_INTERRUPT_BLOCKED") }; return }
+    if (chimeActive) {
+      if (currentNotice?.let { VoicePolicy.commonChime(it.optString("type")) } != true) { currentNotice?.let { audit(it, "CHIME_INTERRUPT_BLOCKED") }; return }
+      currentNotice?.let { audit(it, "CHIME_INTERRUPTED_BEFORE_BODY") }
+      chime?.release(); chime = null; chimeActive = false; NoiseState.playback = false
+    }
     currentNotice?.let {
       audit(it, status)
       if (!ended && validInState(it) && VoicePolicy.information(it.optString("type")) && it.optInt("retry") == 0) {
@@ -435,13 +439,15 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     lastSpeechAt = System.currentTimeMillis()
     lastPriority = notice.optInt("priority")
     debugPrefs.edit().putLong("lastSpeechAt", lastSpeechAt).putInt("lastPriority", lastPriority).apply()
-    if (notice.optString("type") in listOf("STOP_CANDIDATE_ANNOUNCED", "AUTO_STOP_CONFIRMED", "AUTO_RESUME_CONFIRMED") && !notice.optBoolean("chimePlayed")) {
+    if ((VoicePolicy.commonChime(notice.optString("type")) || notice.optString("type") in listOf("STOP_CANDIDATE_ANNOUNCED", "AUTO_STOP_CONFIRMED", "AUTO_RESUME_CONFIRMED")) && !notice.optBoolean("chimePlayed")) {
       playChime(notice, attributes); return
     }
     speakNotice(notice, attributes)
   }
 
   private fun playChime(notice: JSONObject, attributes: AudioAttributes) {
+    val common = VoicePolicy.commonChime(notice.optString("type"))
+    notice.put("chimeKind", if(common) "common-v1" else "transition")
     audit(notice, "CHIME_PREPARING")
     chimeActive = true
     NoiseState.playback = true; NoiseState.externalOutput = false
@@ -453,17 +459,25 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       audit(notice, status)
       player.release(); chime = null; chimeActive = false
       NoiseState.playback = false
-      if (!validInState(notice) || System.currentTimeMillis() > notice.optLong("expiresAt") || messages.any { it.optInt("priority") > notice.optInt("priority") }) {
-        audit(notice, "DISCARDED_STATE_AFTER_CHIME"); currentNotice = null; speaking = false; releaseFocus()
-        speakNext(); if (messages.isEmpty() && !speaking) finishTest()
-      } else speakNotice(notice, attributes)
+      // Hold the same notice and focus through the gap; a delayed callback cannot
+      // resurrect a body after interruption, expiry, RUN change or service teardown.
+      fun body() {
+        if (currentNotice !== notice) return
+        val higher = messages.any { if(common) VoicePolicy.shouldPreempt(notice.optInt("priority"), it.optInt("priority")) else it.optInt("priority") > notice.optInt("priority") }
+        if (!VoicePolicy.afterChime(validInState(notice), System.currentTimeMillis(), notice.optLong("expiresAt"), higher)) {
+          audit(notice, "DISCARDED_STATE_AFTER_CHIME"); currentNotice = null; speaking = false; releaseFocus()
+          speakNext(); if (messages.isEmpty() && !speaking) finishTest()
+        } else { audit(notice, "BODY_REQUESTED_AFTER_CHIME"); speakNotice(notice, attributes) }
+      }
+      if(common) handler.postDelayed({ body() }, 180) else body()
     }
     try {
       player.setAudioAttributes(attributes)
       val resource = when (notice.optString("type")) {
         "STOP_CANDIDATE_ANNOUNCED" -> R.raw.run_candidate
         "AUTO_STOP_CONFIRMED" -> R.raw.run_stop
-        else -> R.raw.run_resume
+        "AUTO_RESUME_CONFIRMED" -> R.raw.run_resume
+        else -> R.raw.run_notice
       }
       resources.openRawResourceFd(resource).use { fd -> player.setDataSource(fd.fileDescriptor, fd.startOffset, fd.length) }
       player.setOnCompletionListener { complete("CHIME_COMPLETED") }
@@ -479,10 +493,19 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   }
 
   private fun speakNotice(notice: JSONObject, attributes: AudioAttributes) {
+    if (!bodyEligible(notice)) return
     if (NoiseState.available() && (VoicePolicy.information(notice.optString("type")) || notice.optString("type") in listOf("LEGACY", "RUN_GOAL_FINISHED", "RUN_STARTED", "GOAL_WARNING"))) {
       synthesizeAdaptive(notice, attributes); return
     }
     speakDirect(notice, attributes)
+  }
+
+  private fun bodyEligible(notice: JSONObject): Boolean {
+    if (currentNotice !== notice) return false
+    if (System.currentTimeMillis() > notice.optLong("expiresAt") || (batchMode && !validInState(notice))) {
+      tts?.stop(); finishUtterance("EXPIRED_OR_INVALID_BEFORE_BODY"); return false
+    }
+    return true
   }
 
   private fun synthesizeAdaptive(notice: JSONObject, attributes: AudioAttributes) {
@@ -505,6 +528,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
         val clarityDurationMs=System.currentTimeMillis()-synthesisCompletedAt
         handler.post {
         if (currentNotice !== notice || speechFile !== file) return@post
+        if (!bodyEligible(notice)) return@post
         notice.put("synthesisDurationMs", synthesisCompletedAt - synthesisRequestedAt)
         notice.put("speechClarity", JSONObject().put("status",clarity.status).put("beforeRms",clarity.beforeRms).put("afterRms",clarity.afterRms)
           .put("processingMs",clarityDurationMs).put("beforePeak",clarity.beforePeak).put("afterPeak",clarity.afterPeak).put("outputLoudnessMeasured",false))
@@ -515,6 +539,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
           player.setAudioAttributes(attributes); player.setDataSource(file.absolutePath)
           player.setOnPreparedListener {
             if (currentNotice === notice && adaptivePlayer === player) {
+              if (!bodyEligible(notice)) return@setOnPreparedListener
               try {
                 val gain = if (NoiseState.available()) NoiseState.gain else 1f
                 adaptiveGain = gain.coerceIn(.65f, 1f)
@@ -547,6 +572,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   }
 
   private fun speakDirect(notice: JSONObject, attributes: AudioAttributes) {
+    if (!bodyEligible(notice)) return
     notice.put("playbackMode", "direct-tts")
     NoiseState.playback = true; NoiseState.externalOutput = false
     val message = if (notice.optString("type") == "CURRENT_TIME") CurrentTimePolicy.message(System.currentTimeMillis()).also { notice.put("message", it) } else notice.getString("message")

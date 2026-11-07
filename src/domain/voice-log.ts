@@ -24,12 +24,12 @@ export function verifyVoiceLog(text: string) {
     const endBoundary = km === null ? null : boundary(d.endBoundary, km * 1000);
     const startBoundary = km === 1 ? 0 : km === null ? null : boundary(d.startBoundary, (km - 1) * 1000);
     return { id: e.id ?? null,
-      savingsCorrect: distance !== null && active !== null && target !== null && savings !== null ? Math.abs(savingsSeconds(distance, active, target) - savings) < 0.001 : null,
+      savingsCorrect: active !== null && savings !== null && number('targetCumulativeSeconds') !== null ? Math.abs(number('targetCumulativeSeconds')! - active/1000 - savings)<0.001 : distance !== null && active !== null && target !== null && savings !== null ? Math.abs(savingsSeconds(distance, active, target) - savings) < 0.001 : null,
       lapTimeCorrect: lap !== null && endBoundary !== null && startBoundary !== null ? Math.abs(endBoundary - startBoundary - lap) < 0.001 : null,
-      lapSavingsCorrect: lap !== null && target !== null && lapSavings !== null ? Math.abs(target - lap / 1000 - lapSavings) < 0.001 : null,
+      lapSavingsCorrect: lap !== null && lapSavings !== null && (number('targetLapSeconds')??target)!==null ? Math.abs((number('targetLapSeconds')??target)! - lap / 1000 - lapSavings) < 0.001 : null,
       stoppedTimeExcluded: elapsed !== null && stopped !== null && snapshotActive !== null ? Math.abs(elapsed - stopped - snapshotActive) < 0.001 : null,
       marathonCorrect: marathon !== null && projectionDistance !== null && projectionDistance > 0 && projectionActive !== null ? Math.abs(projectionActive / projectionDistance * 42.195 - marathon) < 0.001 : null,
-      speechLapTimeCorrect: lap === null || !e.message ? null : e.message.includes(`今回のラップは${spokenDuration(lap / 1000)}。`),
+      speechLapTimeCorrect: lap === null || !e.message || e.message.includes('今回のラップは目標') ? null : e.message.includes(`今回のラップは${spokenDuration(lap / 1000)}。`),
       spokenPaceMarathonConsistent: spokenPace !== null && spokenMarathon !== null ? Math.abs(spokenPace * 42.195 - spokenMarathon) < 0.001 : null,
       paceComparison: 'Current = rolling 30s GPS; marathon = all-run active time. Equality is not required.' };
   });

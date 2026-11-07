@@ -2,6 +2,8 @@ package app.runjourney.announcer
 
 /** Android-free policy, also exercised by JVM tests. */
 internal object VoicePolicy {
+  fun commonChime(type: String) = type in listOf("FIVE_MINUTES", "KILOMETER_LAP", "PACE_WARNING", "CURRENT_TIME", "RUN_STARTED", "GOAL_WARNING", "WORKOUT_GOAL", "RUN_GOAL_FINISHED", "LEGACY")
+  fun afterChime(valid: Boolean, now: Long, expires: Long, higherPending: Boolean) = valid && now <= expires && !higherPending
   fun information(type: String) = type in listOf("FIVE_MINUTES", "KILOMETER_LAP", "PACE_WARNING")
   fun validState(type: String, candidateCancelled: Boolean, state: String, ended: Boolean, eventIndex: Int, latestEventIndex: Int): Boolean = when {
     ended -> type == "RUN_GOAL_FINISHED"

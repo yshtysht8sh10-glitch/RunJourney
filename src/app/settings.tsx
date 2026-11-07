@@ -13,6 +13,7 @@ import { requestPaceLeave } from '@/services/pace-edit-guard';
 import { GoalWarningSettings } from '@/components/goal-warning-settings';
 import { CurrentTimeSettings } from '@/components/clock-settings';
 import { NoiseVolumeSettings } from '@/components/noise-volume-settings';
+import { RecoverySettings } from '@/components/recovery-settings';
 
 export default function SettingsScreen() {
   const [features, setFeatures] = useState(DEFAULT_RUN_FEATURES);
@@ -72,6 +73,7 @@ export default function SettingsScreen() {
     </Pressable>
     <CurrentTimeSettings />
     <GoalWarningSettings />
+    {isStandaloneTest() && <RecoverySettings />}
     <Text style={styles.section}>読み上げ内容</Text>
     {isStandaloneTest() && <NoiseVolumeSettings />}
     {(Object.keys(labels) as (keyof VoiceItems)[]).map((key) =>

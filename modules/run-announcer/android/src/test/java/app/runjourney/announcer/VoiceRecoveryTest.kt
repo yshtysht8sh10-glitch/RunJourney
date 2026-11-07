@@ -41,6 +41,63 @@ class VoiceRecoveryTest {
     set("ready", false)
   }
   @After fun destroy() { service.onDestroy(); NoiseState.running = false }
+  private fun finishCommonChime() {
+    (get("chime") as? MediaPlayer)?.let { shadowOf(it).invokeCompletionListener() }
+    shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(181))
+  }
+  @Test fun commonChimeAndGapKeepBodyInSameNotice() {
+    for(type in listOf("KILOMETER_LAP","FIVE_MINUTES","PACE_WARNING","RUN_STARTED","GOAL_WARNING")) {
+      set("ready",true)
+      val n=notice(type,"normal-$type").apply {getJSONObject("data").put("goalRevision","")}
+      batch("RUNNING",n)
+      val current=get("currentNotice") as JSONObject
+      assertEquals("common-v1",current.optString("chimeKind"));assertTrue(current.optBoolean("chimePlayed"))
+      val player=get("chime") as MediaPlayer
+      shadowOf(player).invokeCompletionListener()
+      assertSame(current,get("currentNotice"));assertTrue(get("speaking") as Boolean)
+      shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(179))
+      assertFalse(current.has("startedAt"))
+      shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(2))
+      // Shadow TTS completes automatically; body and chime share the original ID.
+      assertEquals("test",shadowOf(get("tts") as TextToSpeech).lastSpokenText)
+      set("ready",false)
+    }
+  }
+  @Test fun finishDuringCommonChimeCancelsOldBodyImmediately() {
+    set("ready",true);batch("RUNNING",notice("RUN_STARTED","old-start"))
+    val old=get("currentNotice") as JSONObject
+    batch("RUNNING",notice("RUN_GOAL_FINISHED"),ended=true)
+    assertNotSame(old,get("currentNotice"));assertEquals("RUN_GOAL_FINISHED",(get("currentNotice") as JSONObject).optString("type"))
+    finishCommonChime();assertNotEquals("old-start",(get("currentNotice") as? JSONObject)?.optString("id"))
+  }
+  @Test fun ordinaryHigherPriorityDoesNotDropCommonChimeBody() {
+    set("ready",true);batch("RUNNING",notice("FIVE_MINUTES","five-first"))
+    val first=get("currentNotice") as JSONObject
+    batch("RUNNING",notice("KILOMETER_LAP","km-next"))
+    assertSame(first,get("currentNotice"));assertFalse(queue().single().optBoolean("deferred"))
+    finishCommonChime()
+    assertEquals("five-first",first.optString("id"));assertTrue(first.has("startedAt"))
+  }
+  @Test fun expiredSynthesisFallbackCannotStartBodyAfterCommonChime() {
+    NoiseState.running=true;NoiseState.updatedAt=System.currentTimeMillis();NoiseState.gain=.8f
+    set("ready",true);batch("RUNNING",notice("RUN_STARTED","synthesis-expiry"))
+    val first=get("currentNotice") as JSONObject
+    finishCommonChime();assertTrue(first.has("synthesisKey"))
+    val listener=shadowOf(get("tts") as TextToSpeech).utteranceProgressListener
+    first.put("expiresAt",System.currentTimeMillis()-1)
+    listener.onError(first.getString("synthesisKey"));shadowOf(Looper.getMainLooper()).idle()
+    assertNull(get("currentNotice"));assertNull(get("speechFile"));assertFalse(first.has("startedAt"))
+  }
+  @Test fun expiryInCommonGapCannotStartBodyAndFailureStillAllowsBody() {
+    set("ready",true);val n=notice("RUN_STARTED")
+    batch("RUNNING",n);val p=get("chime") as MediaPlayer
+    (get("currentNotice") as JSONObject).put("expiresAt",System.currentTimeMillis()+100)
+    shadowOf(p).invokeCompletionListener();shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(181))
+    assertNull(get("currentNotice"))
+    batch("RUNNING",notice("RUN_STARTED","failure"));val next=get("chime") as MediaPlayer
+    shadowOf(next).invokeErrorListener(1,0);shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(181))
+    assertEquals("test",shadowOf(get("tts") as TextToSpeech).lastSpokenText)
+  }
   @Test fun currentClockConsumesPausedOrBusyBoundariesWithoutReplay() {
     val prefs = service.getSharedPreferences(RunAnnouncerService.PREFS, 0)
     batch("AUTO_STOP")
@@ -85,7 +142,7 @@ class VoiceRecoveryTest {
   }
   @Test fun periodicNoticesDuringEitherChimeAreDeferredAndBounded() {
     for (state in listOf("AUTO_STOP", "RUNNING")) {
-      queue().clear(); set("chimeActive", true); set("speaking", true)
+      queue().clear(); set("currentNotice",notice(if(state=="AUTO_STOP") "AUTO_STOP_CONFIRMED" else "AUTO_RESUME_CONFIRMED")); set("chimeActive", true); set("speaking", true)
       batch(state, notice("FIVE_MINUTES", "$state-five1"), notice("KILOMETER_LAP", "$state-km"), notice("PACE_WARNING", "$state-pace"))
       assertEquals(3, queue().size); assertTrue(queue().all { it.optBoolean("deferred") })
       batch(state, notice("FIVE_MINUTES", "$state-five2"))
@@ -117,7 +174,7 @@ class VoiceRecoveryTest {
     batch("RUNNING", notice("RUN_GOAL_FINISHED"), ended = true)
     assertSame(player, get("chime"))
     shadowOf(player).invokeCompletionListener()
-    assertFalse(get("chimeActive") as Boolean)
+    assertTrue(get("chimeActive") as Boolean) // finish is a new common-chime notification
     assertEquals("RUN_GOAL_FINISHED", (get("currentNotice") as JSONObject).optString("type"))
   }
   @Test fun actualChimeErrorFallsThroughToSpeechWithoutBlockingState() {
@@ -172,6 +229,7 @@ class VoiceRecoveryTest {
     val item = notice("FIVE_MINUTES")
     batch("RUNNING", item)
     val active = get("currentNotice") as JSONObject
+    finishCommonChime()
     shadowOf(Looper.getMainLooper()).idle()
     assertEquals(.8, active.optDouble("directRequestedGain"), .001)
     assertFalse(active.optBoolean("directGainDynamic"))
@@ -185,6 +243,7 @@ class VoiceRecoveryTest {
     set("ready", true)
     batch("RUNNING", notice("FIVE_MINUTES"))
     val first = get("currentNotice") as JSONObject
+    finishCommonChime()
     val listener = shadowOf(tts).utteranceProgressListener
     val file = get("speechFile") as java.io.File
     batch("AUTO_STOP", notice("AUTO_STOP_CONFIRMED"))
@@ -256,6 +315,7 @@ class VoiceRecoveryTest {
       service.javaClass.getDeclaredMethod("speakNext").apply { isAccessible = true }.invoke(service)
       while (get("currentNotice") != null) {
         count++
+        (get("chime") as? MediaPlayer)?.let { shadowOf(it).invokeCompletionListener() }
         service.javaClass.getDeclaredMethod("finishUtterance", String::class.java).apply { isAccessible = true }.invoke(service, "DONE")
       }
       assertTrue(queue().isEmpty())

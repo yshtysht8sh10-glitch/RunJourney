@@ -1,0 +1,22 @@
+import { createElement } from 'react';
+import { act,create,type ReactTestRenderer } from 'react-test-renderer';
+import { Switch } from 'react-native';
+import { RecoverySettings as Settings,RECOVERY_SETTING_KEY } from '@/repositories/recovery-settings';
+import { RecoverySettings } from '@/components/recovery-settings';
+import { RecoveryExperiment } from '@/components/recovery-experiment';
+import { resetNative } from '@/test/native-driver';
+import { database } from '@/repositories/database';
+import { RunRepository } from '@/repositories/run-repository';
+jest.mock('expo-router',()=>({useFocusEffect:(fn:()=>void)=>jest.requireActual('react').useEffect(fn,[fn])}));
+test('settings alone owns persistent OFF-by-default switch; history reacts without changing originals',async()=>{
+ resetNative();await RunRepository.importRuns([{id:'r',startedAt:new Date(0).toISOString(),endedAt:new Date(60000).toISOString(),createdAt:'',updatedAt:'',points:[],distanceMeters:0}]);
+ const db=await database(),before=await db.snapshot();expect(await Settings.get()).toBe(false);expect((await db.snapshot()).settings[RECOVERY_SETTING_KEY]).toBeUndefined();
+ let s!:ReactTestRenderer,h!:ReactTestRenderer;await act(async()=>{s=create(createElement(RecoverySettings));h=create(createElement(RecoveryExperiment));});
+ expect(h.toJSON()).toBeNull();
+ await act(async()=>{await s.root.findByType(Switch).props.onValueChange(true);});
+ expect(await Settings.get()).toBe(true);expect(h.toJSON()).not.toBeNull();expect(h.root.findAllByType(Switch)).toHaveLength(0);
+ act(()=>s.unmount());await act(async()=>{s=create(createElement(RecoverySettings));});expect(s.root.findByType(Switch).props.value).toBe(true);
+ await act(async()=>{await s.root.findByType(Switch).props.onValueChange(false);});expect(h.toJSON()).toBeNull();
+ expect((await db.snapshot()).runs).toEqual(before.runs);expect((await db.snapshot()).protectedIds).toEqual(before.protectedIds);
+ act(()=>{s.unmount();h.unmount();});
+});
