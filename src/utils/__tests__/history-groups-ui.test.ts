@@ -1,6 +1,6 @@
 import { createElement } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
-import { Alert, FlatList } from 'react-native';
+import { Alert, FlatList, Text } from 'react-native';
 import GroupScreen from '@/app/history-groups';
 import History from '@/app/history';
 import { RunRepository } from '@/repositories/run-repository';
@@ -49,4 +49,13 @@ test('page boundary: a loaded later member keeps the older-started group visible
   await act(async()=>{await tree.root.findByType(FlatList).props.onEndReached();});
   expect(rows()).toHaveLength(100);expect(rows().filter((r:{groupValue?:unknown})=>r.groupValue)).toHaveLength(1);
   expect(await db.snapshot()).toEqual(before);act(()=>tree.unmount());
+});
+
+test('group and single RUN share row fields while estimates remain on details',async()=>{
+ resetNative();await RunRepository.clearActiveRun();await RunRepository.importRuns([run('a',0,100000),run('b',150000,200000),run('single',1000000,1100000)]);await HistoryGroupsRepository.create(['a','b'],true);
+ let tree!:ReactTestRenderer;await act(async()=>{tree=create(createElement(History));});
+ const data=tree.root.findByType(FlatList).props.data;expect(data.map((r:{id:string})=>r.id)).toEqual(['single',expect.stringMatching(/^display:/)]);
+ for(const testID of ['history-date','history-times','history-active-time','history-distance','history-speed'])expect(tree.root.findAllByProps({testID}).filter(n=>n.type===Text)).toHaveLength(2);
+ const text=tree.root.findAllByType(Text).flatMap(n=>[n.props.children].flat(3)).filter(v=>typeof v==='string').join('');expect(text).not.toContain('推定不可');expect(text).not.toContain('GPS_MISSING');
+ act(()=>tree.unmount());
 });

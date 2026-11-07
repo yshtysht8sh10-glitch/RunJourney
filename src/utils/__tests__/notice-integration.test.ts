@@ -1,3 +1,5 @@
+import {createPaceWorkout,DEFAULT_PACE_SETTINGS,validPaceState,safePaceMetadata} from '@/domain/pace-workout';
+import {voiceSnapshot,recoveryGuidance} from '@/domain/voice-guidance';
 import * as Location from 'expo-location';
 import { Platform } from 'react-native';
 import { RunService } from '@/services/run-service';
@@ -64,4 +66,19 @@ test('auto-finish OFF immediately invalidates the queued goal revision',async()=
   expect(batches.some(b=>b.goalRevisionIndex===1&&b.goalRevision.includes('false')&&b.notices.length===0)).toBe(true);
   await VoiceAnnouncement.beforeGoal(updated);
   expect(notices().filter(n=>n.type==='GOAL_WARNING')).toHaveLength(1);
+});
+
+test('multi-segment lap uses actual dispatch and recovery operands without enabling multi-segment controller',async()=>{
+
+
+ const started=Date.now()-351000;
+ const run={id:'multi-dispatch',startedAt:new Date(started).toISOString(),createdAt:'',updatedAt:'',distanceMeters:1001,
+ points:Array.from({length:72},(_,i)=>({timestamp:started+i*350000/71,latitude:35+i*1001/71/111195,longitude:139,accuracy:3,speed:3})),
+ paceWorkout:createPaceWorkout({...DEFAULT_PACE_SETTINGS,enabled:true,voice:true},started)};
+ run.paceWorkout!.workout.segments=[{id:'a',kind:'steady',targetPaceSecPerKm:300,toleranceSecPerKm:10,target:{type:'distance',meters:500}},{id:'b',kind:'steady',targetPaceSecPerKm:400,toleranceSecPerKm:10,target:{type:'distance',meters:1000}}];
+ expect(validPaceState(run.paceWorkout)).toBe(false);expect(safePaceMetadata(run.paceWorkout)).toEqual(run.paceWorkout);
+ await VoiceAnnouncement.updateRun(run);
+ const km=notices().find(n=>n.type==='KILOMETER_LAP');expect(km).toBeDefined();expect(km.data.targetLapSeconds).toBe(350);expect(km.message).toContain('今回のラップは目標');
+ const snapshot=voiceSnapshot(run,Date.now());expect(snapshot.targetCumulativeSeconds).toBeCloseTo(350.4);expect(snapshot.cumulativeSavingsSec).toBeCloseTo(-.6);
+ expect(recoveryGuidance(run,Date.now()).data.cumulativeSavingsSec).toBeCloseTo(-.6);
 });

@@ -99,9 +99,15 @@ export function validPaceState(value: unknown): value is PaceWorkoutState {
         && Number.isFinite(s.notice.at) && typeof s.notice.goal === 'boolean');
   } catch { return false; }
 }
+/** Lap speech can integrate all valid planned segments without enabling the
+ * still single-segment workout controller or trusting unchecked state fields. */
+export function validPaceLapState(value: unknown): value is PaceWorkoutState {
+  const s=value as PaceWorkoutState|undefined;
+  return !!s && validWorkout(s.workout) && validPaceState({...s,workout:{...s.workout,segments:[s.workout.segments[0]]}});
+}
 export function safePaceMetadata(value: unknown): PaceWorkoutState | undefined {
   try {
-    if (!validPaceState(value)) return undefined;
+    if (!validPaceLapState(value)) return undefined;
     const text = JSON.stringify(value);
     // Keep optional metadata bounded even for unexpected fields in imported data.
     if (text.length > 48 * 1024) return undefined;

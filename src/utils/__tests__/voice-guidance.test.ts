@@ -1,4 +1,4 @@
-import { activeBoundaryWallTime, kilometerLaps, savingsMessage, savingsSeconds, spokenDuration, stopHint, voiceSnapshot } from '@/domain/voice-guidance';
+import { lapDifferenceMessage, activeBoundaryWallTime, kilometerLaps, savingsMessage, savingsSeconds, spokenDuration, stopHint, voiceSnapshot } from '@/domain/voice-guidance';
 import { verifyVoiceLog } from '@/domain/voice-log';
 import { createPaceWorkout, DEFAULT_PACE_SETTINGS, windowPace } from '@/domain/pace-workout';
 import { ActiveRun, LocationPoint } from '@/types/run';
@@ -15,7 +15,7 @@ test.each([[350, 25], [400, -25]])('lap %ss/km uses unrounded active distance bo
   expect(laps[0].lapMs / 1000).toBeCloseTo(pace, 1);
   expect(laps[0].lapSavings).toBeCloseTo(saving, 1);
   expect(laps[0].cumulativeSavings).toBeCloseTo(saving, 1);
-  expect(laps[0].message).toContain(saving > 0 ? '増えました' : '減りました');
+  expect(laps[0].message).toContain(saving > 0 ? '早かったです' : '遅かったです');
   expect(JSON.parse(JSON.stringify(laps))).toEqual(laps);
 });
 test('positive saving becomes delay with natural Japanese and second rounding', () => {
@@ -65,4 +65,24 @@ test('wall deadline of a completed active boundary never advances during a stop 
   expect(activeBoundaryWallTime(r, 300000, 960000)).toBeCloseTo(300000, 2);
   r = transition(r, 'RUNNING', 650000, 'sensor', 660000);
   expect(activeBoundaryWallTime(r, 400000, 750000)).toBeCloseTo(700000, 2);
+});
+
+
+// Shared interval target arithmetic; no comparison with the previous actual lap.
+test('variable target integrates distance and duration segments at exact boundaries',()=>{
+ const r=run();r.paceWorkout!.workout.segments=[
+ {id:'a',kind:'steady',targetPaceSecPerKm:300,toleranceSecPerKm:10,target:{type:'distance',meters:500}},
+ {id:'b',kind:'steady',targetPaceSecPerKm:400,toleranceSecPerKm:10,target:{type:'duration',seconds:200}},
+ {id:'c',kind:'steady',targetPaceSecPerKm:360,toleranceSecPerKm:10,target:{type:'distance',meters:1000}}];
+ const laps=kilometerLaps(r,750000);expect(laps[0].targetLapSeconds).toBe(350);expect(laps[1].targetLapSeconds).toBe(360);
+ expect(laps[1].targetCumulativeSeconds).toBe(710);
+});
+test('lap slow while total fast and rounded zero have distinct spoken meanings',()=>{
+ expect(lapDifferenceMessage(-3,12)).toBe('今回のラップは目標より3秒遅かったです。合計では目標より12秒早いです。');
+ expect(lapDifferenceMessage(-.49,.49)).toBe('今回のラップは目標どおりでした。合計では目標どおりです。');
+ expect(lapDifferenceMessage(-.5,.5)).toContain('1秒遅かった');
+});
+test('finish goal edits do not rewrite the pace target; general RUN has no target comparison',()=>{
+ const r=run();const before=kilometerLaps(r,750000);r.finishGoal={kind:'distance',meters:12000};
+ expect(kilometerLaps(r,750000)).toEqual(before);delete r.paceWorkout;expect(kilometerLaps(r,750000)[0].message).not.toContain('目標より');
 });
