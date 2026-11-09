@@ -41,6 +41,105 @@ class VoiceRecoveryTest {
     set("ready", false)
   }
   @After fun destroy() { service.onDestroy(); NoiseState.running = false }
+  private fun cueBatch(label:Int, version:Int=1, enabled:Boolean=true, state:String="RUNNING", time:Boolean=false, remaining:Double=label.toDouble(), at:Long=System.currentTimeMillis()) {
+    val n=notice("GOAL_COUNTDOWN","countdown-$label-$version").put("expiresAt",System.currentTimeMillis()+3000).apply {getJSONObject("data").put("goalRevision","cue").put("goalEpoch",0).put("cueVersion",version).put("label",label)}
+    val context=JSONObject().put("at",at).put("version",version).put("revision","cue").put("enabled",true).put("running",state=="RUNNING")
+      .put("turnaround",enabled).put("countdown",enabled).put("suppressWarning",enabled).put("kind",if(time)"time" else "distance").put("remaining",remaining).put("deadline",if(time)System.currentTimeMillis()+(remaining*1000).toLong() else 0)
+    val payload=JSONObject().put("runId","r").put("state",state).put("goalRevision","cue").put("goalRevisionIndex",0).put("cueContext",context).put("notices",JSONArray().put(n))
+    service.javaClass.getDeclaredMethod("receiveBatch",String::class.java).apply{isAccessible=true}.invoke(service,payload.toString())
+  }
+  @Test fun countdownKeepsOneLatestQueueEntryAndRejectsOldNumbers() {
+    cueBatch(200);cueBatch(190);cueBatch(200,at=System.currentTimeMillis()-1000)
+    assertEquals(1,queue().size);assertEquals(190,queue().single().getJSONObject("data").getInt("label"))
+  }
+  @Test fun countdownOnlyFirstActualNotificationChimesEvenAfterServiceRestart() {
+    set("ready",true);cueBatch(200);assertTrue(get("chimeActive") as Boolean);finishCommonChime()
+    cueBatch(190);assertFalse(get("chimeActive") as Boolean)
+    service.onDestroy();service=Robolectric.buildService(RunAnnouncerService::class.java).create().get();set("ready",true)
+    cueBatch(180);assertFalse(get("chimeActive") as Boolean)
+    assertEquals("test",shadowOf(get("tts") as TextToSpeech).lastSpokenText)
+  }
+  @Test fun countdownOffCancelsAndStaleConfigurationCannotReenableIt() {
+    cueBatch(200);cueBatch(190,version=2,enabled=false);cueBatch(180,version=1)
+    assertTrue(queue().isEmpty())
+  }
+  @Test fun sameGoalValueAfterTwoEditsRejectsOldEpochCountdown() {
+    cueBatch(200);set("goalRevisionIndex",2);cueBatch(190)
+    assertTrue(queue().isEmpty())
+  }
+  @Test fun finishedCueMarkerRejectsLateCountdownWithoutDisablingGenericVoiceResume() {
+    cueBatch(200)
+    assertTrue(GoalCueFence.finish(service,"r"))
+    RunAnnouncerService.stopRunning!!.invoke();shadowOf(Looper.getMainLooper()).idle()
+    set("ready",false);cueBatch(190)
+    assertTrue(queue().isEmpty())
+    service.onDestroy();service=Robolectric.buildService(RunAnnouncerService::class.java).create().get();set("ready",false)
+    cueBatch(180);assertTrue(queue().isEmpty())
+  }
+  @Test fun previewLeaseIsBoundedWithoutChangingTheRealRunningPreference() {
+    val payload=JSONObject().put("runId","preview-cues-lease").put("state","RUNNING").put("previewLeaseMs",999999).put("notices",JSONArray())
+    service.javaClass.getDeclaredMethod("receiveBatch",String::class.java).apply{isAccessible=true}.invoke(service,payload.toString())
+    assertFalse(service.getSharedPreferences(RunAnnouncerService.PREFS,0).getBoolean("running",false))
+    assertTrue((get("cuePreviewUntil") as Long)-System.currentTimeMillis()<=30000)
+    shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(30001))
+    assertEquals(0L,get("cuePreviewUntil"));assertTrue(queue().isEmpty());assertNull(get("currentNotice"))
+  }
+  @Test fun countdownSuppressesExistingWarningOnlyInsideConfiguredRange() {
+    cueBatch(200)
+    val warning=notice("GOAL_WARNING").apply{getJSONObject("data").put("goalRevision","cue")}
+    val p=JSONObject().put("runId","r").put("state","RUNNING").put("goalRevision","cue").put("notices",JSONArray().put(warning))
+    service.javaClass.getDeclaredMethod("receiveBatch",String::class.java).apply{isAccessible=true}.invoke(service,p.toString())
+    assertFalse(queue().any{it.optString("type")=="GOAL_WARNING"})
+  }
+  @Test fun pauseAndRunEndCancelCountdownWithoutInformationRecovery() {
+    set("ready",true);cueBatch(200);cueBatch(190,state="AUTO_STOP")
+    assertNull(get("currentNotice"));assertTrue(queue().isEmpty())
+    cueBatch(180);batch("RUNNING",notice("RUN_GOAL_FINISHED"),ended=true)
+    assertFalse(queue().any{it.optString("type")=="GOAL_COUNTDOWN"})
+  }
+  @Test fun timeGoalDeadlineCancelsChimeWithoutChangingRunEndState() {
+    set("ready",true);cueBatch(10,time=true,remaining=.2)
+    shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(250))
+    assertNull(get("currentNotice"));assertFalse(get("ended") as Boolean);assertFalse(get("chimeActive") as Boolean)
+  }
+  @Test fun startedCountdownSurvivesDeliveryDeadlineButRemainsBounded() {
+    set("ready",true);cueBatch(200)
+    val n=get("currentNotice") as JSONObject
+    // Keep the test engine silent; explicitly deliver onStart after device-like latency.
+    (get("chime") as MediaPlayer).release();set("chime",null);set("chimeActive",false)
+    shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(1500))
+    service.javaClass.getDeclaredMethod("cueBodyStarted", JSONObject::class.java, java.lang.Long.TYPE)
+      .apply { isAccessible=true }.invoke(service,n,System.currentTimeMillis())
+    shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(1600))
+    assertSame(n,get("currentNotice"))
+    shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(3500))
+    assertNull(get("currentNotice"))
+  }
+  @Test fun startedCountdownStillStopsAtTimeGoalDeadline() {
+    set("ready",true);cueBatch(10,time=true,remaining=2.0)
+    val n=get("currentNotice") as JSONObject
+    service.javaClass.getDeclaredMethod("cueBodyStarted", JSONObject::class.java, java.lang.Long.TYPE)
+      .apply { isAccessible=true }.invoke(service,n,System.currentTimeMillis())
+    shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(2001))
+    assertNull(get("currentNotice"));assertFalse(get("ended") as Boolean)
+  }
+  @Test fun newerCountdownStillCancelsStartedOlderBodyAfterDeliveryWindow() {
+    set("ready",true);cueBatch(200)
+    val n=get("currentNotice") as JSONObject
+    (get("chime") as MediaPlayer).release();set("chime",null);set("chimeActive",false)
+    service.javaClass.getDeclaredMethod("cueBodyStarted", JSONObject::class.java, java.lang.Long.TYPE)
+      .apply {isAccessible=true}.invoke(service,n,System.currentTimeMillis())
+    shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(3100))
+    cueBatch(190)
+    assertNotSame(n,get("currentNotice"));assertFalse(queue().any{it.optString("id")==n.optString("id")})
+  }
+  @Test fun liveRunFreshCountdownIsNotSubjectToThirtySecondPreviewLease() {
+    cueBatch(200)
+    shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(310000))
+    cueBatch(190)
+    assertEquals(190,queue().single().getJSONObject("data").getInt("label"))
+    assertFalse(GoalCueFence.ended(service,"r"))
+  }
   private fun finishCommonChime() {
     (get("chime") as? MediaPlayer)?.let { shadowOf(it).invokeCompletionListener() }
     shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(181))

@@ -14,6 +14,10 @@ class RunAnnouncerModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("RunAnnouncer")
     Events("finishClock")
+    // Durable audio-only fence. No service start and no RUN/goal mutation.
+    Function("finishGoalCues") { runId: String ->
+      GoalCueFence.finish(requireNotNull(appContext.reactContext),runId)
+    }
     Function("noiseControl") { action: String, runId: String ->
       val context = requireNotNull(appContext.reactContext)
       val preferences = context.getSharedPreferences(RunAnnouncerService.PREFS, 0)
@@ -59,6 +63,13 @@ class RunAnnouncerModule : Module() {
     }
     OnCreate { FinishClockService.pulse = { sendEvent("finishClock", emptyMap<String, Any>()) } }
     OnDestroy { FinishClockService.pulse = null }
+    Function("previewFinishClock") { leaseMs: Double ->
+      val context=requireNotNull(appContext.reactContext)
+      check(context.packageName=="app.runjourney.mobile.test") { "Test only" }
+      check(!context.getSharedPreferences(RunAnnouncerService.PREFS,0).getBoolean("running",false)) { "Running" }
+      val intent=Intent(context,FinishClockService::class.java).putExtra("previewMs",leaseMs.toLong().coerceIn(1,30000))
+      context.startForegroundService(intent)
+    }
     Function("finishClock") { enabled: Boolean ->
       val context = requireNotNull(appContext.reactContext)
       val intent = Intent(context, FinishClockService::class.java)

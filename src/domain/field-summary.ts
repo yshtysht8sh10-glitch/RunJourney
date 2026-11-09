@@ -55,6 +55,13 @@ export function summarizeFieldRun(entries: Entry[], runId: string) {
       sampleCount: gains.length, sampling: 'Retained 5-second monitoring rows; valid time is a conservative observed interval sum.' },
     currentTime: { completed: ids(e => e.type === 'CURRENT_TIME' && e.status === 'DONE'),
       expiredOrSkipped: ids(e => e.type === 'CURRENT_TIME' && /EXPIRED|SKIPPED|DISCARDED|INTERRUPTED/.test(e.status ?? '')) },
+    goalCues: retained.some(e=>e.type==='GOAL_CUE_DECISION'||e.type==='GOAL_CUE_RESERVED'||['TURNAROUND','GOAL_COUNTDOWN'].includes(e.type??'')||e.type==='VOICE_GENERATED'&&['TURNAROUND','GOAL_COUNTDOWN'].includes(e.status??'')) ? {
+      reserved:ids(e=>e.type==='GOAL_CUE_RESERVED'),
+      turnaroundGenerated:ids(e=>e.type==='VOICE_GENERATED'&&e.status==='TURNAROUND'),countdownGenerated:ids(e=>e.type==='VOICE_GENERATED'&&e.status==='GOAL_COUNTDOWN'),
+      bodyStarted:ids(e=>['TURNAROUND','GOAL_COUNTDOWN'].includes(e.type??'')&&e.status==='STARTED'),completed:ids(e=>['TURNAROUND','GOAL_COUNTDOWN'].includes(e.type??'')&&e.status==='DONE'),
+      expiredOrCancelled:ids(e=>['TURNAROUND','GOAL_COUNTDOWN'].includes(e.type??'')&&/EXPIRED|DISCARDED|CANCELLED|STALE|INTERRUPTED/.test(e.status??'')),
+      skippedLabels:retained.filter(e=>e.type==='GOAL_CUE_DECISION'&&/SKIPPED/.test(e.status??'')).reduce((n,e)=>n+(Array.isArray(e.data?.labels)?e.data.labels.length:0),0),
+    }:null,
     limitations: ['Retained log only; missing telemetry is unknown, not zero. Compare coverage before comparing counts.',
       'Voice counts are distinct event IDs; one event may complete after an interruption/retry.',
       'Gain and DONE callbacks do not measure output loudness or audibility.', 'Rapid alternations are diagnostic only; detector rules are unchanged.'] };

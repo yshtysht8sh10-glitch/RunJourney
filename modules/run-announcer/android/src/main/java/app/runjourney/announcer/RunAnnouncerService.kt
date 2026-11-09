@@ -51,6 +51,8 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   private var batchRunId = ""
   private var goalRevision = ""
   private var goalRevisionIndex = -1
+  private var cueContext: JSONObject? = null
+  private var cuePreviewUntil = 0L
   private var candidateCancelled = false
   private var batchState = "RUNNING"
   private var latestEventIndex = -1
@@ -150,6 +152,15 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     batchMode = true
     val batch = JSONObject(payload)
     val runId = batch.optString("runId")
+    if(runId.startsWith("preview-cues-") && batch.optLong("previewLeaseMs")>0 && !preferences.getBoolean("running",false)) {
+      val until=System.currentTimeMillis()+batch.optLong("previewLeaseMs").coerceIn(1,30000)
+      cuePreviewUntil=until
+      handler.postDelayed({if(cuePreviewUntil==until && batchRunId==runId && !preferences.getBoolean("running",false)) {
+        GoalCueFence.finish(this,runId)
+        cuePreviewUntil=0;messages.forEach{audit(it,"DISCARDED_PREVIEW_LEASE")};messages.clear()
+        interrupt("INTERRUPTED_PREVIEW_LEASE");stopSelf()
+      }},until-System.currentTimeMillis())
+    }
     val cancel = batch.optBoolean("cancelCandidate")
     val paused = batch.optBoolean("paused")
     val incoming = batch.getJSONArray("notices")
@@ -172,15 +183,20 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       if (!chimeActive || currentNotice?.let { VoicePolicy.commonChime(it.optString("type")) } == true) interrupt("INTERRUPTED_RUN_CHANGED")
       recovery = null
     }
-    if (batchRunId != runId) { goalRevision = ""; goalRevisionIndex = -1 }
+    if (batchRunId != runId) { goalRevision = ""; goalRevisionIndex = -1; cueContext = null }
     if (batch.has("goalRevision") && batch.optInt("goalRevisionIndex", 0) >= goalRevisionIndex) {
       goalRevision = batch.optString("goalRevision"); goalRevisionIndex = batch.optInt("goalRevisionIndex", 0)
+    }
+    batch.optJSONObject("cueContext")?.let { c ->
+      val old=cueContext
+      if(batch.optInt("goalRevisionIndex",0)>=goalRevisionIndex && c.optString("revision")==goalRevision && (old==null || (c.optLong("version")>=old.optLong("version") && (c.optString("revision")!=old.optString("revision") || c.optLong("at")>=old.optLong("at"))))) cueContext=c
     }
     batchRunId = runId; candidateCancelled = cancel
     batch.optJSONObject("recovery")?.let { recovery = it }
     batchState = batch.optString("state", if (paused) "AUTO_STOP" else "RUNNING")
     latestEventIndex = batch.optInt("latestEventIndex", -1)
     ended = batch.optBoolean("ended")
+    if(ended || !runId.startsWith("preview-cues-"))cuePreviewUntil=0
     if (ended && !batch.optBoolean("muted")) debugPrefs.edit().putString("finishedRun", runId).apply()
     messages.toList().forEach { n ->
       if (!validInState(n)) {
@@ -207,6 +223,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
         if (reason == "QUEUED") n.put("nativeQueuedAt", System.currentTimeMillis())
         audit(n, reason)
         if (reason == "QUEUED") {
+          if (type == "GOAL_COUNTDOWN") messages.toList().filter { it.optString("type")==type }.forEach { messages.remove(it);audit(it,"DISCARDED_NEWER_COUNTDOWN") }
           if (VoicePolicy.information(type)) messages.toList().filter { it.optString("type") == type }.forEach {
             messages.remove(it); audit(it, "DISCARDED_NEWER_INFORMATION")
           }
@@ -228,7 +245,19 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   }
   private fun validInState(n: JSONObject): Boolean {
     val type = n.optString("type")
-    if (type == "GOAL_WARNING" && n.optJSONObject("data")?.optString("goalRevision") != goalRevision) return false
+    if ((type == "GOAL_WARNING" || VoicePolicy.goalCue(type)) && n.optJSONObject("data")?.optString("goalRevision") != goalRevision) return false
+    val c=cueContext
+    if(type=="GOAL_WARNING" && c?.optString("revision")==goalRevision && c.optBoolean("suppressWarning")) return false
+    if(VoicePolicy.goalCue(type)) {
+      if(GoalCueFence.ended(this,n.optJSONObject("data")?.optString("runId")?:""))return false
+      if(n.optJSONObject("data")?.optInt("goalEpoch",-1)!=goalRevisionIndex)return false
+      if(c==null || c.optString("revision")!=goalRevision || !c.optBoolean("enabled") || !c.optBoolean("running") || n.optJSONObject("data")?.optLong("cueVersion")!=c.optLong("version")) return false
+      val remaining=if(c.optString("kind")=="time") (c.optLong("deadline")-System.currentTimeMillis())/1000.0 else c.optDouble("remaining")
+      if(!remaining.isFinite() || remaining<=0) return false
+      if(type=="TURNAROUND" && !c.optBoolean("turnaround")) return false
+      val label=n.optJSONObject("data")?.optInt("label")?:0
+      if(type=="GOAL_COUNTDOWN" && (!c.optBoolean("countdown") || label !in 10..(if(c.optString("kind")=="time")60 else 200) || label%10!=0 || label!=(kotlin.math.ceil(remaining/10)*10).toInt())) return false
+    }
     if (type == "LEGACY") return !ended
     if (n.optJSONObject("data")?.optString("runId") != batchRunId) return false
     return VoicePolicy.validState(type, candidateCancelled, batchState, ended,
@@ -392,6 +421,32 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     else if (!speaking && messages.isEmpty()) finishTest()
   }
 
+  // expiresAt is a body START deadline, not a duration budget for a valid body.
+  // RUN/state/latest-label invalidation still applies throughout playback.
+  private var cueWatchVersion = 0L
+  private fun armCueDeadline(notice: JSONObject, limit: Long, reason: String) {
+    val version=++cueWatchVersion
+    val goalDeadline=cueContext?.optLong("deadline")?:0
+    val end=if(goalDeadline>0) minOf(goalDeadline,limit) else limit
+    notice.put("cueWatchDeadline",end).put("cueWatchReason",reason)
+    handler.postDelayed({if(currentNotice===notice && cueWatchVersion==version){
+      interrupt(if(goalDeadline>0 && end==goalDeadline) "INTERRUPTED_CUE_GOAL_DEADLINE" else reason)
+      speakNext();if(!speaking&&messages.isEmpty())finishTest()
+    }},(end-System.currentTimeMillis()).coerceAtLeast(0))
+  }
+  private fun cueBodyStarted(notice: JSONObject, at: Long): Boolean {
+    if(!VoicePolicy.goalCue(notice.optString("type")))return true
+    val deadline=cueContext?.optLong("deadline")?:0
+    if(at>notice.optLong("expiresAt") || (deadline>0 && at>=deadline) || !validInState(notice)) {
+      interrupt("CUE_START_EXPIRED_OR_INVALID");speakNext();return false
+    }
+    // Bounded engine watchdog; a newer number, pause, end or goal deadline wins.
+    val duration=if(notice.optString("type")=="GOAL_COUNTDOWN") 5000L else 15000L
+    notice.put("bodyCompleteBy",at+duration)
+    armCueDeadline(notice,at+duration,"INTERRUPTED_CUE_BODY_TIMEOUT")
+    return true
+  }
+
   private fun speakNext() {
     if (speaking || !ready || messages.isEmpty()) return
     // Deferred information follows state feedback, ahead of new periodic items.
@@ -422,6 +477,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       audit(notice, "RESUMED")
     }
     currentNotice = notice
+    if(VoicePolicy.goalCue(notice.optString("type"))) armCueDeadline(notice, notice.optLong("expiresAt"), "CUE_START_EXPIRED")
     val attributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
       .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
     val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
@@ -439,6 +495,12 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     lastSpeechAt = System.currentTimeMillis()
     lastPriority = notice.optInt("priority")
     debugPrefs.edit().putLong("lastSpeechAt", lastSpeechAt).putInt("lastPriority", lastPriority).apply()
+    if(notice.optString("type")=="GOAL_COUNTDOWN") {
+      val session=batchRunId+":"+goalRevision
+      val sessions=debugPrefs.getStringSet("countdownChimeSessions",emptySet())!!.toMutableSet()
+      if(sessions.contains(session)) notice.put("chimePlayed",true)
+      else { sessions.add(session);debugPrefs.edit().putStringSet("countdownChimeSessions",sessions).commit() }
+    }
     if ((VoicePolicy.commonChime(notice.optString("type")) || notice.optString("type") in listOf("STOP_CANDIDATE_ANNOUNCED", "AUTO_STOP_CONFIRMED", "AUTO_RESUME_CONFIRMED")) && !notice.optBoolean("chimePlayed")) {
       playChime(notice, attributes); return
     }
@@ -494,7 +556,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
 
   private fun speakNotice(notice: JSONObject, attributes: AudioAttributes) {
     if (!bodyEligible(notice)) return
-    if (NoiseState.available() && (VoicePolicy.information(notice.optString("type")) || notice.optString("type") in listOf("LEGACY", "RUN_GOAL_FINISHED", "RUN_STARTED", "GOAL_WARNING"))) {
+    if (notice.optString("type")!="GOAL_COUNTDOWN" && NoiseState.available() && (VoicePolicy.information(notice.optString("type")) || notice.optString("type") in listOf("LEGACY", "RUN_GOAL_FINISHED", "RUN_STARTED", "GOAL_WARNING", "TURNAROUND"))) {
       synthesizeAdaptive(notice, attributes); return
     }
     speakDirect(notice, attributes)
@@ -547,7 +609,9 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
                 player.start(); started = true
                 NoiseState.outputType = player.routedDevice?.type ?: 0
                 lastAudioAuditAt = 0; lastAudioRoute = -1; lastAudioGain = -1f
-                notice.put("startedAt", System.currentTimeMillis()).put("playbackMode", "adaptive-local-synthesis")
+                val at=System.currentTimeMillis()
+                if(!cueBodyStarted(notice,at))return@setOnPreparedListener
+                notice.put("startedAt", at).put("playbackMode", "adaptive-local-synthesis")
                 audit(notice, "STARTED"); handler.post(volumeTick)
               } catch (_: Exception) { fallback("ADAPTIVE_START_FAILED") }
             }
@@ -576,7 +640,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     notice.put("playbackMode", "direct-tts")
     NoiseState.playback = true; NoiseState.externalOutput = false
     val message = if (notice.optString("type") == "CURRENT_TIME") CurrentTimePolicy.message(System.currentTimeMillis()).also { notice.put("message", it) } else notice.getString("message")
-    val adaptiveEligible = VoicePolicy.information(notice.optString("type")) || notice.optString("type") in listOf("LEGACY", "RUN_GOAL_FINISHED", "RUN_STARTED", "GOAL_WARNING")
+    val adaptiveEligible = VoicePolicy.goalCue(notice.optString("type")) || VoicePolicy.information(notice.optString("type")) || notice.optString("type") in listOf("LEGACY", "RUN_GOAL_FINISHED", "RUN_STARTED", "GOAL_WARNING")
     val directGain = if (adaptiveEligible && NoiseState.available()) NoiseState.gain.coerceIn(.65f, 1f) else 1f
     notice.put("directRequestedGain", directGain).put("directGainDynamic", false)
     val params = Bundle().apply { putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, directGain) }
@@ -586,7 +650,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       override fun onStart(utteranceId: String?) {
         if (utteranceId != utteranceKey) return
         val startedAt = System.currentTimeMillis()
-        handler.post { if (currentNotice === notice) { notice.put("startedAt", startedAt); audit(notice, "STARTED") } }
+        handler.post { if (currentNotice === notice && cueBodyStarted(notice,startedAt)) { notice.put("startedAt", startedAt); audit(notice, "STARTED") } }
         Log.i(TAG, "Speaking: $message")
         preferences.edit().putString("ttsStatus", "SPEAKING").putLong("ttsStartedAt", System.currentTimeMillis()).apply()
       }
@@ -619,6 +683,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   private val pendingTests = mutableListOf<String>()
 
   private fun finishTest() {
+    if(cuePreviewUntil>System.currentTimeMillis())return
     if (!preferences.getBoolean("running", false)) handler.post { if (!speaking && messages.isEmpty()) stopSelf() }
   }
 

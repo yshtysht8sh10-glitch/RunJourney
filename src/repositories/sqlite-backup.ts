@@ -1,4 +1,5 @@
 import { HISTORY_GROUP_KEY, parseHistoryGroups } from '../domain/history-groups';
+import { CUE_SETTINGS_KEY,validCueSettings,validCueState } from '../domain/goal-cues';
 import { ActiveRun, RunRecord } from '../types/run';
 import { validateRuns } from '../utils/run-backup';
 import { canonical, SqliteStore, SqlSnapshot } from './sqlite-store';
@@ -9,6 +10,10 @@ export function validateSnapshot(snapshot: SqlSnapshot) {
   if (!snapshot || !Array.isArray(snapshot.runs) || !snapshot.settings || typeof snapshot.settings !== 'object' || Array.isArray(snapshot.settings)) throw new Error('SQLite backup構造が不正です');
   validateRuns(snapshot.runs);
   if(snapshot.settings[HISTORY_GROUP_KEY]) parseHistoryGroups(snapshot.settings[HISTORY_GROUP_KEY]);
+  for(const [key,text] of Object.entries(snapshot.settings)) {
+    if(key===CUE_SETTINGS_KEY&&!validCueSettings(JSON.parse(text)))throw Error('目標案内設定が不正です');
+    if(key.startsWith('@runjourney/goal-cues/state/v1/')&&!validCueState(JSON.parse(text)))throw Error('目標案内の進捗が不正です');
+  }
   if (snapshot.protectedIds && (!Array.isArray(snapshot.protectedIds) || snapshot.protectedIds.some(id => typeof id !== 'string' || ![...snapshot.runs.map(run => run.id), snapshot.draft?.id].includes(id)))) throw new Error('保護対象IDが不正です');
   if (new Set(snapshot.runs.map(r => r.id)).size !== snapshot.runs.length) throw new Error('Backup内で走行IDが重複しています');
   if (snapshot.draft !== null) {

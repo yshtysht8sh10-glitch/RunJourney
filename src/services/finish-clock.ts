@@ -7,21 +7,25 @@ let checking = false;
  * The persisted active clock is authoritative; a delayed pulse never shifts the end.
  */
 export const FinishClock = {
-  start(check: () => Promise<unknown>) {
+  start(check: () => Promise<unknown>, previewMs = 0) {
     this.stop();
     const pulse = () => {
       if (checking) return;
       checking = true;
       void check().catch(() => undefined).finally(() => { checking = false; });
     };
-    timer = setInterval(pulse, 1000);
+    // Probe deliberately disables the JS fallback to prove native wake-up delivery.
+    if(!previewMs) timer = setInterval(pulse, 1000);
     if (Platform.OS === 'android') {
       try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const native = require('../../modules/run-announcer').default as typeof import('../../modules/run-announcer').default;
         subscription = native.addListener?.('finishClock', pulse);
-        native.finishClock?.(true);
-      } catch (error) { console.warn('Native finish clock unavailable', error); }
+        if(previewMs){
+          if(!native.previewFinishClock)throw Error('画面OFF試聴には更新済みTest APKが必要です');
+          native.previewFinishClock(previewMs);
+        }else native.finishClock?.(true);
+      } catch (error) { if(previewMs){this.stop();throw error;} console.warn('Native finish clock unavailable', error); }
     }
   },
   stop() {

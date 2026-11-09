@@ -15,6 +15,7 @@ import { VoiceAnnouncement } from '@/services/voice-announcement';
 import { summarizeStopLatency } from '@/domain/stop-latency';
 import { summarizeFieldRun } from '@/domain/field-summary';
 import { AdaptiveAudio } from '@/services/adaptive-audio';
+import { GoalCues } from '@/services/goal-cues';
 
 export default function Diagnostics() {
   const { id } = useLocalSearchParams<{ id?: string }>();
@@ -69,6 +70,10 @@ export default function Diagnostics() {
           .catch(error => Alert.alert('集計できませんでした', String(error))).finally(() => setExportingVoice(false));
       }}><Text style={styles.text}>停止・通知の遅延サマリーを集計</Text></Pressable>
       {latency && <Text selectable style={styles.log}>{JSON.stringify({ stages: latency.stages, reasons: latency.reasons, candidateCount: latency.candidates.length, limitations: latency.limitations, noise: AdaptiveAudio.diagnostics() }, null, 2)}</Text>}
+      <Text style={styles.text}>以下は履歴を作らない試聴です。折り返しは7km/60分の半分を再現します。カウントダウンは下記のNative pulseによる検証を使います。</Text>
+      <Text style={styles.text}>画面OFF検証：実RUNと同じNative foreground pulse・案内判定・音声キューを使用。距離/時計は合成入力、履歴と設定は保存しません。200→190→10m（または60→50→10秒）、約22秒。実GPS配信の検証とは異なります。</Text>
+      {(['distance','time'] as const).map(kind=><Pressable key={'probe-'+kind} accessibilityRole="button" style={styles.button} onPress={()=>void GoalCues.probe(kind).catch(e=>Alert.alert('画面OFF試聴できませんでした',String(e)))}><Text style={styles.text}>画面OFF {kind==='distance'?'距離':'時間'}カウントダウン（実RUN音声経路・履歴なし）</Text></Pressable>)}
+      {(['half-distance','half-time'] as const).map(kind=><Pressable key={kind} accessibilityRole="button" style={styles.button} onPress={()=>void GoalCues.preview(kind).catch(e=>Alert.alert('テストできませんでした',String(e)))}><Text style={styles.text}>{({'half-distance':'距離の折り返し','half-time':'時間の折り返し','countdown-distance':'距離カウントダウン','countdown-time':'時間カウントダウン'})[kind]}をテスト（履歴なし）</Text></Pressable>)}
       {(['RUN_STARTED','GOAL_WARNING'] as const).map(type=><Pressable key={type} accessibilityRole="button" style={styles.button} onPress={()=>void VoiceAnnouncement.previewRunNotice(type).catch(e=>Alert.alert('テストできませんでした',String(e)))}><Text style={styles.text}>{type==='RUN_STARTED'?'START設定音声':'終了予告音声'}をテスト（履歴なし）</Text></Pressable>)}
       {(['KILOMETER_LAP','FIVE_MINUTES','PACE_WARNING','AUTO_STOP_CONFIRMED','AUTO_RESUME_CONFIRMED'] as const).map(type=><Pressable key={type} accessibilityRole="button" style={styles.button} onPress={()=>void VoiceAnnouncement.previewRunNotice(type).catch(e=>Alert.alert('テストできませんでした',String(e)))}><Text style={styles.text}>{({KILOMETER_LAP:'ペース走1km差分（今回遅い・累積早い）',FIVE_MINUTES:'5分案内',PACE_WARNING:'ペース走案内',AUTO_STOP_CONFIRMED:'Auto Stop停止',AUTO_RESUME_CONFIRMED:'Auto Stop再開'})[type]}をテスト（履歴なし）</Text></Pressable>)}
       <Text selectable style={styles.log}>{JSON.stringify(JSON.parse(voiceLog).slice(-12), null, 2)}</Text>

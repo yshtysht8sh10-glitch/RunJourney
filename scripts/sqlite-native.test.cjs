@@ -125,3 +125,17 @@ test('display group backup round-trip preserves original RUNs and rollback rejec
   await assert.rejects(restored.store.restore(conflicting),/重複/);assert.equal(canonical(await restored.store.snapshot()),before);
   await db.store.setSetting(HISTORY_GROUP_KEY,null);assert.equal(canonical(await db.store.snapshot()),canonical(original));restored.close();
 }));
+
+test('goal cue config and consumed thresholds survive backup/restore without changing RUNs',()=>using(async(db,root)=>{
+ const {CUE_SETTINGS_KEY,cueStateKey,advanceCues}=require('../src/domain/goal-cues.ts');
+ await db.store.importRuns([run('cue-backup')]);const originals=canonical((await db.store.snapshot()).runs);
+ const config={turnaround:true,countdown:true,version:1};
+ const sample={runId:'cue-backup',revision:'g',epoch:0,kind:'time',target:3600,progress:0,at:100000,sourceAt:100000,running:true,enabled:true};
+ let result=advanceCues(null,sample,config);result=advanceCues(result.state,{...sample,progress:3540},config);
+ assert.equal(result.events.filter(e=>e.type==='GOAL_COUNTDOWN').length,1);
+ await db.store.setSetting(CUE_SETTINGS_KEY,JSON.stringify(config));await db.store.setSetting(cueStateKey(sample.runId),JSON.stringify(result.state));
+ const decoded=await decodeBackup(await encodeBackup(db.store,digest),digest),restored=open(path.join(root,'cues.sqlite'));
+ await restored.store.restore(decoded.snapshot);assert.equal(canonical((await restored.store.snapshot()).runs),originals);
+ const state=JSON.parse(await restored.store.getSetting(cueStateKey(sample.runId)));assert.equal(advanceCues(state,{...sample,progress:3540},config).events.length,0);
+ restored.close();
+}));
