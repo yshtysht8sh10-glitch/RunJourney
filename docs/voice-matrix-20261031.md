@@ -125,3 +125,8 @@
 専用の独立2スイッチ・初期OFF。自動終了ONの単一目標だけを使用。TURNAROUNDは目標50%で原則1回、共通チャイム、priority60/TTL8秒（距離fixから最大5秒）。GOAL_COUNTDOWNは距離残200〜10m/時間残60〜10秒、最新未消費数字1件、priority60/TTL3秒。初回通知予約だけチャイム、以後数字のみ。通常情報の回復retryには載せない。停止・終了・目標/設定変更・次数字・期限で古い新通知を取消し、既存priority/停止判定/終了判定は変更しない。
 
 #62はcountdown ONかつ同じ200m/60秒内のみ抑止（範囲外の500mなどは維持）。復旧や変更で過ぎた半分/数字は追いかけない。RUN別のSQLite進捗とstable event ID/goal epoch/config versionで二重通知を防ぐ。詳細なスキップ/競合/期限/欠落の扱いは docs/goal-cues-20261109.md。正式レビュー・実走受入前。
+
+
+## Test v28：新通知の開始期限と完了監視を分離
+
+TURNAROUND/GOAL_COUNTDOWNのTTL8秒/3秒は本文開始までの期限。期限内に開始した本文は、それぞれ開始後15秒/5秒までをエンジン完了watchdogとする。時間目標の終了deadline、新しい数字、停止/終了/目標設定変更、既存の割込みは引き続き優先する。既存通知の文言・構成・priority・TTLは変更なし。画面OFFの再現・切分けとNative pulse検証の範囲は [goal-cue-screenoff-20261109.md](goal-cue-screenoff-20261109.md)。正式レビュー・実走受入前。

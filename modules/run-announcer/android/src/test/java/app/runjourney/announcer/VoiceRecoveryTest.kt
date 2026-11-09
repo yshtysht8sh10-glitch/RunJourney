@@ -133,6 +133,13 @@ class VoiceRecoveryTest {
     cueBatch(190)
     assertNotSame(n,get("currentNotice"));assertFalse(queue().any{it.optString("id")==n.optString("id")})
   }
+  @Test fun liveRunFreshCountdownIsNotSubjectToThirtySecondPreviewLease() {
+    cueBatch(200)
+    shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(310000))
+    cueBatch(190)
+    assertEquals(190,queue().single().getJSONObject("data").getInt("label"))
+    assertFalse(GoalCueFence.ended(service,"r"))
+  }
   private fun finishCommonChime() {
     (get("chime") as? MediaPlayer)?.let { shadowOf(it).invokeCompletionListener() }
     shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(181))
