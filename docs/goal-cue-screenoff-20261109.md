@@ -53,4 +53,11 @@ Nativeの追加試験は当初新しい開始処理が存在しないため2件F
 
 更新前screenoff-before.json SHA256 a60d0117a6c09ce64b15cb9f2cf8a0d35ad7e562c553cfc06c78c9c0d1c1e151。隔離SQLite roundtrip/integrity/外部キー検証成功、前回after.json全snapshotと一致。54履歴・ごみ箱18・GPS22512点・設定11（旧10+両OFF新設定）・draftなし。
 
-中間8ac611a7はwake lock昇格修正前のためCANCELED。配布・実機更新には使用しない。[EAS build a14ef9f3](https://expo.dev/accounts/yshtysht8sh10/projects/RunJourney/builds/a14ef9f3-9ba6-43b6-8285-dc42417b8451) は実装faadf6cでビルド中。完成後にAPK/ハッシュ、更新後照合、Bluetooth画面OFFのログとユーザー聴取を追記する。実機は未合格の段階を完了扱いにしない。
+中間8ac611a7はwake lock昇格修正前のためCANCELED。配布・実機更新には使用しない。[EAS build a14ef9f3](https://expo.dev/accounts/yshtysht8sh10/projects/RunJourney/builds/a14ef9f3-9ba6-43b6-8285-dc42417b8451) は実装faadf6cでFINISHED。[Test v28 APK](https://expo.dev/artifacts/eas/zJgGKHeCEi7M-V5ANbYKcyMjIUJSsAYzSrryehaDch4.apk)、SHA256 `39bf3b961df3c84a65f261c71f23f328bdf932eb9481f72095b971b997e30166`。証明書SHA256は旧Test v27のfac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9cと一致、permission一覧も一致。app.runjourney.mobile.test/versionCode28へadb install -r成功。更新後照合、Bluetooth画面OFFログとユーザー聴取は以下へ追記する。実機は未合格の段階を完了扱いにしない。
+
+
+### v28実機試聴の途中経過
+
+更新後、距離Native pulse試聴を開始して画面OFF、24秒後に音声/時計/騒音サービス残留なし。端末はロック状態となり手動解除を依頼済み。距離本文の完了/失効はExportログ未回収のためまだ合否を付けない。ユーザー聴取回答、画面OFF時間試聴、更新後の全Backup snapshot照合も解除後に実施する。
+
+インストール済みAPKのSHA256は上記配布品と一致、versionCode28・firstInstallTime=2026-09-30 23:40:36を保持。Production APK SHA256は更新前と同じ30a956d9b5197475c1226d10ac39a82c580c4f25e6e84218f8470b9316086d3a。Pace版未操作。
