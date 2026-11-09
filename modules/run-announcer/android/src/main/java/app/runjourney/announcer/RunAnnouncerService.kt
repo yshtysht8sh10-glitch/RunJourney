@@ -52,6 +52,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   private var goalRevision = ""
   private var goalRevisionIndex = -1
   private var cueContext: JSONObject? = null
+  private var cuePreviewUntil = 0L
   private var candidateCancelled = false
   private var batchState = "RUNNING"
   private var latestEventIndex = -1
@@ -151,6 +152,14 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     batchMode = true
     val batch = JSONObject(payload)
     val runId = batch.optString("runId")
+    if(runId.startsWith("preview-cues-") && batch.optLong("previewLeaseMs")>0 && !preferences.getBoolean("running",false)) {
+      val until=System.currentTimeMillis()+batch.optLong("previewLeaseMs").coerceIn(1,30000)
+      cuePreviewUntil=until
+      handler.postDelayed({if(cuePreviewUntil==until && batchRunId==runId && !preferences.getBoolean("running",false)) {
+        cuePreviewUntil=0;messages.forEach{audit(it,"DISCARDED_PREVIEW_LEASE")};messages.clear()
+        interrupt("INTERRUPTED_PREVIEW_LEASE");stopSelf()
+      }},until-System.currentTimeMillis())
+    }
     val cancel = batch.optBoolean("cancelCandidate")
     val paused = batch.optBoolean("paused")
     val incoming = batch.getJSONArray("notices")
@@ -186,6 +195,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     batchState = batch.optString("state", if (paused) "AUTO_STOP" else "RUNNING")
     latestEventIndex = batch.optInt("latestEventIndex", -1)
     ended = batch.optBoolean("ended")
+    if(ended || !runId.startsWith("preview-cues-"))cuePreviewUntil=0
     if (ended && !batch.optBoolean("muted")) debugPrefs.edit().putString("finishedRun", runId).apply()
     messages.toList().forEach { n ->
       if (!validInState(n)) {
@@ -647,6 +657,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   private val pendingTests = mutableListOf<String>()
 
   private fun finishTest() {
+    if(cuePreviewUntil>System.currentTimeMillis())return
     if (!preferences.getBoolean("running", false)) handler.post { if (!speaking && messages.isEmpty()) stopSelf() }
   }
 

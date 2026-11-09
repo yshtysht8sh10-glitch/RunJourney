@@ -8,7 +8,7 @@ import { RunRepository } from '@/repositories/run-repository';
 import { database } from '@/repositories/database';
 import { resetNative } from '@/test/native-driver';
 import type { ActiveRun } from '@/types/run';
-jest.mock('../../../modules/run-announcer',()=>({__esModule:true,default:{notifyBatch:jest.fn(),appendDiagnostic:jest.fn()}}));
+jest.mock('../../../modules/run-announcer',()=>({__esModule:true,default:{notifyBatch:jest.fn(),appendDiagnostic:jest.fn(),stop:jest.fn(),diagnostics:jest.fn(()=>({running:false}))}}));
 let serial=0;
 const base=1800000000000;
 const createRun=():ActiveRun=>({id:'cue-integration-'+serial++,startedAt:new Date(base).toISOString(),createdAt:'',updatedAt:'',points:[],distanceMeters:0,finishGoal:{kind:'time',activeMs:3600000},features:{autoStop:false,break:true}});
@@ -58,4 +58,12 @@ test('reservation delayed beyond TTL is logged and never dispatched or replayed'
  jest.setSystemTime(base+3544000);release(await actual());await p;expect(notices().filter(e=>e.type==='GOAL_COUNTDOWN')).toHaveLength(0);
  expect(jest.mocked(native.appendDiagnostic!).mock.calls.some(([text])=>JSON.parse(text).status==='EXPIRED_BEFORE_DISPATCH')).toBe(true);
  await GoalCues.update(run);expect(notices().filter(e=>e.type==='GOAL_COUNTDOWN')).toHaveLength(0);
+});
+
+
+test('preview is single-flight, uses bounded native lease, chimes once and never writes a RUN or settings',async()=>{
+ const db=await database(),before=await db.snapshot();const first=GoalCues.preview('countdown-distance');
+ await expect(GoalCues.preview('half-distance')).rejects.toThrow('試聴');await jest.advanceTimersByTimeAsync(13000);await first;
+ const ns=notices();expect(ns.map(e=>e.data.label)).toEqual([200,190,10]);expect(ns.map(e=>e.chimePlayed)).toEqual([false,true,true]);
+ const batches=jest.mocked(native.notifyBatch!).mock.calls.map(([s])=>JSON.parse(s));expect(batches.map(b=>b.previewLeaseMs)).toEqual([30000,0,0]);expect(native.stop).toHaveBeenCalledTimes(1);expect(await db.snapshot()).toEqual(before);
 });

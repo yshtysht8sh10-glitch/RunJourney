@@ -67,6 +67,14 @@ class VoiceRecoveryTest {
     cueBatch(200);set("goalRevisionIndex",2);cueBatch(190)
     assertTrue(queue().isEmpty())
   }
+  @Test fun previewLeaseIsBoundedWithoutChangingTheRealRunningPreference() {
+    val payload=JSONObject().put("runId","preview-cues-lease").put("state","RUNNING").put("previewLeaseMs",999999).put("notices",JSONArray())
+    service.javaClass.getDeclaredMethod("receiveBatch",String::class.java).apply{isAccessible=true}.invoke(service,payload.toString())
+    assertFalse(service.getSharedPreferences(RunAnnouncerService.PREFS,0).getBoolean("running",false))
+    assertTrue((get("cuePreviewUntil") as Long)-System.currentTimeMillis()<=30000)
+    shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(30001))
+    assertEquals(0L,get("cuePreviewUntil"));assertTrue(queue().isEmpty());assertNull(get("currentNotice"))
+  }
   @Test fun countdownSuppressesExistingWarningOnlyInsideConfiguredRange() {
     cueBatch(200)
     val warning=notice("GOAL_WARNING").apply{getJSONObject("data").put("goalRevision","cue")}

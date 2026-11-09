@@ -35,15 +35,16 @@ export const GoalCues={
  async preview(kind:'half-distance'|'half-time'|'countdown-distance'|'countdown-time') {
   if(previewing)throw Error('試聴が終了するまでお待ちください');
   if(await RunRepository.getActiveRun())throw Error('走行中はこのテストを使えません');
+  if(previewing)throw Error('試聴が終了するまでお待ちください');
+  const n=native();if(n?.diagnostics?.().running)throw Error('音声サービスが走行中です。終了を確認してください');
   previewing=true;
-  const n=native(),start=Date.now(),id='preview-cues-'+start,time=kind.endsWith('time'),countdown=kind.startsWith('countdown');
+  const start=Date.now(),id='preview-cues-'+start,time=kind.endsWith('time'),countdown=kind.startsWith('countdown');
   const run:ActiveRun={id,startedAt:new Date(start).toISOString(),createdAt:'',updatedAt:'',points:[],distanceMeters:0,finishGoal:time?{kind:'time',activeMs:3600000}:{kind:'distance',meters:7000}};
   const settings={turnaround:true,countdown:true,version:1};
   const sample={runId:id,revision:goalRevision(run),epoch:0,kind:time?'time' as const:'distance' as const,target:time?3600:7000,progress:0,at:start,sourceAt:start,running:true,enabled:true};
   let state=advanceCues(null,sample,settings).state;
   const frames=countdown?(time?[60,50,10]:[200,190,10]):[sample.target/2];
   try {
-   n?.start(start,300000); // Test-only foreground lease; no RUN/history or user settings.
    for(const label of frames){
     if(await RunRepository.getActiveRun())break;
     const now=Date.now(),progress=countdown?sample.target-label:label;
@@ -52,7 +53,7 @@ export const GoalCues={
     const remaining=sample.target-progress;
     const context={at:now,version:1,turnaround:true,countdown:true,enabled:true,running:true,revision:sample.revision,kind:sample.kind,remaining,label:cueLabel(remaining),deadline:time?now+remaining*1000:0,suppressWarning:countdown};
     const notices=result.events.map(e=>{const key=id+':'+e.type+':'+e.label;diagnosticLog('VOICE_GENERATED',key,e.type,{runId:id,simulation:true,label:e.label});return {id:key,type:e.type,priority:60,message:e.message,chimePlayed:e.chime===false,generatedAt:now,expiresAt:now+(e.type==='GOAL_COUNTDOWN'?3000:8000),data:{runId:id,simulation:true,goalRevision:sample.revision,goalEpoch:0,cueVersion:1,label:e.label}};});
-    await n?.notifyBatch?.(JSON.stringify({runId:id,state:'RUNNING',goalRevision:sample.revision,goalRevisionIndex:0,cueContext:context,notices}));
+    await n?.notifyBatch?.(JSON.stringify({runId:id,state:'RUNNING',previewLeaseMs:label===frames[0]?30000:0,goalRevision:sample.revision,goalRevisionIndex:0,cueContext:context,notices}));
     await new Promise(resolve=>setTimeout(resolve,countdown?4000:9000));
    }
   } finally {previewing=false;if(!(await RunRepository.getActiveRun()))n?.stop();}
