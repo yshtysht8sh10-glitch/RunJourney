@@ -67,6 +67,15 @@ class VoiceRecoveryTest {
     cueBatch(200);set("goalRevisionIndex",2);cueBatch(190)
     assertTrue(queue().isEmpty())
   }
+  @Test fun finishedCueMarkerRejectsLateCountdownWithoutDisablingGenericVoiceResume() {
+    cueBatch(200)
+    assertTrue(GoalCueFence.finish(service,"r"))
+    RunAnnouncerService.stopRunning!!.invoke();shadowOf(Looper.getMainLooper()).idle()
+    set("ready",false);cueBatch(190)
+    assertTrue(queue().isEmpty())
+    service.onDestroy();service=Robolectric.buildService(RunAnnouncerService::class.java).create().get();set("ready",false)
+    cueBatch(180);assertTrue(queue().isEmpty())
+  }
   @Test fun previewLeaseIsBoundedWithoutChangingTheRealRunningPreference() {
     val payload=JSONObject().put("runId","preview-cues-lease").put("state","RUNNING").put("previewLeaseMs",999999).put("notices",JSONArray())
     service.javaClass.getDeclaredMethod("receiveBatch",String::class.java).apply{isAccessible=true}.invoke(service,payload.toString())

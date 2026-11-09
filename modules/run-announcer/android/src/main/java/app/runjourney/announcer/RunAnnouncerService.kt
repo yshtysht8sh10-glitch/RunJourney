@@ -156,6 +156,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       val until=System.currentTimeMillis()+batch.optLong("previewLeaseMs").coerceIn(1,30000)
       cuePreviewUntil=until
       handler.postDelayed({if(cuePreviewUntil==until && batchRunId==runId && !preferences.getBoolean("running",false)) {
+        GoalCueFence.finish(this,runId)
         cuePreviewUntil=0;messages.forEach{audit(it,"DISCARDED_PREVIEW_LEASE")};messages.clear()
         interrupt("INTERRUPTED_PREVIEW_LEASE");stopSelf()
       }},until-System.currentTimeMillis())
@@ -248,6 +249,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     val c=cueContext
     if(type=="GOAL_WARNING" && c?.optString("revision")==goalRevision && c.optBoolean("suppressWarning")) return false
     if(VoicePolicy.goalCue(type)) {
+      if(GoalCueFence.ended(this,n.optJSONObject("data")?.optString("runId")?:""))return false
       if(n.optJSONObject("data")?.optInt("goalEpoch",-1)!=goalRevisionIndex)return false
       if(c==null || c.optString("revision")!=goalRevision || !c.optBoolean("enabled") || !c.optBoolean("running") || n.optJSONObject("data")?.optLong("cueVersion")!=c.optLong("version")) return false
       val remaining=if(c.optString("kind")=="time") (c.optLong("deadline")-System.currentTimeMillis())/1000.0 else c.optDouble("remaining")

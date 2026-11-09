@@ -58,7 +58,11 @@ export const GoalCues={
    }
   } finally {previewing=false;if(!(await RunRepository.getActiveRun()))n?.stop();}
  },
- stop(id:string){endedRuns.add(id);if(pending===id)pending=undefined;},
+ stop(id:string){
+  endedRuns.add(id);if(pending===id)pending=undefined;
+  try{if(native()?.finishGoalCues?.(id)===false)diagnosticLog('GOAL_CUE_DECISION',id+':end','END_FENCE_WRITE_FAILED',{runId:id});}
+  catch{diagnosticLog('GOAL_CUE_DECISION',id+':end','END_FENCE_WRITE_FAILED',{runId:id});}
+ },
  update(run:ActiveRun):Promise<void>{
   pending=run.id;
   if(!inFlight)inFlight=(async()=>{while(pending){const id=pending;pending=undefined;try{await evaluate(id);}catch(e){console.warn('Goal cues unavailable; recording and auto finish retained',e);}}})().finally(()=>{inFlight=undefined;});

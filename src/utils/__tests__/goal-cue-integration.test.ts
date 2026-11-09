@@ -8,7 +8,7 @@ import { RunRepository } from '@/repositories/run-repository';
 import { database } from '@/repositories/database';
 import { resetNative } from '@/test/native-driver';
 import type { ActiveRun } from '@/types/run';
-jest.mock('../../../modules/run-announcer',()=>({__esModule:true,default:{notifyBatch:jest.fn(),appendDiagnostic:jest.fn(),stop:jest.fn(),diagnostics:jest.fn(()=>({running:false}))}}));
+jest.mock('../../../modules/run-announcer',()=>({__esModule:true,default:{finishGoalCues:jest.fn(()=>true),notifyBatch:jest.fn(),appendDiagnostic:jest.fn(),stop:jest.fn(),diagnostics:jest.fn(()=>({running:false}))}}));
 let serial=0;
 const base=1800000000000;
 const createRun=():ActiveRun=>({id:'cue-integration-'+serial++,startedAt:new Date(base).toISOString(),createdAt:'',updatedAt:'',points:[],distanceMeters:0,finishGoal:{kind:'time',activeMs:3600000},features:{autoStop:false,break:true}});
@@ -37,7 +37,7 @@ test('stop before pending I/O finishes prevents late cue dispatch',async()=>{
  await GoalCueSettings.save({turnaround:true,countdown:true});const run=createRun();await RunRepository.saveActiveRun(run);await GoalCues.update(run);jest.clearAllMocks();
  let release!:(x:ActiveRun|null)=>void;const get=jest.spyOn(RunRepository,'getActiveRun').mockImplementationOnce(()=>new Promise(resolve=>{release=resolve;}));
  jest.setSystemTime(base+1800000);const pending=GoalCues.update(run);for(let i=0;i<20&&!release;i++)await Promise.resolve();
- GoalCues.stop(run.id);release(run);await pending;expect(native.notifyBatch).not.toHaveBeenCalled();get.mockRestore();
+ GoalCues.stop(run.id);expect(native.finishGoalCues).toHaveBeenCalledWith(run.id);release(run);await pending;expect(native.notifyBatch).not.toHaveBeenCalled();get.mockRestore();
 });
 
 
@@ -67,3 +67,4 @@ test('preview is single-flight, uses bounded native lease, chimes once and never
  const ns=notices();expect(ns.map(e=>e.data.label)).toEqual([200,190,10]);expect(ns.map(e=>e.chimePlayed)).toEqual([false,true,true]);
  const batches=jest.mocked(native.notifyBatch!).mock.calls.map(([s])=>JSON.parse(s));expect(batches.map(b=>b.previewLeaseMs)).toEqual([30000,0,0]);expect(native.stop).toHaveBeenCalledTimes(1);expect(await db.snapshot()).toEqual(before);
 });
+
