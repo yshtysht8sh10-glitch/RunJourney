@@ -61,3 +61,29 @@ Nativeの追加試験は当初新しい開始処理が存在しないため2件F
 更新後、距離Native pulse試聴を開始して画面OFF、24秒後に音声/時計/騒音サービス残留なし。端末はロック状態となり手動解除を依頼済み。距離本文の完了/失効はExportログ未回収のためまだ合否を付けない。ユーザー聴取回答、画面OFF時間試聴、更新後の全Backup snapshot照合も解除後に実施する。
 
 インストール済みAPKのSHA256は上記配布品と一致、versionCode28・firstInstallTime=2026-09-30 23:40:36を保持。Production APK SHA256は更新前と同じ30a956d9b5197475c1226d10ac39a82c580c4f25e6e84218f8470b9316086d3a。Pace版未操作。
+
+
+## 追加の実機検証（距離ログ回収後）
+
+voice-v28-distance.json SHA256 `952b9109e183262dd7859cff6c2c49e79719e0fa235b883ac7e9553b1eb36a7e`。系列preview-cues-probe-1794209546838、Native pulse22件、FINISHED。
+
+|数字|開始遅延|本文時間|生成から完了|画面OFF開始/完了|結果|
+|---|---:|---:|---:|---|---|
+|200m|1388ms|1952ms|3340ms|両方false（画面OFF）|DONE、初回チャイム1|
+|190m|237ms|2830ms|3067ms|両方false（画面OFF）|DONE、チャイム0|
+|10m|241ms|1825ms|2066ms|両方false（画面OFF）|DONE、チャイム0|
+
+200m/190mは3秒の開始TTLを跨いで本文を完了し、不当な期限中断は0。180〜20mの17数字はCOUNTDOWN_CROSSED_OLDER_SKIPPEDに列挙され、VOICE_GENERATED/本文開始はない。本文再生の完了と実際のユーザー聴取は分ける（現時点の聴取回答は未回収）。
+
+時間のNative pulse試聴も画面OFFで実行済み、24秒後の音声/時計サービス残留なし。再ロックした端末の手動解除を依頼し、時間ログ回収と更新後Backup照合を待っている。時間3数字の合否をサービス終了だけで推測しない。
+
+### 正式レビュー引継ぎ時に確認する点
+
+正式レビュー依頼は、今回の実機確認と保全照合が揃うまで保留。レビュー担当へは以下の証拠を渡す。開発者の自己検証は正式独立レビューに数えない。
+
+- v27修正前の本文中断時系列と、v28距離の開始TTL超過後DONE。時間ログとデータ照合は回収後に同じ表へ追加。
+- expiresAtとbodyCompleteBy/cueWatchDeadlineの分離、watch世代番号、時間目標deadlineの上限、古いcallbackの無害化。
+- 新数字・停止・終了での取消と、音声OFF→ONを実RUN終了印と混同しないこと。NativeのpauseAndRunEndCancelCountdownWithoutInformationRecovery/finishedCueMarkerRejectsLateCountdownWithoutDisablingGenericVoiceResume/timeGoalDeadlineCancelsChimeWithoutChangingRunEndState、JSのstop before pending I/O finishes prevents late cue dispatchがPASS。
+- 上記の停止/終了途中取消は共有Nativeサービス/JSの自動回帰試験。実機probeでは通常終了時のサービス解放を確認したが、実GPSのAuto Stopや本当のRUN停止操作中の中断をこの合成試聴で確認したとは主張しない。
+- Native pulse専用の試聴、元DBとの隔離、30秒lease、試聴→実RUNのwake lock昇格。OS GPS配送/実走受入とは別の検証範囲。
+- 元の54履歴/ごみ箱18/GPS22512/設定11/グループ・保護/draftが全snapshot一致であること（更新後比較待ち）。Production/Pace未変更、PR70/67未マージ、Issue未Closeを維持。
