@@ -1,4 +1,6 @@
 import { goalRevision, goalWarning, startMessage } from '@/domain/run-notices';
+import { GoalCues,cueContext } from './goal-cues';
+import { GoalCueSettings } from '@/repositories/goal-cue-settings';
 import { GoalWarningSettingsRepository } from '@/repositories/goal-warning-settings';
 import { ClockSettingsRepository } from '@/repositories/clock-settings';
 import SettingsStorage from '@/repositories/storage';
@@ -38,6 +40,7 @@ export const VoiceAnnouncement = {
   async goalChanged(run: ActiveRun) {
     try { await nativeAnnouncer()?.notifyBatch?.(JSON.stringify({...(await noticeContext(run)),notices:[]})); }
     catch(error) { console.warn('Goal voice invalidation unavailable; saved goal retained',error); }
+    void GoalCues.update(run);
   },
   async previewRunNotice(type: 'RUN_STARTED' | 'GOAL_WARNING' | 'KILOMETER_LAP' | 'FIVE_MINUTES' | 'PACE_WARNING' | 'AUTO_STOP_CONFIRMED' | 'AUTO_RESUME_CONFIRMED') {
     if (await RunRepository.getActiveRun()) throw Error('走行中はこのテストを使えません');
@@ -49,6 +52,7 @@ export const VoiceAnnouncement = {
     await nativeAnnouncer()?.notifyBatch?.(JSON.stringify({...context,notices:[{id,type,priority:type.startsWith('AUTO_')?100:type==='KILOMETER_LAP'?70:type==='FIVE_MINUTES'?40:type==='PACE_WARNING'?20:60,generatedAt:now,expiresAt:now+30000,message:'これは音声確認のテストです。'+message,data:{runId:run.id,simulation:true,goalRevision:goalRevision(run)}}]}));
   },
   async started(run: ActiveRun) {
+    void GoalCues.update(run);
     try {
       const now=Date.now(), id=`${run.id}:start`, expiresAt=Date.parse(run.startedAt)+30000;
       const clock=run.startClockSettings ?? await ClockSettingsRepository.get();
@@ -57,6 +61,7 @@ export const VoiceAnnouncement = {
     } catch(error) { console.warn('Start voice unavailable; recording retained',error); }
   },
   beforeGoal(run: ActiveRun): Promise<void> {
+    void GoalCues.update(run);
     pendingWarning = run;
     const work=async(request: ActiveRun)=>{
       try {
@@ -64,6 +69,8 @@ export const VoiceAnnouncement = {
         const run = await RunRepository.getActiveRun();
         if (!run || run.endedAt || run.id !== request.id || goalRevision(run) !== goalRevision(request)) return;
         const decision=goalWarning(run,settings,Date.now());
+        const cues=await GoalCueSettings.get();
+        if(cueContext(run,cues,Date.now()).suppressWarning){diagnosticLog('GOAL_WARNING_DECISION',run.id+':warning:'+goalRevision(run),'SUPPRESSED_BY_COUNTDOWN',{runId:run.id,remaining:decision.remaining});return;}
         const key=run.id+':warning:'+goalRevision(run);
         const status=decision.reason==='DUE'&&warningSeen.has(key)?'ALREADY_GENERATED_FOR_GOAL':decision.reason;
         if(warningDecisions.get(run.id)!==status) { diagnosticLog('GOAL_WARNING_DECISION',key,status,{runId:run.id,revision:goalRevision(run),remaining:decision.remaining}); warningDecisions.set(run.id,status);while(warningDecisions.size>32)warningDecisions.delete(warningDecisions.keys().next().value!); }
@@ -133,6 +140,7 @@ export const VoiceAnnouncement = {
     void this.updateRun(run);
   },
   async updateRun(run: ActiveRun): Promise<void> {
+    void GoalCues.update(run);
     if (nativeAnnouncer()?.notifyBatch) {
       try { await queueGuidance(run); } catch (error) { console.warn('Voice guidance failed; GPS retained', error); }
       return;
@@ -165,6 +173,7 @@ export const VoiceAnnouncement = {
     } catch (error) { console.warn('Voice announcement update failed', error); }
   },
   async updateState(run: ActiveRun): Promise<void> {
+    void GoalCues.update(run);
     if (!nativeAnnouncer()?.notifyBatch) return;
     try { await queueGuidance(run, true); } catch (error) { console.warn('Early voice feedback failed; recording continues', error); }
   },
@@ -178,6 +187,7 @@ export const VoiceAnnouncement = {
   stop(runId?: string): void {
     if (!runId) AdaptiveAudio.stop();
     if (runId) {
+      GoalCues.stop(runId);
       finishedRuns.add(runId);
       while (finishedRuns.size > 32) finishedRuns.delete(finishedRuns.values().next().value!);
       if (pendingGuidance?.run.id === runId) pendingGuidance = undefined;
