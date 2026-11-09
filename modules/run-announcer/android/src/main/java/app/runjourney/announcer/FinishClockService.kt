@@ -27,13 +27,17 @@ class FinishClockService : Service() {
   }
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     val lease=intent?.getLongExtra("previewMs",0)?:0
+    val upgradingPreview=previewUntil>0 && lease<=0
     previewUntil=if(lease>0)android.os.SystemClock.elapsedRealtime()+lease.coerceIn(1,30000) else 0
     val channel = "runjourney-finish-clock"
     getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(channel, "走行終了条件", NotificationManager.IMPORTANCE_LOW))
     startForeground(3801, Notification.Builder(this, channel).setContentTitle("RunJourneyでランニングを記録中")
       .setContentText("目標達成時に計測を終了します").setSmallIcon(android.R.drawable.ic_menu_mylocation).setOngoing(true).build())
-    if (lock?.isHeld != true) lock = getSystemService(PowerManager::class.java)
-      .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "RunJourney:FinishClock").apply { if(previewUntil>0)acquire((previewUntil-android.os.SystemClock.elapsedRealtime()).coerceAtLeast(1)) else acquire() }
+    if (lock?.isHeld != true || upgradingPreview) {
+      lock?.let {if(it.isHeld)it.release()}
+      lock = getSystemService(PowerManager::class.java)
+        .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "RunJourney:FinishClock").apply { if(previewUntil>0)acquire((previewUntil-android.os.SystemClock.elapsedRealtime()).coerceAtLeast(1)) else acquire() }
+    }
     handler.removeCallbacks(tick); handler.post(tick)
     return START_NOT_STICKY
   }
