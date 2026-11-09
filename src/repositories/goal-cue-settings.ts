@@ -7,4 +7,12 @@ export const GoalCueSettings={
   return (await database()).atomic(async s=>{const text=await s.readSetting(CUE_SETTINGS_KEY);const old=text?JSON.parse(text):DEFAULT_CUES;if(!validCueSettings(old))throw Error('設定が不正です');
    const next={...value,version:old.version+1};if(!validCueSettings(next))throw Error('設定の保存上限です');await s.writeSetting(CUE_SETTINGS_KEY,JSON.stringify(next));return next;});
  },
+ async set(key:'turnaround'|'countdown',enabled:boolean){
+  if(!['turnaround','countdown'].includes(key)||typeof enabled!=='boolean')throw Error('設定が不正です');
+  return (await database()).atomic(async s=>{const text=await s.readSetting(CUE_SETTINGS_KEY),old=text?JSON.parse(text):DEFAULT_CUES;
+   if(!validCueSettings(old))throw Error('設定が不正です');
+   const next={...old,[key]:enabled,version:old.version+1};if(!validCueSettings(next))throw Error('設定の保存上限です');
+   await s.writeSetting(CUE_SETTINGS_KEY,JSON.stringify(next));return next;
+  });
+ },
 };

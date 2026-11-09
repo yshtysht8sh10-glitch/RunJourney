@@ -16,3 +16,9 @@ test('two settings persist independently across remount; old RUN/trash/settings 
  await act(async()=>{await tree.root.findAllByType(Switch)[1].props.onValueChange(true);});await act(async()=>{await tree.root.findAllByType(Switch)[0].props.onValueChange(false);});expect(await GoalCueSettings.get()).toMatchObject({turnaround:false,countdown:true});
  expect((await db.snapshot()).runs).toEqual(before.runs);expect((await db.snapshot()).protectedIds).toEqual(before.protectedIds);act(()=>tree.unmount());
 });
+
+test('two switch changes in one UI turn cannot overwrite the independent setting',async()=>{
+ resetNative();let tree!:ReactTestRenderer;await act(async()=>{tree=create(createElement(GoalCueSettingsPanel));});
+ try {const switches=tree.root.findAllByType(Switch);await act(async()=>{switches[0].props.onValueChange(true);switches[1].props.onValueChange(true);});expect(await GoalCueSettings.get()).toMatchObject({turnaround:true,countdown:true});}
+ finally {act(()=>tree.unmount());}
+});

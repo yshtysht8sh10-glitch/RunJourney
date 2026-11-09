@@ -56,7 +56,12 @@ export const GoalCues={
     await n?.notifyBatch?.(JSON.stringify({runId:id,state:'RUNNING',previewLeaseMs:label===frames[0]?30000:0,goalRevision:sample.revision,goalRevisionIndex:0,cueContext:context,notices}));
     await new Promise(resolve=>setTimeout(resolve,countdown?4000:9000));
    }
-  } finally {previewing=false;if(!(await RunRepository.getActiveRun()))n?.stop();}
+  } finally {
+   try{if(!(await RunRepository.getActiveRun())){
+    try{const marked=n?.finishGoalCues?.(id);diagnosticLog('GOAL_CUE_PREVIEW',id,'FINISHED',{runId:id,simulation:true,nativeEndFence:marked===true});}
+    finally{n?.stop();}
+   }}finally{previewing=false;}
+  }
  },
  stop(id:string){
   endedRuns.add(id);if(pending===id)pending=undefined;
