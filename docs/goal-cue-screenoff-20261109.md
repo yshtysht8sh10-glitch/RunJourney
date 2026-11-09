@@ -56,18 +56,18 @@ Nativeの追加試験は当初新しい開始処理が存在しないため2件F
 中間8ac611a7はwake lock昇格修正前のためCANCELED。配布・実機更新には使用しない。[EAS build a14ef9f3](https://expo.dev/accounts/yshtysht8sh10/projects/RunJourney/builds/a14ef9f3-9ba6-43b6-8285-dc42417b8451) は実装faadf6cでFINISHED。[Test v28 APK](https://expo.dev/artifacts/eas/zJgGKHeCEi7M-V5ANbYKcyMjIUJSsAYzSrryehaDch4.apk)、SHA256 `39bf3b961df3c84a65f261c71f23f328bdf932eb9481f72095b971b997e30166`。証明書SHA256は旧Test v27のfac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9cと一致、permission一覧も一致。app.runjourney.mobile.test/versionCode28へadb install -r成功。更新後照合、Bluetooth画面OFFログとユーザー聴取は以下へ追記する。実機は未合格の段階を完了扱いにしない。
 
 
-### v28実機試聴の途中経過
+### v28実機試聴の途中経過（下記の最終結果で解消済み）
 
 更新後、距離Native pulse試聴を開始して画面OFF、24秒後に音声/時計/騒音サービス残留なし。端末はロック状態となり手動解除を依頼済み。距離本文の完了/失効はExportログ未回収のためまだ合否を付けない。ユーザー聴取回答、画面OFF時間試聴、更新後の全Backup snapshot照合も解除後に実施する。
 
 インストール済みAPKのSHA256は上記配布品と一致、versionCode28・firstInstallTime=2026-09-30 23:40:36を保持。Production APK SHA256は更新前と同じ30a956d9b5197475c1226d10ac39a82c580c4f25e6e84218f8470b9316086d3a。Pace版未操作。
 
 
-## 追加の実機検証（距離ログ回収後）
+## 追加の実機検証（距離ログ回収時点の記録）
 
 voice-v28-distance.json SHA256 `952b9109e183262dd7859cff6c2c49e79719e0fa235b883ac7e9553b1eb36a7e`。系列preview-cues-probe-1794209546838、Native pulse22件、FINISHED。
 
-|数字|開始遅延|本文時間|生成から完了|画面OFF開始/完了|結果|
+|数字|開始遅延|本文時間|生成から完了|screenInteractive（開始/完了）|結果|
 |---|---:|---:|---:|---|---|
 |200m|1388ms|1952ms|3340ms|両方false（画面OFF）|DONE、初回チャイム1|
 |190m|237ms|2830ms|3067ms|両方false（画面OFF）|DONE、チャイム0|
@@ -87,3 +87,45 @@ voice-v28-distance.json SHA256 `952b9109e183262dd7859cff6c2c49e79719e0fa235b883a
 - 上記の停止/終了途中取消は共有Nativeサービス/JSの自動回帰試験。実機probeでは通常終了時のサービス解放を確認したが、実GPSのAuto Stopや本当のRUN停止操作中の中断をこの合成試聴で確認したとは主張しない。
 - Native pulse専用の試聴、元DBとの隔離、30秒lease、試聴→実RUNのwake lock昇格。OS GPS配送/実走受入とは別の検証範囲。
 - 元の54履歴/ごみ箱18/GPS22512/設定11/グループ・保護/draftが全snapshot一致であること（更新後比較待ち）。Production/Pace未変更、PR70/67未マージ、Issue未Closeを維持。
+
+
+## 最終実機検証と正式レビュー引継ぎ
+
+### 時間の画面OFFログ
+
+時間の初回試聴（preview-cues-probe-1794223564381）と再試聴（preview-cues-probe-1794224114128）を回収。どちらもNative pulse22件、60/50/10秒すべてSTARTED/DONE、開始・完了ともscreenInteractive=false、初回だけチャイム1、失効・中断・STALE_STATEは0、FINISHED。再試聴についてユーザーは「3つとも聞こえた」と確認済み（初回のみチャイムを含む質問への回答）。距離のユーザー聴取回答は未記録で、実機STARTED/DONEの確認と分ける。
+
+|時間再試聴|開始遅延|本文時間|生成から完了|結果|
+|---|---:|---:|---:|---|
+|60秒|1361ms|1869ms|3230ms|画面OFFでDONE、初回チャイム|
+|50秒|236ms|2123ms|2359ms|画面OFFでDONE、チャイムなし|
+|10秒|224ms|1705ms|1929ms|画面OFFでDONE、チャイムなし|
+
+初回時間60秒も生成+3373msでDONE。距離200/190m・時間60秒2回の計4本文が生成+3秒を越えて完了し、配送開始TTLによる不当な再生中断が解消したことを実機で確認した。3系列合計9本文STARTED/DONE、Native pulse66件、初回チャイム計3。40/30/20秒は各試聴でSKIPし本文なし。距離17数字と時間3数字×2の23数字を明示スキップし、古い数字の追いかけなし。終了後の音声/時計/騒音サービス残留なし。
+
+### 音声資料
+
+私有保全先のvoice-v28.json SHA256 `e1bb72a9d2576833118fd3f30663be84b9d0af8ee975cd988801ac657a9810cc`。audio-verification-v28.jsonに全3系列のイベント別状態、画面状態、開始遅延、本文時間、TTL超過後完了、スキップ、ユーザー聴取の範囲を要約。raw voice/GPS/バックアップはGit/EASへ含めない。元の失敗ログvoice-replay.jsonと比較する。レビュー担当は通常の診断Exportでpreview-cues-probe- IDを絞り、同じイベントIDのGOAL_CUE_RESERVED/VOICE_GENERATED→QUEUED→CHIME_*（初回のみ）→STARTED→DONEを追える。
+
+直接TTSのoutputType=0は経路未測定。システム音声のbt_a2dpと、再試聴した時間のユーザー聴取を別の証拠として扱う。DONEだけで音圧・聞き取りやすさ・全実走条件の成功を主張しない。
+
+### 更新前後のデータ保全（完了）
+
+screenoff-after.json SHA256 `32f3fa6f10271d083128210ef74f243eb148c9615f25cdb980213985e59b2cfe`。別SQLiteへの復元snapshot一致、integrity_check=ok、外部キー違反0。screenoff-before.jsonとの全snapshot canonical比較が完全一致。54履歴・ごみ箱18・GPS22512点・設定11項目・グループ/保護・draftなしを保持。検証RUN/進捗/設定を元DBへ追加していない。元データ削除・ごみ箱/保持期限処理の起動なし。preservation-v28.jsonに比較結果とハッシュを保存。
+
+端末のビルド表示faadf6c+cloud-sync-v28、インストール済みAPK SHAは配布品と一致。RUN開始前表示は従来の5km・自動終了ON、両新設定OFFを保持（全設定一致で確認）。Production APKは前後同一SHA、Pace版未操作。
+
+### 検証範囲と引継ぎ
+
+|確認事項|証拠|判定/範囲|
+|---|---|---|
+|距離200/190/10m・時間60/50/10秒|実機画面OFFの9本文ログ、再試聴時間はユーザー聴取|共有Native pulse→SQLite予約→通知キュー→音声経路で合格|
+|開始期限後も開始済み本文を維持|実機4本文で生成+3秒超のDONE|合格。時間目標deadlineは別途Native試験で取消|
+|古い数字スキップ|実機23数字SKIP、JSモデル全20/6閾値・遅延Native pulse試験|合格|
+|停止・終了途中の未再生/再生中取消|Native69件中のstate/end/deadline/fence試験、JS送信前stop競合|自動回帰で合格。実機は合成試聴の正常終了・サービス解放を確認。実GPSのAuto Stop/本当のRUN停止操作は実走受入に残す|
+|元RUN/GPS/ごみ箱/設定/グループ/保護|更新前後全snapshot一致、隔離SQLite復元|合格|
+|通常の実RUN背景動作|共有音声経路とNative pulseは上記実機確認、Location Task/自動終了判定のコード差分なし|OS GPS配信・長時間の実走・停止再開の組合せは実走未検証|
+
+今回の室内実機音声経路検証とデータ照合は完了。新たな不具合の再現はなく、追加のアプリ修正/再ビルドは行っていない。PR70はDraft・未マージ、IssueはOPEN、正式レビュー依頼は送信していない。正式独立レビューを経て、上表の実走受入条件をユーザーが確認するまでマージ/Closeしない。
+
+レビュー対象の中心はsrc/services/goal-cues.ts、goal-cue-probe.ts、finish-clock.tsと、RunAnnouncerService.ktのarmCueDeadline/cueBodyStarted、FinishClockService.ktの試聴lease/実RUNへのwake lock昇格。元のRunService/Location Task/Auto Stopモデル/VoicePolicy優先度を変更していないこと、試聴sourceが本DBへ漏れないこと、期限切れ・後着callback・RUN終了印を再確認する。正式レビュー担当への送信はユーザーの進行判断を待つ。
