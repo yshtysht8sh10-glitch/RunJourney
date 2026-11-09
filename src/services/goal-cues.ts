@@ -6,6 +6,7 @@ import { validFinishGoal } from '../domain/finish-goal';
 import { effectiveDistance,stateOf,timeModel } from '../utils/run-model';
 import { RunRepository } from '../repositories/run-repository';
 import { database } from '../repositories/database';
+import type { SqliteStore } from '../repositories/sqlite-store';
 import { GoalCueSettings } from '../repositories/goal-cue-settings';
 import { diagnosticLog } from './diagnostic-log';
 const native=()=>Platform.OS==='android'?
@@ -32,6 +33,12 @@ const nativeContexts=new Map<string,string>(),inactiveConfigs=new Map<string,num
 const decisions=new Map<string,string>();
 let previewing=false;
 export const GoalCues={
+ async probe(kind:'distance'|'time'){
+  if(previewing)throw Error('試聴が終了するまでお待ちください');
+  previewing=true;
+  try{const {runCueProbe}=await import('./goal-cue-probe');await runCueProbe(kind);}
+  finally{previewing=false;}
+ },
  async preview(kind:'half-distance'|'half-time'|'countdown-distance'|'countdown-time') {
   if(previewing)throw Error('試聴が終了するまでお待ちください');
   if(await RunRepository.getActiveRun())throw Error('走行中はこのテストを使えません');
@@ -74,12 +81,16 @@ export const GoalCues={
   return inFlight;
  },
 };
-async function evaluate(id:string){
+type CueSource={run():Promise<ActiveRun|null>;settings():Promise<CueSettings>;db():Promise<SqliteStore>;previewUntil?:number};
+const liveSource:CueSource={run:()=>RunRepository.getActiveRun(),settings:()=>GoalCueSettings.get(),db:database};
+async function evaluate(id:string){return evaluateCueSource(id,liveSource);}
+/** Same reservation, freshness, coalescing context and native queue for live RUN and isolated probe. */
+export async function evaluateCueSource(id:string,source:CueSource){
  if(endedRuns.has(id))return;
- const initialSettings=await GoalCueSettings.get();
+ const initialSettings=await source.settings();
  if(!initialSettings.turnaround&&!initialSettings.countdown&&(initialSettings.version===0||inactiveConfigs.get(id)===initialSettings.version))return;
- const run=await RunRepository.getActiveRun();if(!run||run.id!==id||run.endedAt)return;
- const db=await database();
+ const run=await source.run();if(!run||run.id!==id||run.endedAt)return;
+ const db=await source.db();
  const reserved=await db.atomic(async store=>{
   const configText=await store.readSetting(CUE_SETTINGS_KEY),settings=configText?JSON.parse(configText):{...DEFAULT_CUES};
   if(!validCueSettings(settings))throw Error('Invalid goal cue configuration');
@@ -93,8 +104,8 @@ async function evaluate(id:string){
  const {settings,sample,result}=reserved;
  for(const event of result.events)diagnosticLog('GOAL_CUE_RESERVED',id+':'+event.type+':'+sample.revision+':'+event.label,event.type,{runId:id,revision:sample.revision,label:event.label,at:sample.at});
  for(const d of result.decisions){const key=id+':'+sample.revision+':'+d.reason,detail=JSON.stringify(d.labels??[]);if(decisions.get(key)!==detail){diagnosticLog('GOAL_CUE_DECISION',key,d.reason,{runId:id,revision:sample.revision,remaining:sample.target-sample.progress,labels:d.labels});decisions.set(key,detail);if(decisions.size>256)decisions.delete(decisions.keys().next().value!);}}
- const latest=await RunRepository.getActiveRun();if(!latest||latest.id!==id||latest.endedAt)return;
- const freshSettings=await GoalCueSettings.get();
+ const latest=await source.run();if(!latest||latest.id!==id||latest.endedAt)return;
+ const freshSettings=await source.settings();
  if(endedRuns.has(id))return;
  const now=Date.now(),context=cueContext(latest,freshSettings,now);
  const notices=(freshSettings.version===settings.version?result.events:[]).map(event=>{
@@ -108,6 +119,7 @@ async function evaluate(id:string){
  const signature=JSON.stringify([context.revision,context.version,context.running,context.enabled,context.suppressWarning,context.countdown&&context.remaining<=(context.kind==='distance'?200:60)?context.label:null]);
  if(!notices.length&&nativeContexts.get(id)===signature)return;
  await native()?.notifyBatch?.(JSON.stringify({runId:id,state:stateOf(latest),paused:stateOf(latest)!=='RUNNING',ended:false,
+  previewLeaseMs:source.previewUntil&&!nativeContexts.has(id)?Math.max(1,source.previewUntil-now):0,
   latestEventIndex:(latest.events?.length??0)-1,goalRevision:goalRevision(latest),goalRevisionIndex:latest.goalChanges?.length??0,cueContext:context,notices}));
  nativeContexts.set(id,signature);if(!freshSettings.turnaround&&!freshSettings.countdown)inactiveConfigs.set(id,freshSettings.version);
 }

@@ -102,6 +102,37 @@ class VoiceRecoveryTest {
     shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(250))
     assertNull(get("currentNotice"));assertFalse(get("ended") as Boolean);assertFalse(get("chimeActive") as Boolean)
   }
+  @Test fun startedCountdownSurvivesDeliveryDeadlineButRemainsBounded() {
+    set("ready",true);cueBatch(200)
+    val n=get("currentNotice") as JSONObject
+    // Keep the test engine silent; explicitly deliver onStart after device-like latency.
+    (get("chime") as MediaPlayer).release();set("chime",null);set("chimeActive",false)
+    shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(1500))
+    service.javaClass.getDeclaredMethod("cueBodyStarted", JSONObject::class.java, java.lang.Long.TYPE)
+      .apply { isAccessible=true }.invoke(service,n,System.currentTimeMillis())
+    shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(1600))
+    assertSame(n,get("currentNotice"))
+    shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(3500))
+    assertNull(get("currentNotice"))
+  }
+  @Test fun startedCountdownStillStopsAtTimeGoalDeadline() {
+    set("ready",true);cueBatch(10,time=true,remaining=2.0)
+    val n=get("currentNotice") as JSONObject
+    service.javaClass.getDeclaredMethod("cueBodyStarted", JSONObject::class.java, java.lang.Long.TYPE)
+      .apply { isAccessible=true }.invoke(service,n,System.currentTimeMillis())
+    shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(2001))
+    assertNull(get("currentNotice"));assertFalse(get("ended") as Boolean)
+  }
+  @Test fun newerCountdownStillCancelsStartedOlderBodyAfterDeliveryWindow() {
+    set("ready",true);cueBatch(200)
+    val n=get("currentNotice") as JSONObject
+    (get("chime") as MediaPlayer).release();set("chime",null);set("chimeActive",false)
+    service.javaClass.getDeclaredMethod("cueBodyStarted", JSONObject::class.java, java.lang.Long.TYPE)
+      .apply {isAccessible=true}.invoke(service,n,System.currentTimeMillis())
+    shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(3100))
+    cueBatch(190)
+    assertNotSame(n,get("currentNotice"));assertFalse(queue().any{it.optString("id")==n.optString("id")})
+  }
   private fun finishCommonChime() {
     (get("chime") as? MediaPlayer)?.let { shadowOf(it).invokeCompletionListener() }
     shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(181))

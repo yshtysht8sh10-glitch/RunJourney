@@ -421,6 +421,32 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     else if (!speaking && messages.isEmpty()) finishTest()
   }
 
+  // expiresAt is a body START deadline, not a duration budget for a valid body.
+  // RUN/state/latest-label invalidation still applies throughout playback.
+  private var cueWatchVersion = 0L
+  private fun armCueDeadline(notice: JSONObject, limit: Long, reason: String) {
+    val version=++cueWatchVersion
+    val goalDeadline=cueContext?.optLong("deadline")?:0
+    val end=if(goalDeadline>0) minOf(goalDeadline,limit) else limit
+    notice.put("cueWatchDeadline",end).put("cueWatchReason",reason)
+    handler.postDelayed({if(currentNotice===notice && cueWatchVersion==version){
+      interrupt(if(goalDeadline>0 && end==goalDeadline) "INTERRUPTED_CUE_GOAL_DEADLINE" else reason)
+      speakNext();if(!speaking&&messages.isEmpty())finishTest()
+    }},(end-System.currentTimeMillis()).coerceAtLeast(0))
+  }
+  private fun cueBodyStarted(notice: JSONObject, at: Long): Boolean {
+    if(!VoicePolicy.goalCue(notice.optString("type")))return true
+    val deadline=cueContext?.optLong("deadline")?:0
+    if(at>notice.optLong("expiresAt") || (deadline>0 && at>=deadline) || !validInState(notice)) {
+      interrupt("CUE_START_EXPIRED_OR_INVALID");speakNext();return false
+    }
+    // Bounded engine watchdog; a newer number, pause, end or goal deadline wins.
+    val duration=if(notice.optString("type")=="GOAL_COUNTDOWN") 5000L else 15000L
+    notice.put("bodyCompleteBy",at+duration)
+    armCueDeadline(notice,at+duration,"INTERRUPTED_CUE_BODY_TIMEOUT")
+    return true
+  }
+
   private fun speakNext() {
     if (speaking || !ready || messages.isEmpty()) return
     // Deferred information follows state feedback, ahead of new periodic items.
@@ -451,11 +477,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       audit(notice, "RESUMED")
     }
     currentNotice = notice
-    if(VoicePolicy.goalCue(notice.optString("type"))) {
-      val deadline=cueContext?.optLong("deadline")?:0
-      val end=if(deadline>0) minOf(deadline,notice.optLong("expiresAt")) else notice.optLong("expiresAt")
-      handler.postDelayed({if(currentNotice===notice){interrupt("INTERRUPTED_CUE_EXPIRED");speakNext();if(!speaking&&messages.isEmpty())finishTest()}},(end-System.currentTimeMillis()).coerceAtLeast(0))
-    }
+    if(VoicePolicy.goalCue(notice.optString("type"))) armCueDeadline(notice, notice.optLong("expiresAt"), "CUE_START_EXPIRED")
     val attributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
       .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
     val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
@@ -587,7 +609,9 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
                 player.start(); started = true
                 NoiseState.outputType = player.routedDevice?.type ?: 0
                 lastAudioAuditAt = 0; lastAudioRoute = -1; lastAudioGain = -1f
-                notice.put("startedAt", System.currentTimeMillis()).put("playbackMode", "adaptive-local-synthesis")
+                val at=System.currentTimeMillis()
+                if(!cueBodyStarted(notice,at))return@setOnPreparedListener
+                notice.put("startedAt", at).put("playbackMode", "adaptive-local-synthesis")
                 audit(notice, "STARTED"); handler.post(volumeTick)
               } catch (_: Exception) { fallback("ADAPTIVE_START_FAILED") }
             }
@@ -626,7 +650,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       override fun onStart(utteranceId: String?) {
         if (utteranceId != utteranceKey) return
         val startedAt = System.currentTimeMillis()
-        handler.post { if (currentNotice === notice) { notice.put("startedAt", startedAt); audit(notice, "STARTED") } }
+        handler.post { if (currentNotice === notice && cueBodyStarted(notice,startedAt)) { notice.put("startedAt", startedAt); audit(notice, "STARTED") } }
         Log.i(TAG, "Speaking: $message")
         preferences.edit().putString("ttsStatus", "SPEAKING").putLong("ttsStartedAt", System.currentTimeMillis()).apply()
       }
