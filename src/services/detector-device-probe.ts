@@ -51,7 +51,7 @@ export async function runDetectorDeviceProbe(mode:'short'|'long'|'failure'|'pace
    return native.detectorJournalOffer!(payload);
   },stop:()=>native.detectorJournalStop!()},()=>true);
   await recorder.arm(build);if(recorder.status!=='ARMED')throw Error('暗号鍵/記録開始に失敗');
-  const on=createDetectorDeviceRunner(recorder),start=performance.now();let processed=0;let throttledMs=0;let offPulses=0;let screenOffOn=0;let screenOffOff=0;const appStates:string[]=[];
+  const on=createDetectorDeviceRunner(recorder),start=performance.now();let processed=0;let throttledMs=0;let firstFailureAtStep:number|undefined;let offPulses=0;let screenOffOn=0;let screenOffOff=0;const appStates:string[]=[];
   if(mode==='paced'||mode==='crash'){
    const pacedOff=createDetectorDeviceRunner(off);
    await new Promise<void>((resolve,reject)=>{
@@ -76,7 +76,7 @@ export async function runDetectorDeviceProbe(mode:'short'|'long'|'failure'|'pace
    subscription?.remove();subscription=undefined;if(mode==='paced')offResult=pacedOff.finish();
   }else{
    for(let i=0;i<total;i++){
-    on.step();processed++;
+    on.step();processed++;if(firstFailureAtStep===undefined&&recorder.status==='INCOMPLETE')firstFailureAtStep=processed;
     if(i%16===15){if(await RunRepository.getActiveRun())throw Error('通常RUN開始');const waited=performance.now();await native.detectorJournalList!();throttledMs+=performance.now()-waited;await pause(0);}
    }
   }
@@ -90,11 +90,11 @@ export async function runDetectorDeviceProbe(mode:'short'|'long'|'failure'|'pace
   else {
    // Current reader rescans the whole file per page; bound the initial device trial.
    const started=performance.now();let offset=0,pages=0;
-   while(performance.now()-started<60000){const page=JSON.parse(await native.detectorJournalRead!(openedId,offset));pages++;offset+=page.records.length;if(page.done){replay={storageComplete:page.storageComplete,pages,recordsRead:offset,readMs:performance.now()-started,reason:'AUTHENTICATED_PAGES_ONLY'};break;}replay={pages,recordsRead:offset,readMs:performance.now()-started,reason:'READER_BUDGET_60S'};}
+   while(performance.now()-started<60000){const page=JSON.parse(await native.detectorJournalRead!(openedId,offset));pages++;offset+=page.records.length;if(page.done){replay={storageComplete:page.storageComplete,pages,recordsRead:offset,readMs:performance.now()-started,authenticatedRecords:page.authenticatedRecords,reason:'AUTHENTICATED_PAGES_ONLY'};break;}replay={pages,recordsRead:offset,readMs:performance.now()-started,authenticatedRecords:page.authenticatedRecords,reason:'READER_BUDGET_60S'};}
   }
-  const result={schema:1,mode,build,synthetic:true,scope:'observation-ingest/detector/recorder; no OS GPS, actual RUN/SQLite checkpoint or battery acceptance',processed,virtualMinutes:processed/60,elapsedMs,throttledMs,offPulses,screenOffOn,screenOffOff,
+  const result={schema:1,mode,build,synthetic:true,scope:'observation-ingest/detector/recorder; no OS GPS, actual RUN/SQLite checkpoint or battery acceptance',processed,virtualMinutes:processed/60,elapsedMs,throttledMs,firstFailureAtStep,offPulses,screenOffOn,screenOffOff,
    off:offResult,on:onResult,matchedBaseline:offResult.digest===onResult.digest,handoffMs:recorder.handoffSummary,recorderStatus:recorder.status,bytes:session?.bytes,sealState:session?.sealState,
-   estimatedBytesPerHour:session?session.bytes/processed*3600:null,estimatedMinutesAt64MiB:session?64*1024*1024/(session.bytes/processed)/60:null,stats,replay};
+   estimatedBytesPerHour:session&&stats?.writtenInputs>0?session.bytes/stats.writtenInputs*3600:null,estimatedMinutesAt64MiB:session&&stats?.writtenInputs>0?64*1024*1024/(session.bytes/stats.writtenInputs)/60:null,stats,replay};
   diagnosticLog('DETECTOR_DEVICE_PROBE',reportId,'RESULT',result);return result;
  }catch{
   diagnosticLog('DETECTOR_DEVICE_PROBE',reportId,'FAILED',{mode,build,synthetic:true,scope:'no raw payload or exception text'});throw Error('人工入力検証に失敗しました。通常RUNは変更していません。');

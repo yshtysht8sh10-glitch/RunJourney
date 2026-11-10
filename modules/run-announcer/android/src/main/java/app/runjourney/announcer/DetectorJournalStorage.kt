@@ -31,6 +31,8 @@ internal object DetectorJournalStorage {
   private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "detector-journal").apply { isDaemon = true } }
   private val lock = Any()
   private var active: Journal? = null
+  private var lastJournal: Journal? = null
+  private var failureCode=""
   private var accepting = false
   private var draining = false
   private val budget = JournalBufferBudget(BUFFER_BYTES, BUFFER_RECORDS)
@@ -44,7 +46,7 @@ internal object DetectorJournalStorage {
   fun stats(context: Context): String {
     root(context) // Same exact Test package gate; no payload or location leaves here.
     val secret=key()
-    return synchronized(lock) { JSONObject().put("accepted",acceptedCount).put("rejected",rejectedCount)
+    return synchronized(lock) { JSONObject().put("writtenInputs",lastJournal?.inputCount?:0).put("failureCode",failureCode).put("accepted",acceptedCount).put("rejected",rejectedCount)
       .put("pendingBytes",budget.bytes).put("pendingCount",budget.count).put("maxPendingBytes",maxPendingBytes).put("maxPendingCount",maxPendingCount)
       .put("writeMs",writeTimes.json()).put("queueMs",queueTimes.json())
       .put("keyClass",secret.javaClass.simpleName).put("keyExportable",secret.encoded!=null).toString() }
@@ -71,7 +73,7 @@ internal object DetectorJournalStorage {
     synchronized(lock) { check(active == null && !accepting && budget.count == 0) { "Capture busy" } }
     check(used(root) + 128 < TOTAL_BYTES) { "Capacity" }
     val journal = Journal(root, UUID.randomUUID().toString(), key())
-    synchronized(lock) { active = journal; accepting = true; generation++
+    synchronized(lock) { active = journal;lastJournal=journal;failureCode=""; accepting = true; generation++
       acceptedCount=0;rejectedCount=0;maxPendingBytes=0;maxPendingCount=0;writeTimes.clear();queueTimes.clear() }
     journal.id
   }.get()
@@ -83,12 +85,12 @@ internal object DetectorJournalStorage {
     synchronized(lock) {
       if (!accepting) {rejectedCount++;return false}
       if (!budget.reserve(size)) {
-        rejectedCount++;accepting = false
+        rejectedCount++;failureCode="BUFFER_LIMIT";accepting = false
         active?.failed = true
         return false
       }
       val pending = Pending(encoded, System.currentTimeMillis(), SystemClock.elapsedRealtime())
-      if (!queue.offer(pending)) { budget.release(size); rejectedCount++;accepting = false; active?.failed = true; return false }
+      if (!queue.offer(pending)) { budget.release(size); rejectedCount++;failureCode="QUEUE_LIMIT";accepting = false; active?.failed = true; return false }
       // One drain task per generation; scheduling a task per GPS record is unbounded.
       acceptedCount++;maxPendingBytes=maxOf(maxPendingBytes,budget.bytes);maxPendingCount=maxOf(maxPendingCount,budget.count)
       if (!draining) { draining = true; worker.execute { drain() } }
@@ -102,7 +104,7 @@ internal object DetectorJournalStorage {
       val started=SystemClock.elapsedRealtimeNanos()
       val attempted=journal!=null && !journal.failed
       try { if (attempted && journal != null) journal.append(String(pending.payload, Charsets.UTF_8), pending.wall, pending.mono) }
-      catch (_: Exception) { synchronized(lock) { accepting = false; journal?.failed = true } }
+      catch (e: Exception) { synchronized(lock) { accepting = false;failureCode=if(e.message=="Capacity")"CAPACITY" else "WRITE_OR_CRYPTO"; journal?.failed = true } }
       synchronized(lock) { if(attempted)writeTimes.add((SystemClock.elapsedRealtimeNanos()-started)/1000000.0);queueTimes.add((started/1000000.0-pending.mono).coerceAtLeast(0.0));budget.release(pending.size) }
     }
   }
@@ -166,6 +168,7 @@ internal object DetectorJournalStorage {
   internal class Journal(val root: File, val id: String, val secret: SecretKey,
     private val segmentLimit: Long = SEGMENT_BYTES, private val sessionLimit: Long = SESSION_BYTES, private val totalLimit: Long = TOTAL_BYTES) {
     @Volatile var failed = false
+    @Volatile var inputCount=0;private set
     private val dir = File(root, id).apply { check(mkdir()); File(this, "status").writeText("CAPTURING") }
     private var seq = 0
     private var previous = ""
@@ -192,6 +195,7 @@ internal object DetectorJournalStorage {
       }
       size += length; previous = JournalCipher.hash(plain); seq++
       lastKind = body.getString("kind")
+      if(lastKind=="INPUT")inputCount+=(body.optJSONObject("data")?.optJSONArray("raws")?.length()?:0)
     }
   }
 }
