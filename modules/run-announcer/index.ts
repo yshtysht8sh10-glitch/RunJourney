@@ -1,6 +1,11 @@
 import { requireNativeModule } from 'expo-modules-core';
 
 type RunAnnouncer = {
+  detectorJournalOpen?(): Promise<string>;
+  detectorJournalOffer?(payload: string): boolean;
+  detectorJournalStop?(): void;
+  detectorJournalList?(): Promise<string>;
+  detectorJournalRead?(id: string, offset: number): Promise<string>;
   finishGoalCues?(runId: string): boolean;
   noiseControl?(action: 'start' | 'stop' | 'finish' | 'preview' | 'enable' | 'pause', runId: string): string;
   noiseDiagnostics?(): { status: string; running: boolean; gain: number; dbfs: number; baselineDbfs: number; inputType: number; outputType: number; updatedAt: number; summary?: string };

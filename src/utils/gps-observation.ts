@@ -6,6 +6,7 @@ export const GPS_PERSIST_INTERVAL_MS = 5_000;
 export type RawLocationObservation = Omit<LocationPoint, 'accuracy' | 'speed'> & {
   accuracy: number | null; speed: number | null; receivedAt: number;
 };
+export type ObservationAdmission = { inputOrdinal: number; disposition: 'STALE_OR_INVALID' | 'INVALID_COORDINATES' | 'EVALUATED' };
 
 /** Event-time window; quality is deliberately not an admission criterion. */
 export class RollingObservationBuffer {
@@ -69,7 +70,15 @@ export class GpsObservationSession {
     this.gate = new GpsPersistenceGate(lastPersisted);
     this.lastObservation = Math.max(lastPersisted ?? -Infinity, lastObserved ?? -Infinity);
   }
-  ingest(raws: RawLocationObservation[], counts: Record<string, number>, appState: string, startedAt: number) {
+  ingest(raws: RawLocationObservation[], counts: Record<string, number>, appState: string, startedAt: number, observer?: (entry: ObservationAdmission) => void) {
+    const ordinals = observer ? new Map<RawLocationObservation, number>() : undefined;
+    const report = (raw: RawLocationObservation, disposition: ObservationAdmission['disposition']) => {
+      if (observer) try {
+        const inputOrdinal = raws.indexOf(raw, (ordinals!.get(raw) ?? -1) + 1);
+        ordinals!.set(raw, inputOrdinal);
+        observer({ inputOrdinal, disposition });
+      } catch { /* diagnostics cannot interrupt ingestion */ }
+    };
     appState = ['active', 'background', 'inactive'].includes(appState) ? appState : 'unknown';
     incrementObservationCount(counts, 'CALLBACKS');
     incrementObservationCount(counts, `APP_${['active', 'background', 'inactive'].includes(appState) ? appState : 'unknown'}`);
@@ -88,7 +97,7 @@ export class GpsObservationSession {
     for (const raw of [...raws].sort((a, b) => a.timestamp - b.timestamp)) {
       incrementObservationCount(counts, 'DELIVERED');
       if (!Number.isFinite(raw.timestamp) || raw.timestamp < startedAt || raw.timestamp <= this.lastObservation) {
-        incrementObservationCount(counts, 'STALE_OR_INVALID'); continue;
+        incrementObservationCount(counts, 'STALE_OR_INVALID'); report(raw, 'STALE_OR_INVALID'); continue;
       }
       if (Number.isFinite(this.lastObservation)) {
         sample(counts, 'INTERVAL', raw.timestamp - this.lastObservation, true);
@@ -106,10 +115,11 @@ export class GpsObservationSession {
       counts[key('BUFFER_SIZE')] = this.buffer.getRecent().length;
       counts[key('BUFFER_MAX')] = Math.max(counts[key('BUFFER_MAX')] ?? 0, counts[key('BUFFER_SIZE')]);
       if (!Number.isFinite(raw.latitude) || !Number.isFinite(raw.longitude) || Math.abs(raw.latitude) > 90 || Math.abs(raw.longitude) > 180) {
-        incrementObservationCount(counts, 'INVALID_COORDINATES'); continue;
+        incrementObservationCount(counts, 'INVALID_COORDINATES'); report(raw, 'INVALID_COORDINATES'); continue;
       }
       this.latestPoint = observationToPoint(raw);
       accepted.push({ point: this.latestPoint, persist: this.gate.accept(raw.timestamp), window: this.buffer.getRecent(10_000, raw.timestamp).map(observationToPoint), receivedAt: raw.receivedAt });
+      report(raw, 'EVALUATED');
     }
     this.lastAppState = appState;
     return accepted;

@@ -14,6 +14,14 @@ class RunAnnouncerModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("RunAnnouncer")
     Events("finishClock")
+    AsyncFunction("detectorJournalOpen") { DetectorJournalStorage.open(requireNotNull(appContext.reactContext)) }
+    Function("detectorJournalOffer") { payload: String -> DetectorJournalStorage.offer(payload) }
+    Function("detectorJournalStop") { DetectorJournalStorage.stop() }
+    AsyncFunction("detectorJournalList") { DetectorJournalStorage.list(requireNotNull(appContext.reactContext)) }
+    AsyncFunction("detectorJournalRead") { id: String, offset: Int ->
+      try { DetectorJournalStorage.read(requireNotNull(appContext.reactContext), id, offset) }
+      catch (_: Exception) { throw IllegalStateException("Diagnostic journal unavailable") }
+    }
     // Durable audio-only fence. No service start and no RUN/goal mutation.
     Function("finishGoalCues") { runId: String ->
       GoalCueFence.finish(requireNotNull(appContext.reactContext),runId)
@@ -62,7 +70,10 @@ class RunAnnouncerModule : Module() {
       VoiceLogStorage.append(requireNotNull(appContext.reactContext), payload, System.currentTimeMillis())
     }
     OnCreate { FinishClockService.pulse = { sendEvent("finishClock", emptyMap<String, Any>()) } }
-    OnDestroy { FinishClockService.pulse = null }
+    OnDestroy {
+      FinishClockService.pulse = null
+      if (appContext.reactContext?.packageName == "app.runjourney.mobile.test") DetectorJournalStorage.stop()
+    }
     Function("previewFinishClock") { leaseMs: Double ->
       val context=requireNotNull(appContext.reactContext)
       check(context.packageName=="app.runjourney.mobile.test") { "Test only" }

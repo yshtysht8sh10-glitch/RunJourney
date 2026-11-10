@@ -9,12 +9,13 @@ import { isTrashedRun, TrashedRun, TRASH_RETENTION_MS } from '@/utils/run-trash'
 import { ActiveRun, LocationPoint, RunRecord, RunState } from '@/types/run';
 import { detectStop, timeModel, effectiveDistance, recordDiagnostic, stateOf, stopIntervals, transition } from '@/utils/run-model';
 import { validateRuns } from '@/utils/run-backup';
-import { GpsObservationSession, incrementObservationCount, RawLocationObservation } from '@/utils/gps-observation';
+import { GpsObservationSession, incrementObservationCount, RawLocationObservation, ObservationAdmission } from '@/utils/gps-observation';
 import { validPaceState, segmentReached, safelyAdvancePaceWorkout } from '@/domain/pace-workout';
 import { validFinishGoal, type FinishGoal, goalAchievement } from '@/domain/finish-goal';
 import { StopLatencyTracker, stopDecisionEvidence } from '@/domain/stop-latency';
 import { diagnosticLog } from '@/services/diagnostic-log';
 import { LatestCheckpoint } from './latest-checkpoint';
+import { DetectorJournal } from '@/services/detector-journal';
 
 
 let operationQueue: Promise<unknown> = Promise.resolve();
@@ -35,6 +36,7 @@ const checkpoints = new LatestCheckpoint<ActiveRun>(async active => {
 function flushObservation(active: ActiveRun, endMs: number): ActiveRun {
   const pending = observationSession?.observation.latestPoint;
   if (!pending || pending.timestamp > endMs || !observationSession!.observation.gate.accept(pending.timestamp, true)) return active;
+  DetectorJournal.flush(pending.timestamp);
   const updated = { ...active, points: [...active.points, pending] };
   updated.distanceMeters = effectiveDistance(updated);
   observationSession!.active = updated;
@@ -137,7 +139,7 @@ export const RunRepository = {
   },
 
   saveActiveRun(run: ActiveRun): Promise<void> {
-    return serialized(async () => { await checkpoints.flush(); await (await database()).saveDraft(run); observationSession = null; pendingFinish = null; });
+    return serialized(async () => { await checkpoints.flush(); await (await database()).saveDraft(run); DetectorJournal.boundary('SAVE_OR_RESTORE', run, true); observationSession = null; pendingFinish = null; });
   },
 
   updateFinishGoal(runId: string, goal: FinishGoal, autoEnabled: boolean): Promise<ActiveRun> {
@@ -159,13 +161,14 @@ export const RunRepository = {
       next.goalChanges = [...(active.goalChanges ?? []), { at, before: active.finishGoal ?? { kind: 'manual' }, after: { ...goal }, autoBefore: active.finishAutoEnabled !== false && active.finishGoal?.kind !== 'manual', autoAfter: autoEnabled, paceTargetBefore: active.paceWorkout?.workout.segments[0]?.target, paceTargetAfter: next.paceWorkout?.workout.segments[0]?.target }];
       await db.saveDraft(next);
       if (observationSession) observationSession.active = next;
+      DetectorJournal.boundary('GOAL_CHANGE', next);
       diagnosticLog('RUN_GOAL_CHANGED', runId + ':goal:' + next.goalChanges.length, 'SAVED_AND_APPLIED', { runId, ...next.goalChanges.at(-1), distanceMeters: next.distanceMeters });
       return next;
     });
   },
 
   clearActiveRun(): Promise<void> {
-    return serialized(async () => { await checkpoints.flush(); observationSession = null; pendingFinish = null; return database().then(db => db.clearDraft()); });
+    return serialized(async () => { await checkpoints.flush(); DetectorJournal.stop(); observationSession = null; pendingFinish = null; return database().then(db => db.clearDraft()); });
   },
 
   /** Test PoC entry point: RAM observations, shared detector, throttled GPS/storage. */
@@ -182,17 +185,23 @@ export const RunRepository = {
         incrementObservationCount(counts, 'SEGMENTS');
         active.diagnostics = { ...active.diagnostics, entries: active.diagnostics?.entries ?? [], processed: active.diagnostics?.processed ?? 0, counts };
         observationSession = { active, observation: new GpsObservationSession(active.points.at(-1)?.timestamp, counts.GPS_OBS_LAST_TIMESTAMP), needsCheckpoint: false, latency: new StopLatencyTracker() };
+        DetectorJournal.begin(active, active.points.at(-1)?.timestamp, counts.GPS_OBS_LAST_TIMESTAMP);
       }
       let active = observationSession.active;
         if (active.endedAt) return active;
       const previousEventCount = active.events?.length ?? 0;
       const counts = { ...active.diagnostics!.counts };
-      const incoming = observationSession.observation.ingest(raws, counts, appState, Date.parse(active.startedAt));
+      DetectorJournal.input(active, raws, appState);
+      const admissions: ObservationAdmission[] | undefined = DetectorJournal.recording ? [] : undefined;
+      const incoming = observationSession.observation.ingest(raws, counts, appState, Date.parse(active.startedAt), admissions ? entry => admissions.push(entry) : undefined);
+      if (admissions) DetectorJournal.admission(admissions);
       active = { ...active, diagnostics: { ...active.diagnostics!, counts } };
       const persisted: LocationPoint[] = [];
-      for (const { point, persist, window, receivedAt } of incoming) {
+      for (const input of incoming) {
+        const { point, persist, window, receivedAt } = input;
         const evaluatedAt = Date.now();
         active = detectStop(active, point, 'live-observation', window);
+        DetectorJournal.output(input, active);
         const entry = active.diagnostics?.entries.at(-1);
         if (entry?.timestamp === point.timestamp && active.diagnostics) {
           const annotated = observationSession.latency.annotate(active.id, entry, { callbackAt: receivedAt, submittedAt, enteredAt, evaluatedAt, finishedAt: Date.now() });
@@ -202,6 +211,7 @@ export const RunRepository = {
         }
         if (persist) persisted.push(point);
       }
+      DetectorJournal.batchEnd(active);
       active = { ...active, points: [...active.points, ...persisted], updatedAt: new Date().toISOString() };
       if (persisted.length || (active.events?.length ?? 0) !== previousEventCount) {
         active.distanceMeters = effectiveDistance(active);
@@ -271,6 +281,7 @@ export const RunRepository = {
       run = safelyAdvancePaceWorkout(run, timestamp, true);
       await (await database()).saveDraft(run);
       if (observationSession) observationSession.active = run;
+      DetectorJournal.boundary('USER_TRANSITION', run);
       return run;
     });
   },
@@ -294,6 +305,7 @@ export const RunRepository = {
       if (observationSession) observationSession.active = frozen;
       pendingFinish = frozen;
       await (await database()).saveDraft(frozen);
+      DetectorJournal.boundary('PREPARE_FINISH', frozen);
       return frozen;
     });
   },
@@ -319,6 +331,7 @@ export const RunRepository = {
       await (await database()).saveDraft(record);
       if (observationSession) observationSession.active = record;
       const saved = await (await database()).complete(record);
+      DetectorJournal.end(record);
       observationSession = null;
       pendingFinish = null;
       return saved;
