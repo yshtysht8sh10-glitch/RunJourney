@@ -1,64 +1,36 @@
 # Auto Stop：現行フローと設計レビュー資料（#43）
 
-対象コード：Test v21実走時72f82b4系、現行332edff。今回の実装でAuto Stopの閾値・状態遷移・通知文言・優先度は変更していない。以下の「現行」と「改善候補」は別物。#38の目標達成時のRUN終了はこの停止/再開判定とは独立する。
+対象：Test v28 / PR #70 HEAD `f1476f7947779b0fa4aeb28a054efd44255ef0c8`、照合日2026-11-10。図B/CとAuto Stop条件の正本。Test v26 `ae701b3`から検出モデル・Location Task・自動終了判定は不変。PR #67/#70は未マージであり、Production導入済みAPKの仕様を示さない。
 
-## 1. 入力から確定まで（現行）
+全体と版の識別は[フロー索引](run-flow-index.md)、図Eと通知数値は[音声正本](voice-matrix-20261031.md)、確認範囲は[検証マトリクス](verification-matrix-v28.md)。旧正本全文は[archive](archive/auto-stop-flow-before-v28.md)。旧実走の72f82b4/332edffの記録と改善候補は下記に保持し、最新版の受入結果と混ぜない。
+
+## 1. 図C：GPS入力から確定・実効値まで
 
 根拠：[ingestLocationBatch](../src/tasks/location-task.ts)、[RunRepository.appendActiveObservations/appendActivePoints](../src/repositories/run-repository.ts)、[GpsObservationSession.ingest](../src/utils/gps-observation.ts)、[detectStop](../src/utils/run-model.ts)、[inferMovement](../src/utils/movement-inference.ts)。
 
 ```mermaid
 flowchart TD
-  A[Expo LocationのGPSバッチ / JS受信時刻] --> T{Standalone Testか}
-  T -->|はい| B[時刻順・重複/古いfixを除外
-10秒RAMバッファ / 保存点は原則5秒間隔]
-  T -->|いいえ| P[保存GPS入力
-同じdetectStopを使用]
-  B --> Q[Repository直列キュー
-全受理観測を順に判定]
+  A[Expo Locationバッチ / JS受信時刻] --> T{Standalone Test}
+  T -->|はい| B[時刻順・重複除外 / 10秒RAM観測・原則5秒保存]
+  T -->|いいえ| P[保存GPS入力]
+  B --> Q[Repository直列キュー]
   P --> Q
-  Q --> F{終了凍結済みか}
-  F -->|はい| X[凍結済みRUNを返す / 判定しない]
-  F -->|いいえ| C{Auto Stop ONか / BREAKでないか}
-  C -->|いいえ| SK[SKIP：設定OFFまたは手動休憩]
-  C -->|はい| D{確定境界より古い / 前fix以下の時刻か}
-  D -->|はい| ST[SKIP：STALE_FIX]
-  D -->|いいえ| E{有限座標・時刻 / accuracy 0〜20mか}
-  E -->|いいえ| G{前の良好fixから15秒超か}
-  G -->|はい| R[RESET：検出metadataを破棄]
-  G -->|いいえ| H[HOLD：以前の検出metadataを保持]
-  E -->|はい| J{15秒以内の隣接変位速度が12.5m/s超か}
-  J -->|はい| H
-  J -->|いいえ| W[窓を構成
-原則直近10秒 / 疎な入力は最大15秒の末尾3点
-重複除去・最大256点・異常edge除去
-15秒超gapは現在点だけ]
-  W --> S{現在の正式状態}
-  S -->|RUNNING| SF[最も早い成立suffixを探索
-狭い静止 または bounded dwell
-狭い静止のみ先頭edge 0.5m/s以下]
-  S -->|AUTO_STOP| MF[最も早い移動suffixを探索
-5秒以上・3点以上・変位速度0.7以上
-coherence 0.7以上 / moving edge比0.7以上
-先頭edge 0.5m/s以上]
-  SF --> K{成立suffixありか}
-  MF --> K
-  K -->|はい| TR[transition
-停止または再開をsuffix先頭時刻へ遡及
-confirmedAtは判定fix時刻
-窓を現在点へリセット]
-  TR --> N[STOP_CONFIRMED / RESUME_CONFIRMED診断
-距離・有効時間・音声へ反映]
-  K -->|いいえ| CA[停止候補：窓spread 3m以下または静止推論
-再開候補：先頭移動edgeとcoherenceが成立
-正式状態は変えない]
-  CA --> Z{gap / 既存候補が消失したか}
-  Z -->|はい| RE[RESET：gap / 変位増加 / 移動根拠消失]
-  Z -->|いいえ| CO[START / CONTINUE / HOLD
-次の観測を待つ]
-  N --> CP[RAM snapshotを更新し保存要求
-1 in-flight＋最新累積snapshotへまとめる]
-  CO --> CP
-  RE --> CP
+  Q --> F{終了凍結済み}
+  F -->|はい| X[凍結RUNを返す / 更新しない]
+  F -->|いいえ| Gate{Auto Stop ONかつBREAK以外}
+  Gate -->|いいえ| CP[RAM snapshot / 保存要求をまとめる]
+  Gate -->|はい| Quality[時刻・精度・jump・gap判定 / 条件は3節]
+  Quality -->|不良・古い入力| Reject[SKIP・HOLD・RESETを区別 / 3節]
+  Quality -->|良好| Window[原則10秒 / 疎な入力は最大15秒末尾3点]
+  Window --> Suffix[正式状態に応じ最早成立suffixを探索 / 3節]
+  Suffix --> Confirm{静止または移動が成立}
+  Confirm -->|はい| TR[先頭時刻へ遡及transition / confirmedAtを別保存]
+  Confirm -->|いいえ| Meta[候補metadataを開始・維持・取消 / 正式状態は不変]
+  Reject --> CP
+  TR --> CP
+  Meta --> CP
+  CP --> EF[保存GPS・イベント・訂正からeffectiveEdges]
+  EF --> MET[実効距離・実走時間・ラップ・履歴 / 目標は図D]
 ```
 
 注：5秒は窓の観測期間であり、「5秒候補を作った後にさらに5秒待つ」実装ではない。RUNNING中のstillSince、AUTO_STOP中のmovementは候補metadataで、正式RunStateの追加状態ではない。サンプル時刻とJS受信・計算時刻は区別される。
@@ -87,29 +59,28 @@ priority80 / TTL4秒 / チャイムあり]
 native cancelCandidate=true]
 ```
 
-## 2. 状態遷移（現行）
+## 2. 図B：活動中の状態遷移
 
 ```mermaid
 stateDiagram-v2
   [*] --> Running
   state "RUNNING（正式）" as Running
-  state "RUNNING / 停止候補metadata" as StopCandidate
   state "AUTO_STOP（正式）" as Stopped
-  state "AUTO_STOP / 再開候補metadata" as ResumeCandidate
-  state "BREAK（手動）" as Break
-  Running --> StopCandidate: stillSinceが発生
-  StopCandidate --> Running: 根拠消失・gap等でRESET
-  Running --> Stopped: 成立suffixを直接検出できた場合
-  StopCandidate --> Stopped: stationary suffix成立 / 先頭時刻へ遡及
-  Stopped --> ResumeCandidate: 移動edgeとcoherenceからmovement発生
-  ResumeCandidate --> Stopped: movement根拠消失 / RESET
-  Stopped --> Running: 移動suffixを直接検出できた場合
-  ResumeCandidate --> Running: moving suffix成立 / 先頭時刻へ遡及
+  state "BREAK（手動・正式）" as Break
+  Running --> Stopped: stationary suffix成立 / 先頭時刻へ遡及
+  Stopped --> Running: moving suffix成立 / 先頭時刻へ遡及
   Running --> Break: ユーザーの休憩操作
-  StopCandidate --> Break: ユーザーの休憩操作
   Stopped --> Break: ユーザーの休憩操作
-  ResumeCandidate --> Break: ユーザーの休憩操作
-  Break --> Running: ユーザーの再開操作
+  Break --> Running: ユーザーの再開操作のみ
+  note right of Running
+    stillSinceは停止候補metadata
+    根拠消失やgapでRESET
+    候補だけでは正式状態を変えない
+  end note
+  note right of Stopped
+    movementは再開候補metadata
+    根拠消失でRESET
+  end note
 ```
 
 BREAK中のsensorイベントでは再開しない。正式transitionは同一状態、無効時刻、最後のイベントより古い時刻、機能OFFの遷移を拒否。確定時刻と有効開始時刻を分け、停止区間を距離・実走時間から除く。Raw GPSは削除しない。
@@ -132,52 +103,14 @@ BREAK中のsensorイベントでは再開しない。正式transitionは同一�
 
 coherence = 始終点距離 / 総edge長。spread = 全点対の最大距離。移動速度は座標由来、GNSS speed中央値は診断値。`RUN_CONTROL.resumeDistance=10`・resumeSpeed=1.2・resumeFixes=2等は残存する旧detectStopV3用であり、現行v4の再開AND条件として読まない。旧版再現テストと現行テストは別。
 
-## 4. チャイム・TTS・キュー（現行）
+## 4. 音声は図Eへ分離
 
-根拠：[VoiceAnnouncement.updateGuidance](../src/services/voice-announcement.ts)、[VoicePolicy](../modules/run-announcer/android/src/main/java/app/runjourney/announcer/VoicePolicy.kt)、[RunAnnouncerService.receiveBatch/speakNext/playChime/interrupt](../modules/run-announcer/android/src/main/java/app/runjourney/announcer/RunAnnouncerService.kt)。
+[音声仕様マトリクスの図E](voice-matrix-20261031.md#図e音声通知ライフサイクル)を正本とする。検出確定、音声予告の成立、実際の発話は別の出来事。音声完了をRUNの保存や正式停止判定の前提にしない。
 
-| 通知 | 発行根拠 | 優先度 | 元TTL | チャイム |
-|---|---|---:|---:|---|
-| STOP_CANDIDATE_DETECTED/CANCELLED/SUPPRESSED | 音声用stopHintの成立/解除/cooldown | 80/100/80 | 4秒 | 空文の観測のみ、鳴らない |
-| STOP_CANDIDATE_ANNOUNCED | 新規hint、30秒cooldown通過 | 80 | 4秒 | run_candidate →「停止を確認しています。」 |
-| AUTO_STOP_CONFIRMED | sensor AUTO_STOPイベント | 100 | 確定fix＋15秒 | run_stop →「走行タイマーを一時停止しました。」 |
-| AUTO_RESUME_CONFIRMED | sensor RUNNINGイベント | 100 | 確定fix＋15秒 | run_resume →「走行再開を検知しました。走行タイマーを再開します。」 |
-| BREAK / RESUME | userの状態イベント | 100 | 操作時刻＋15秒 | なし、TTSのみ |
-
-```mermaid
-flowchart TD
-  A[JS通知生成 / 元時刻・ID・TTL] --> B[native receiveBatch
-runId / state / eventIndexを更新]
-  B --> C[古いrun・候補取消・最新でない状態イベントを除去
-再生中ならinterrupt / 発話ID重複を除外]
-  C --> D{空文 / TTL超過 / キュー上限16 / TTS初期化失敗か}
-  D -->|はい| E[理由をauditし破棄・観測のみ]
-  D -->|いいえ| F[priority順に投入
-80以上は低priorityを退避/必要ならevict]
-  F --> G{上位80以上が通常発話を割込むか}
-  G -->|はい| H[情報通知3種は最大1回だけdefer
-他は破棄 / チャイム中は割込み拒否]
-  G -->|いいえ| I[speakNextで状態とTTL再確認]
-  H --> I
-  I --> J{Audio Focus取得できるか}
-  J -->|いいえ| K[AUDIO_FOCUS_DENIED / 破棄]
-  J -->|はい| L{予告・停止確定・再開確定か}
-  L -->|はい| M[チャイムprepareAsync→STARTED
-完了 / 失敗 / 最大2秒timeout]
-  M --> N{状態有効 / TTL有効 / より上位待ちなし}
-  N -->|いいえ| O[TTS破棄 / 次通知へ]
-  N -->|はい| P[即時の状態TTSを直接再生]
-  L -->|いいえ| V[通常TTS / 騒音対応可能な情報は合成再生]
-  P --> R[STARTED→DONE / ERROR / 割込み
-直接TTS最大30秒]
-  V --> R
-```
-
-- 情報通知はFIVE_MINUTES/KILOMETER_LAP/PACE_WARNINGの3種。同種の古い待機情報は新しいものへ置換。deferはTTLをその時点から120秒へ変更し、最大1回再試行。元の文言をそのまま再読せず、120秒以内の最新recovery payloadへ統合する。停止中のdeferは「RUNNINGになるまで待つ」ゲートではなく、状態通知後に停止中でも最新総量を読む経路がある。
-- チャイム再生中は原子的に完了待ち。状態変化や終了が来ても途中で止めず、完了後にTTSの有効性を再確認。音声を待ってRUNの保存/停止を遅らせない。
-- 予告TTSは確定通知で割り込める。両者が短時間に連続することはあり得る。予告の音声成功は正式停止の条件ではない。
-- 情報の騒音連動はTTSを一時WAVへ合成しMediaPlayerで再生する。合成timeout3〜8秒/prepare timeout2秒/再生timeout45秒。11/1の長文timeout修正（Test v23）は1文字60ms・最短3秒/最長8秒。失敗時は直接TTSへfallback。生マイク音声の保存ではない。チャイムと状態TTSは直接経路。Auto Stopの判定・通知仕様は変更していない。
-- 重複ID保持はJS/native各最大2,048。nativeで旧runが終了済みなら後着の非終了batchを拒否。失効は再生前に検査し、チャイム後にも検査する。STARTED/DONEはOS再生コールバックで、聴取保証ではない。
+- Test v26以降は通常通知に共通チャイム300ms＋間隔180ms。共通チャイムは状態/終了/割込みで取消できる。
+- 停止候補・自動停止・自動再開の専用チャイムは従来どおり完了待ち（準備/再生失敗・最大2秒timeoutを含む）で、完了後に本文の状態・期限を再検査する。手動BREAK/RESUMEはチャイムなし。
+- Test v28のTURNAROUND/GOAL_COUNTDOWNは本文開始期限と開始後watchdogを分離する。数値・priority・再試行・情報復旧の規則は音声正本に集約した。
+- [旧音声フロー・詳細説明](archive/auto-stop-flow-before-v28.md)は当時の記録として保存。下記の実走イベント・失敗・遅延値はその時点の証跡でありv28で再測定した値ではない。
 
 ## 5. 停止中に再開を誤判定し得る経路（現行からの推論）
 
@@ -257,6 +190,6 @@ GPS→JS配送p50/p95/max=66/391/1,831ms、Repositoryキュー0/1/7ms、判定3/
 レビュー事項：停止中と判明している実走時刻の指定、許容する再開遅延、歩行の扱い、短停止を記録したい最短時間、予告を必須にするか、予告と確定の音の分担。数値の採用や通知変更は一切行わず、ここで設計レビュー待ちとする。
 
 
-## Test v24（11月5日実走向け）の同期
+## 履歴：Test v24（11月5日実走向け）の同期
 
-通知の文言・情報構成・優先度・TTL・GPS判定は上記と同じ。チャイムの再生準備CHIME_PREPARING、現在時刻のGENERATED診断を追加。情報音声の騒音補正は連続カーブへ変更、fallback通常TTSには開始時の相対音量だけを指定し、発話中の追従はできない。疲労PoCは履歴での明示ONのみで音声通知は追加しない。変更と検証限界は[field-20261105-readiness.md](field-20261105-readiness.md)を参照。設計候補は引き続き未承認。
+以下は当時の旧正本とTest v24の差分であり、現在のv28本文と同一という意味ではない。旧版の通知文言・情報構成・優先度・TTL・GPS判定を維持し、チャイムの再生準備CHIME_PREPARING、現在時刻のGENERATED診断を追加。情報音声の騒音補正は連続カーブへ変更、fallback通常TTSには開始時の相対音量だけを指定し、発話中の追従はできない。疲労PoCは履歴での明示ONのみで音声通知は追加しない。変更と検証限界は[field-20261105-readiness.md](field-20261105-readiness.md)を参照。設計候補は引き続き未承認。

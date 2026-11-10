@@ -1,5 +1,7 @@
 # Auto Stop / Break（Issue #7）
 
+> 歴史資料：本文の保存方式・旧API・当時の版/条件は作成時点の記録。Test v28の仕様・フロー・確認状況は[最新版索引](run-flow-index.md)から参照する。Production導入済みAPKの仕様として一般化しない。
+
 ## UXと標準操作
 
 [設計原則](design-principles.md)の **Simple by default, powerful by choice.** に従う。
