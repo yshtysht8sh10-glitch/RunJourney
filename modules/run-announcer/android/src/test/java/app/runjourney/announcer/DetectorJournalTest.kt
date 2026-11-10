@@ -27,6 +27,13 @@ class DetectorJournalTest {
   private fun assertRejected(block: () -> Unit) {
     try { block(); fail("Expected rejection") } catch (_: Exception) { }
   }
+  @Test fun durableInputCounterChangesOnlyAfterSuccessfulInputAppend() = temporary { root ->
+    val journal=DetectorJournalStorage.Journal(root,id,secret)
+    val record=JSONObject().put("seq",0).put("kind","INPUT").put("data",JSONObject().put("raws",org.json.JSONArray().put(JSONObject()).put(JSONObject())))
+    journal.append(record.toString(),1,1);assertEquals(2,journal.inputCount)
+    assertRejected {journal.append(record.toString(),2,2)};assertEquals(2,journal.inputCount)
+    journal.append(payload(1,"END"),3,3);journal.seal();assertEquals(2,journal.inputCount)
+  }
   @Test fun encryptionUsesFreshNonceAuthenticatesSessionAndRejectsTamper() {
     val plain = payload(0)
     val one = JournalCipher.encrypt(secret, id, plain)
