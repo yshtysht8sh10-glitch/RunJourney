@@ -35,6 +35,20 @@ internal object DetectorJournalStorage {
   private var draining = false
   private val budget = JournalBufferBudget(BUFFER_BYTES, BUFFER_RECORDS)
   private var generation = 0L
+  private val writeTimes=JournalTiming()
+  private val queueTimes=JournalTiming()
+  private var acceptedCount=0L
+  private var rejectedCount=0L
+  private var maxPendingBytes=0
+  private var maxPendingCount=0
+  fun stats(context: Context): String {
+    root(context) // Same exact Test package gate; no payload or location leaves here.
+    val secret=key()
+    return synchronized(lock) { JSONObject().put("accepted",acceptedCount).put("rejected",rejectedCount)
+      .put("pendingBytes",budget.bytes).put("pendingCount",budget.count).put("maxPendingBytes",maxPendingBytes).put("maxPendingCount",maxPendingCount)
+      .put("writeMs",writeTimes.json()).put("queueMs",queueTimes.json())
+      .put("keyClass",secret.javaClass.simpleName).put("keyExportable",secret.encoded!=null).toString() }
+  }
   private data class Pending(val payload: ByteArray, val wall: Long, val mono: Long) { val size get() = payload.size }
   private val queue = ArrayBlockingQueue<Pending>(BUFFER_RECORDS)
 
@@ -57,7 +71,8 @@ internal object DetectorJournalStorage {
     synchronized(lock) { check(active == null && !accepting && budget.count == 0) { "Capture busy" } }
     check(used(root) + 128 < TOTAL_BYTES) { "Capacity" }
     val journal = Journal(root, UUID.randomUUID().toString(), key())
-    synchronized(lock) { active = journal; accepting = true; generation++ }
+    synchronized(lock) { active = journal; accepting = true; generation++
+      acceptedCount=0;rejectedCount=0;maxPendingBytes=0;maxPendingCount=0;writeTimes.clear();queueTimes.clear() }
     journal.id
   }.get()
 
@@ -66,15 +81,16 @@ internal object DetectorJournalStorage {
     val encoded = payload.toByteArray(Charsets.UTF_8)
     val size = encoded.size
     synchronized(lock) {
-      if (!accepting) return false
+      if (!accepting) {rejectedCount++;return false}
       if (!budget.reserve(size)) {
-        accepting = false
+        rejectedCount++;accepting = false
         active?.failed = true
         return false
       }
       val pending = Pending(encoded, System.currentTimeMillis(), SystemClock.elapsedRealtime())
-      if (!queue.offer(pending)) { budget.release(size); accepting = false; active?.failed = true; return false }
+      if (!queue.offer(pending)) { budget.release(size); rejectedCount++;accepting = false; active?.failed = true; return false }
       // One drain task per generation; scheduling a task per GPS record is unbounded.
+      acceptedCount++;maxPendingBytes=maxOf(maxPendingBytes,budget.bytes);maxPendingCount=maxOf(maxPendingCount,budget.count)
       if (!draining) { draining = true; worker.execute { drain() } }
       return true
     }
@@ -83,9 +99,11 @@ internal object DetectorJournalStorage {
     while (true) {
       val pending = synchronized(lock) { queue.poll().also { if (it == null) draining = false } } ?: return
       val journal = synchronized(lock) { active }
-      try { if (journal != null && !journal.failed) journal.append(String(pending.payload, Charsets.UTF_8), pending.wall, pending.mono) }
+      val started=SystemClock.elapsedRealtimeNanos()
+      val attempted=journal!=null && !journal.failed
+      try { if (attempted && journal != null) journal.append(String(pending.payload, Charsets.UTF_8), pending.wall, pending.mono) }
       catch (_: Exception) { synchronized(lock) { accepting = false; journal?.failed = true } }
-      synchronized(lock) { budget.release(pending.size) }
+      synchronized(lock) { if(attempted)writeTimes.add((SystemClock.elapsedRealtimeNanos()-started)/1000000.0);queueTimes.add((started/1000000.0-pending.mono).coerceAtLeast(0.0));budget.release(pending.size) }
     }
   }
   fun stop() {
@@ -105,6 +123,7 @@ internal object DetectorJournalStorage {
     JSONArray(root.listFiles()?.filter { it.isDirectory }?.map { dir ->
       JSONObject().put("id", dir.name).put("bytes", used(dir)).put("expired", System.currentTimeMillis() - File(dir, "status").lastModified() > RETENTION_MS)
         .put("status", "REQUIRES_INTEGRITY_AND_REPLAY_CHECK")
+        .put("sealState",File(dir,"status").takeIf{it.isFile}?.readText()?.substringBefore(":")?:"UNKNOWN")
     } ?: emptyList<JSONObject>()).toString()
   }.get()
 
@@ -202,5 +221,16 @@ internal object JournalCipher {
     cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, encrypted.copyOfRange(0, 12)))
     cipher.updateAAD(id.toByteArray(Charsets.UTF_8))
     return String(cipher.doFinal(encrypted.copyOfRange(12, encrypted.size)), Charsets.UTF_8)
+  }
+}
+
+/** Bounded 0.1ms histogram, last bin is overflow; exact max retained. */
+internal class JournalTiming {
+  private val bins=LongArray(2001);private var count=0L;private var maximum=0.0
+  fun clear(){bins.fill(0);count=0;maximum=0.0}
+  fun add(ms:Double){if(!ms.isFinite()||ms<0)return;bins[(ms*10).toInt().coerceIn(0,2000)]++;count++;maximum=maxOf(maximum,ms)}
+  fun json():JSONObject {
+    fun q(p:Double):Double {var n=0L;val target=kotlin.math.ceil(count*p).toLong();for(i in bins.indices){n+=bins[i];if(n>=target)return i/10.0};return 0.0}
+    return JSONObject().put("count",count).put("p50",if(count>0)q(.5)else JSONObject.NULL).put("p95",if(count>0)q(.95)else JSONObject.NULL).put("max",maximum).put("binMs",.1).put("overflowAtMs",200)
   }
 }

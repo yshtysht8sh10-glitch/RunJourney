@@ -18,6 +18,12 @@ export class DetectorJournalRecorder {
   private buildGitHash = 'unknown';
   status = 'OFF';
   maxHandoffMs = 0;
+  private handoffs = new Uint32Array(2001);
+  private handoffCount = 0;
+  get handoffSummary() {
+    const q=(p:number)=>{let n=0;const target=Math.ceil(this.handoffCount*p);for(let i=0;i<this.handoffs.length;i++){n+=this.handoffs[i];if(n>=target)return i/10;}return null;};
+    return {count:this.handoffCount,p50:this.handoffCount?q(.5):null,p95:this.handoffCount?q(.95):null,max:this.maxHandoffMs,binMs:.1,overflowAtMs:200};
+  }
   get recording() { return this.enabled && this.started; }
   constructor(private transport: Transport, private allowed: () => boolean) {}
   async arm(buildGitHash = 'unknown') {
@@ -29,7 +35,7 @@ export class DetectorJournalRecorder {
       if (epoch !== this.epoch) { this.transport.stop(); return; }
       this.enabled = true; this.started = false; this.seq = this.inputs = this.evaluations = this.batches = 0;
       this.buildGitHash = buildGitHash;
-      this.last = undefined; this.maxHandoffMs = 0; this.status = 'ARMED';
+      this.last = undefined; this.maxHandoffMs = 0;this.handoffs.fill(0);this.handoffCount=0; this.status = 'ARMED';
     } catch { if (epoch === this.epoch) this.status = 'UNAVAILABLE'; }
     finally { this.opening = false; }
   }
@@ -39,7 +45,8 @@ export class DetectorJournalRecorder {
     try {
       if (!this.transport.offer(journalEncode({ seq: this.seq++, wallAt: Date.now(), monoAt: start, kind, data: data() }))) throw new Error('rejected');
     } catch { this.enabled = false; this.status = 'INCOMPLETE'; try { this.transport.stop(); } catch { /* diagnosis only */ } }
-    this.maxHandoffMs = Math.max(this.maxHandoffMs, performance.now() - start);
+    const duration=performance.now()-start;this.maxHandoffMs=Math.max(this.maxHandoffMs,duration);
+    this.handoffs[Math.min(2000,Math.max(0,Math.floor(duration*10)))]++;this.handoffCount++;
   }
   begin(run: ActiveRun, lastPersisted?: number, lastObserved?: number) {
     if (!this.enabled) return;

@@ -49,13 +49,13 @@ module.exports = function withAndroidBuildVariants(config) {
         }$1$2`);
     }
 
-    source = source.replace(/output.versionCodeOverride = \d+/g, 'output.versionCodeOverride = 28');
-    if (!source.includes('output.versionCodeOverride = 28')) {
+    source = source.replace(/output.versionCodeOverride = \d+/g, 'output.versionCodeOverride = 29');
+    if (!source.includes('output.versionCodeOverride = 29')) {
       source += `
 // Increment only Standalone Test; production retains its configured version.
 android.applicationVariants.all { variant ->
     if (variant.buildType.name == 'standaloneTest') {
-        variant.outputs.all { output -> output.versionCodeOverride = 28 }
+        variant.outputs.all { output -> output.versionCodeOverride = 29 }
     }
 }
 `;

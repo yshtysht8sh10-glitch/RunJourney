@@ -14,6 +14,18 @@ class RunAnnouncerModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("RunAnnouncer")
     Events("finishClock")
+    Function("detectorJournalDeviceScreen") {
+      val context=requireNotNull(appContext.reactContext)
+      check(context.packageName=="app.runjourney.mobile.test") { "Test only" }
+      context.getSystemService(android.os.PowerManager::class.java).isInteractive
+    }
+    Function("detectorJournalStats") { DetectorJournalStorage.stats(requireNotNull(appContext.reactContext)) }
+    Function("detectorJournalDeviceClock") {
+      val context=requireNotNull(appContext.reactContext)
+      check(context.packageName=="app.runjourney.mobile.test") { "Test only" }
+      check(!context.getSharedPreferences(RunAnnouncerService.PREFS,0).getBoolean("running",false)) { "Running" }
+      context.startForegroundService(Intent(context,FinishClockService::class.java).putExtra("previewMs",90000L).putExtra("journalProbe",true))
+    }
     AsyncFunction("detectorJournalOpen") { DetectorJournalStorage.open(requireNotNull(appContext.reactContext)) }
     Function("detectorJournalOffer") { payload: String -> DetectorJournalStorage.offer(payload) }
     Function("detectorJournalStop") { DetectorJournalStorage.stop() }

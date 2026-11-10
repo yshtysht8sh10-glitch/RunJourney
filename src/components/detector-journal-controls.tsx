@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { DetectorJournal, detectorJournalAllowed, detectorJournalNative, replayLocalDetectorJournal } from '@/services/detector-journal';
+import { runDetectorDeviceProbe, verifyStoredDetectorDeviceProbes } from '@/services/detector-device-probe';
 import { RunRepository } from '@/repositories/run-repository';
 
 export function DetectorJournalControls({ buildGitHash }: { buildGitHash: string }) {
@@ -15,16 +16,19 @@ export function DetectorJournalControls({ buildGitHash }: { buildGitHash: string
   };
   return <View style={{ padding: 12, gap: 12, borderWidth: 1 }}>
     <Text>Issue #72：入力・判定ジャーナル（初期実装）</Text>
-    <Text>{message}</Text>
+    <Text>採取範囲：JS_SUBMITTED_ONLY。OS未配信・開始前・終了freeze後は含みません。sealと判定再現一致は別に確認します。</Text>
+    <Text selectable>{message}</Text>
+    {(['short','paced','long','failure','crash'] as const).map(mode=><Pressable key={mode} accessibilityRole="button" disabled={busy} onPress={()=>void action(async()=>{setMessage('人工入力を検証中。通常RUNは保存しません。');setMessage(JSON.stringify(await runDetectorDeviceProbe(mode,buildGitHash)));})}><Text>{({short:'実機検証：短時間ON/OFF比較',paced:'実機検証：画面OFF 1Hz（ON/OFF各25秒）',long:'実機検証：95分相当の入力負荷',failure:'実機検証：記録受付拒否後の継続',crash:'実機検証：強制終了用（途中でPCから終了）'})[mode]}</Text></Pressable>)}
+    <Pressable accessibilityRole="button" disabled={busy} onPress={()=>void action(async()=>setMessage(JSON.stringify(await verifyStoredDetectorDeviceProbes())))}><Text>実機検証：再起動後の復号・seal・再現確認</Text></Pressable>
     <Pressable accessibilityRole="button" disabled={busy} onPress={() => void action(async () => {
       if (await RunRepository.getActiveRun()) { setMessage('RUN開始前にONにしてください。計測途中では開始しません。'); return; }
       await DetectorJournal.arm(buildGitHash); setMessage(DetectorJournal.status);
     })}><Text>次のRUNの診断をON</Text></Pressable>
     <Pressable accessibilityRole="button" disabled={busy} onPress={() => { DetectorJournal.stop(true); setMessage('OFF。終了前の記録は不完全として保持します。'); }}><Text>診断をOFF</Text></Pressable>
     <Pressable accessibilityRole="button" disabled={busy} onPress={() => void action(async () => {
-      const sessions: { id: string; bytes: number; expired: boolean }[] = JSON.parse(await detectorJournalNative().detectorJournalList!());
+      const sessions: { id: string; bytes: number; expired: boolean; sealState?: string }[] = JSON.parse(await detectorJournalNative().detectorJournalList!());
       // Output only counts, never session payloads/coordinates/run IDs.
-      setMessage(`${DetectorJournal.status} / 保存${sessions.length}件 / ${sessions.reduce((sum, s) => sum + s.bytes, 0)} bytes / 7日超${sessions.filter(s => s.expired).length}件 / 最大引渡し${DetectorJournal.maxHandoffMs.toFixed(2)}ms`);
+      setMessage(`${DetectorJournal.status} / 保存${sessions.length}件 / ${sessions.reduce((sum, s) => sum + s.bytes, 0)} bytes / 7日超${sessions.filter(s => s.expired).length}件 / Native seal ${sessions.filter(s=>s.sealState==='SEALED').length}件（再現一致とは別） / 最大引渡し${DetectorJournal.maxHandoffMs.toFixed(2)}ms`);
     })}><Text>座標を含まない保存状況を確認</Text></Pressable>
     <Pressable accessibilityRole="button" disabled={busy} onPress={() => void action(async () => {
       const sessions: { id: string }[] = JSON.parse(await detectorJournalNative().detectorJournalList!());

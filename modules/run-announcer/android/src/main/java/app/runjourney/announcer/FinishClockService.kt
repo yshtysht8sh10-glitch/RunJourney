@@ -28,7 +28,7 @@ class FinishClockService : Service() {
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     val lease=intent?.getLongExtra("previewMs",0)?:0
     val upgradingPreview=previewUntil>0 && lease<=0
-    previewUntil=if(lease>0)android.os.SystemClock.elapsedRealtime()+lease.coerceIn(1,30000) else 0
+    previewUntil=if(lease>0)android.os.SystemClock.elapsedRealtime()+lease.coerceIn(1,if(intent?.getBooleanExtra("journalProbe",false)==true)90000 else 30000) else 0
     val channel = "runjourney-finish-clock"
     getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(channel, "走行終了条件", NotificationManager.IMPORTANCE_LOW))
     startForeground(3801, Notification.Builder(this, channel).setContentTitle("RunJourneyでランニングを記録中")

@@ -1,6 +1,9 @@
 import { requireNativeModule } from 'expo-modules-core';
 
 type RunAnnouncer = {
+  detectorJournalDeviceScreen?(): boolean;
+  detectorJournalStats?(): string;
+  detectorJournalDeviceClock?(): void;
   detectorJournalOpen?(): Promise<string>;
   detectorJournalOffer?(payload: string): boolean;
   detectorJournalStop?(): void;
