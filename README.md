@@ -1,5 +1,7 @@
 # RunJourney v0.1
 
+設計・検証資料の入口：[フロー索引と版の区別](docs/run-flow-index.md) / [検証マトリクス](docs/verification-matrix-v28.md)。Test v28は未マージのレビュー対象であり、以下の過去の導入説明を最新Production状態の証明として扱わない。
+
 Android実機で、画面OFF中もGPS軌跡・距離・日時を記録するランニング記録アプリです。この開発ブランチでは記録と進行中データを端末内のSQLiteへ保存します。Production・安定Test v17の更新インストールには別途明示承認が必要です。
 
 ## PC Web Review（#29）

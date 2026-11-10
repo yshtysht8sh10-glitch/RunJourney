@@ -1,5 +1,7 @@
 # Pace Analysis / Total・Lap・Voice
 
+> 歴史資料：本文の保存方式・旧API・当時の版/条件は作成時点の記録。Test v28の仕様・フロー・確認状況は[最新版索引](run-flow-index.md)から参照する。Production導入済みAPKの仕様として一般化しない。
+
 2026-10-04、Issue [#17](https://github.com/yshtysht8sh10-glitch/RunJourney/issues/17) / [#6](https://github.com/yshtysht8sh10-glitch/RunJourney/issues/6)、Standalone Test versionCode 6。
 
 UXと原データ保護は [Design Principles](design-principles.md)、状態・検出・時間・履歴訂正は [Auto Stop / Break](auto-stop-break.md) を参照する。今回GPS頻度・Auto Stop初期値・設定DEFAULTは変更しない。

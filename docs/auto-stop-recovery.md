@@ -1,5 +1,7 @@
 # Auto Stop window inference and non-destructive recovery (#21 / #26)
 
+> 歴史資料：本文の保存方式・旧API・当時の版/条件は作成時点の記録。Test v28の仕様・フロー・確認状況は[最新版索引](run-flow-index.md)から参照する。Production導入済みAPKの仕様として一般化しない。
+
 ## Root cause
 
 At starting HEAD 1116074, TaskManager sends Test observations to appendActiveObservations → GpsObservationSession (1s observations / 5s persistence gate) → detectStop v3 for every observation → events → effectiveDistance → RAM/checkpoint → UI/TTS. Production appendActivePoints feeds persisted points to the same detector. Diagnostics replay feeds saved ~5s points to that detector.
