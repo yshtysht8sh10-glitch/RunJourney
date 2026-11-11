@@ -14,6 +14,10 @@ class RunAnnouncerModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("RunAnnouncer")
     Events("finishClock")
+    Function("paceAnnouncementBaseline") {
+      requireNotNull(appContext.reactContext).getSharedPreferences(RunAnnouncerService.PREFS, 0)
+        .getString("paceAnnouncementBaseline", "null") ?: "null"
+    }
     // Durable audio-only fence. No service start and no RUN/goal mutation.
     Function("finishGoalCues") { runId: String ->
       GoalCueFence.finish(requireNotNull(appContext.reactContext),runId)

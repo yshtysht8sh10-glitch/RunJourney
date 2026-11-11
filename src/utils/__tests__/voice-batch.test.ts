@@ -7,7 +7,7 @@ import { ActiveRun } from '@/types/run';
 import { Platform } from 'react-native';
 import { resetNative } from '@/test/native-driver';
 import { effectiveDistance } from '@/utils/run-model';
-jest.mock('../../../modules/run-announcer', () => ({ __esModule: true, default: { stop: jest.fn(), notifyBatch: jest.fn(), voiceLog: jest.fn(() => '[]') } }));
+jest.mock('../../../modules/run-announcer', () => ({ __esModule: true, default: { paceAnnouncementBaseline: jest.fn(), stop: jest.fn(), notifyBatch: jest.fn(), voiceLog: jest.fn(() => '[]') } }));
 let runId = 0;
 const start = 1000000;
 function run(): ActiveRun {
@@ -139,4 +139,17 @@ test('clock-only preference does not enable existing transition or pace voices',
  try { await VoiceAnnouncement.updateRun(r);expect(notices()).toEqual([]);
  expect(JSON.parse(jest.mocked(native.notifyBatch!).mock.calls.at(-1)![0]).clock).toMatchObject({enabled:true,minutes:10,startedAt:start});
  } finally { await ClockSettingsRepository.save({enabled:false,minutes:10}); }
+});
+
+test('PACE uses the last started body and sends only one unified event',async()=>{
+ const r=run(),at=start+60000;
+ const sample={runId:r.id,at,savings:36,meters:8300,target:360};
+ r.paceWorkout!.notice={key:r.id+':pace',message:'old',at,goal:false,paceSample:sample};
+ jest.mocked(native.paceAnnouncementBaseline!).mockReturnValue(JSON.stringify({...sample,at:at-120000,savings:41}));
+ await VoiceAnnouncement.updateRun(r);
+ const pace=notices().filter(n=>n.type==='PACE_WARNING');
+ expect(pace).toHaveLength(1);
+ expect(pace[0].message).toBe('この2分で5秒貯金が減りました。8.3キロを通過。ここまでの走行で貯金は36秒です。');
+ await VoiceAnnouncement.updateRun(r);
+ expect(jest.mocked(native.notifyBatch!).mock.calls.flatMap(c=>JSON.parse(c[0]).notices).filter(n=>n.type==='PACE_WARNING')).toHaveLength(1);
 });
