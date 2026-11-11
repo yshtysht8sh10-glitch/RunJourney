@@ -34,7 +34,7 @@ export function createDetectorDeviceRunner(recorder:DetectorJournalRecorder) {
  };
 }
 
-export async function runDetectorDeviceProbe(mode:'short'|'long'|'failure'|'paced'|'crash',build:string){
+export async function runDetectorDeviceProbe(mode:'short'|'long'|'failure'|'paced'|'crash'|'limit',build:string){
  if(busy)throw Error('検証中です');
  if(!detectorJournalAllowed()||await RunRepository.getActiveRun()||DetectorJournal.status==='ARMED'||DetectorJournal.recording)throw Error('Test版・通常RUNなし・診断OFFで実行してください');
  const native=detectorJournalNative();if(native.diagnostics().running)throw Error('音声サービスの終了を待ってください');
@@ -49,7 +49,7 @@ export async function runDetectorDeviceProbe(mode:'short'|'long'|'failure'|'pace
   recorder=new DetectorJournalRecorder({open:async()=>{openedId=await native.detectorJournalOpen!();return openedId;},offer:payload=>{
    offerCount++;if(mode==='failure'&&offerCount===25)return false;
    return native.detectorJournalOffer!(payload);
-  },stop:()=>native.detectorJournalStop!()},()=>true);
+  },stop:()=>native.detectorJournalStop!()},()=>true,mode==='limit'?0:undefined);
   await recorder.arm(build);if(recorder.status!=='ARMED')throw Error('暗号鍵/記録開始に失敗');
   const on=createDetectorDeviceRunner(recorder),start=performance.now();let processed=0;let throttledMs=0;let firstFailureAtStep:number|undefined;let offPulses=0;let screenOffOn=0;let screenOffOff=0;const appStates:string[]=[];
   if(mode==='paced'||mode==='crash'){
