@@ -2,7 +2,7 @@
 
 ## スマートフォンで行う操作
 
-1. **RunJourney Test v31**を開く。履歴画面の表示が「(31)」「567d0db+longrun-v31」であることを確認する。Productionアプリとは別。
+1. **RunJourney Test v31**を開く。履歴画面の表示が「(31)」「15f487b+longrun-v31」であることを確認する。Productionアプリとは別。
 2. ラン画面の「終了条件」を**手動終了のみ**にする。更新前は「5km到達で自動終了」なので、ここを変えないと150分より前に終了する可能性がある。150分は自分の時計でも確認し、最後に通常のSTOP操作で終了する。Auto Stopによる実走時間と時計の経過時間の違いに注意。
 3. 設定の「ペース走（次のSTARTから）」を確認する。更新前は目標5km・7:00/km・許容±5秒、ペース音声ON・最小60秒。今回の目標距離と目標ペースを自分の予定に合わせる。ペース目標到達そのものはRUNを終了しない。音声ON/OFFと最小間隔、通常ラップの設定は従来どおり。
 4. Bluetoothイヤホン、位置情報の「正確な位置情報」「常に許可」、電池と端末のバックグラウンド動作許可を確認する。更新前の位置情報2権限は許可済み、バックグラウンド実行はallow。電池最適化の除外は確認時に登録なし。電池設定を変更した場合は実走後に教えてください。
@@ -46,7 +46,19 @@ JSやGPS配信が止まっている間は締め処理も遅れ、次の配信で
 
 - 音声はPR #75、診断はPR #73、配布ソースはcodex/longrun-test-20261112。音声改修をPR #73へ混在させていません。
 - 95分締め後も同じRUNを150分まで進め、SQLiteへ終了保存できることを自動テストで確認。
-- 追加前までの統合JS 71 suites/541件、追加の音声配送回帰1件も成功。型・Lint、Native、実SQLiteテスト成功。最終件数と実機結果は追記します。
+- APKソースの統合JS 71 suites/543件、Native87件、実SQLite15件、型・Lintが成功。
 - 通常のラン画面、終了結果、ページ化履歴はごみ箱期限削除を呼びません。旧getRuns/getActiveRuns/getTrashedRuns、復元API、ごみ箱画面は期限削除を含むため今回の操作・照合では使用しません。
 - 更新前Backup、保持音声ログ、Test v30 APKをPC私有領域へ保存。履歴54件（ごみ箱18件）、GPS22,512点、設定11件、ドラフトなし。直前のv30基準からの全snapshot一致を確認。
 - 実時間150分・実GPS95分・屋外Bluetoothの聴取効果・Doze・実走時の電池/温度/メモリは明日の評価対象です。
+
+## 最終APKと端末結果
+
+- 配布APK https://expo.dev/artifacts/eas/yhdAOh5G2oc_eg9svxEK3SD-Be1QZyQoDQ9Bo2y5Jv4.apk
+- EAS https://expo.dev/accounts/yshtysht8sh10/projects/RunJourney/builds/26d60a31-6dfe-49bb-bc29-a6e4e37f20c5
+- APK実装SHA 15f487b78a0f80dc856503b432b562df4d0fb573、端末表示15f487b+longrun-v31、versionCode31、package app.runjourney.mobile.test。
+- APK SHA-256 f4f471cf46cabde428e7b24cd29636e9efa8f0630d2c3b3f91753db592ccf1da。
+- 署名証明書SHA-256 fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c。既存Testと一致。上書き更新成功、初回インストール日時維持。
+- 時間短縮した無音の実機limit試験では、最初のバッチ後に記録終了。Native保存1入力/7フレーム、sealと全件暗号認証が成功し、リプレイ不一致0。その後も240入力まで通常判定が進み、診断OFFと結果digest一致。実GPS・実時間95分を確認した試験ではない。
+- 更新直前・直後・試験後の全snapshotが一致。履歴54件（ごみ箱18件）、GPS22,512点、設定11、ドラフトなし。既存グループ・保護情報も一致。Production APK SHA-256 30a956d9b5197475c1226d10ac39a82c580c4f25e6e84218f8470b9316086d3a も更新前後で一致。
+- ユーザー指定により音声の実機試聴は省略。Nativeの本文開始基準はJVM試験、本文と重複抑止はJS試験で確認。Bluetoothでの冒頭/末尾・聴感は明日の評価項目。
+- APKの人工入力limit試験に限り、補助フィールドfirstFailureAtStepが正常な診断終了を「1」と表示する。Native failureCode空・rejected0・SEALED・リプレイ成功で正常終了と判定した。後続ソース78f27b1（統合181c49e）で誤分類を修正し、追加回帰試験に成功。配布APK15f487bにはこの試験用表示修正は未収録。通常RUNの収集・締め・保存処理はこの補助フィールドを参照しない。
