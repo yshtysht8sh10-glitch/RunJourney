@@ -161,6 +161,36 @@ class DetectorJournalTest {
     }
   }
 
+  @Test fun cursorRejectsCiphertextChangedInAnUnreadSegment() = temporary { root ->
+    val journal = DetectorJournalStorage.Journal(root, id, secret, segmentLimit = 700)
+    for (i in 0..260) journal.append(payload(i, if (i == 260) "END" else "INPUT"), 0, 0)
+    journal.seal()
+    DetectorJournalStorage.Reader(root, id, secret).use { reader ->
+      assertFalse(reader.next().getBoolean("done"))
+      val last = File(root, id).listFiles()!!.filter { it.extension == "enc" }.maxBy { it.name }
+      val bytes = last.readBytes()
+      bytes[bytes.lastIndex] = (bytes.last().toInt() xor 1).toByte()
+      last.writeBytes(bytes)
+      assertRejected { while (!reader.next().getBoolean("done")) Unit }
+    }
+  }
+
+  @Test fun cursorRequiresMatchingSealAndRejectsFramesAfterEnd() = temporary { root ->
+    val journal = DetectorJournalStorage.Journal(root, id, secret)
+    journal.append(payload(0, "END"), 0, 0)
+    journal.seal()
+    File(File(root, id), "status").writeText("SEALED:wrong-tip")
+    DetectorJournalStorage.Reader(root, id, secret).use { reader ->
+      val page = reader.next()
+      assertTrue(page.getBoolean("done"))
+      assertFalse(page.getBoolean("storageComplete"))
+    }
+    journal.append(payload(1, "INPUT"), 1, 1)
+    journal.append(payload(2, "END"), 2, 2)
+    journal.seal()
+    DetectorJournalStorage.Reader(root, id, secret).use { reader -> assertRejected { reader.next() } }
+  }
+
   @Test fun sevenDayExpiryIsReportedWithoutAutomaticDeletion() {
     val app = RuntimeEnvironment.getApplication()
     val context = object : ContextWrapper(app) { override fun getPackageName() = "app.runjourney.mobile.test" }
