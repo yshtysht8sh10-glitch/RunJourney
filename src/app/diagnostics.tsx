@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import Constants from 'expo-constants';
-import { Alert, Pressable, ScrollView, Share, StyleSheet, Text } from 'react-native';
+import { Alert, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { RunRepository } from '@/repositories/run-repository';
 import { RunSettings } from '@/repositories/run-settings';
@@ -16,6 +16,7 @@ import { summarizeStopLatency } from '@/domain/stop-latency';
 import { summarizeFieldRun } from '@/domain/field-summary';
 import { AdaptiveAudio } from '@/services/adaptive-audio';
 import { GoalCues } from '@/services/goal-cues';
+import { DetectorJournalControls, DetectorJournalDetails } from '@/components/detector-journal-controls';
 
 export default function Diagnostics() {
   const { id } = useLocalSearchParams<{ id?: string }>();
@@ -57,10 +58,15 @@ export default function Diagnostics() {
     } catch (e) { Alert.alert('出力できませんでした', String(e)); }
     finally { voiceExportLock.current = false; setExportingVoice(false); }
   };
-  return <SafeAreaView style={styles.screen}><ScrollView contentContainerStyle={styles.content}>
+  return <SafeAreaView style={styles.screen}>
+    <View style={{paddingHorizontal:24,paddingTop:8,paddingBottom:12}}>
+      <Text style={{color:'#FFFFFF',fontSize:22,fontWeight:'700',marginBottom:8}}>Auto Stop Diagnostics</Text>
+      {isStandaloneTest() && <DetectorJournalControls buildGitHash={String(Constants.expoConfig?.extra?.buildGitHash ?? 'unknown')} />}
+    </View>
+    <ScrollView contentContainerStyle={styles.content}>
     <Pressable onPress={() => id ? router.replace({ pathname: '/run-detail', params: { id } }) : router.replace('/settings')} style={styles.button}><Text style={styles.text}>‹ 戻る</Text></Pressable>
-    <Text style={styles.title}>Auto Stop Diagnostics</Text>
     {!isStandaloneTest() ? <Text style={styles.text}>Standalone Test版専用です。</Text> : <>
+      <DetectorJournalDetails buildGitHash={String(Constants.expoConfig?.extra?.buildGitHash ?? 'unknown')} />
       <Pressable accessibilityRole="button" onPress={load} style={styles.button}><Text style={styles.text}>最新情報に更新</Text></Pressable>
       <Text style={styles.text}>音声デバッグログ（端末内・最大20,000イベント / 20MB / 7日）</Text>
       <Pressable accessibilityRole="button" disabled={exportingVoice} style={styles.button} onPress={exportVoice}><Text style={styles.text}>{exportingVoice ? '音声ログを出力中…' : '音声ログ JSONをExport'}</Text></Pressable>

@@ -14,6 +14,36 @@ class RunAnnouncerModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("RunAnnouncer")
     Events("finishClock")
+    Function("detectorJournalDeviceScreen") {
+      val context=requireNotNull(appContext.reactContext)
+      check(context.packageName=="app.runjourney.mobile.test") { "Test only" }
+      context.getSystemService(android.os.PowerManager::class.java).isInteractive
+    }
+    Function("detectorJournalStats") { DetectorJournalStorage.stats(requireNotNull(appContext.reactContext)) }
+    Function("detectorJournalDeviceClock") {
+      val context=requireNotNull(appContext.reactContext)
+      check(context.packageName=="app.runjourney.mobile.test") { "Test only" }
+      check(!context.getSharedPreferences(RunAnnouncerService.PREFS,0).getBoolean("running",false)) { "Running" }
+      context.startForegroundService(Intent(context,FinishClockService::class.java).putExtra("previewMs",90000L).putExtra("journalProbe",true))
+    }
+    AsyncFunction("detectorJournalOpen") { DetectorJournalStorage.open(requireNotNull(appContext.reactContext)) }
+    Function("detectorJournalOffer") { payload: String -> DetectorJournalStorage.offer(payload) }
+    Function("detectorJournalStop") { DetectorJournalStorage.stop() }
+    AsyncFunction("detectorJournalList") { DetectorJournalStorage.list(requireNotNull(appContext.reactContext)) }
+    AsyncFunction("detectorJournalRead") { id: String, offset: Int ->
+      try { DetectorJournalStorage.read(requireNotNull(appContext.reactContext), id, offset) }
+      catch (_: Exception) { throw IllegalStateException("Diagnostic journal unavailable") }
+    }
+    AsyncFunction("detectorJournalOpenReader") { id: String ->
+      DetectorJournalStorage.openReader(requireNotNull(appContext.reactContext), id)
+    }
+    AsyncFunction("detectorJournalNextPage") { token: String ->
+      try { DetectorJournalStorage.nextPage(requireNotNull(appContext.reactContext), token) }
+      catch (_: Exception) { throw IllegalStateException("Diagnostic journal unavailable") }
+    }
+    AsyncFunction("detectorJournalCloseReader") { token: String ->
+      DetectorJournalStorage.closeReader(requireNotNull(appContext.reactContext), token)
+    }
     // Durable audio-only fence. No service start and no RUN/goal mutation.
     Function("finishGoalCues") { runId: String ->
       GoalCueFence.finish(requireNotNull(appContext.reactContext),runId)
@@ -62,7 +92,10 @@ class RunAnnouncerModule : Module() {
       VoiceLogStorage.append(requireNotNull(appContext.reactContext), payload, System.currentTimeMillis())
     }
     OnCreate { FinishClockService.pulse = { sendEvent("finishClock", emptyMap<String, Any>()) } }
-    OnDestroy { FinishClockService.pulse = null }
+    OnDestroy {
+      FinishClockService.pulse = null
+      if (appContext.reactContext?.packageName == "app.runjourney.mobile.test") DetectorJournalStorage.stop()
+    }
     Function("previewFinishClock") { leaseMs: Double ->
       val context=requireNotNull(appContext.reactContext)
       check(context.packageName=="app.runjourney.mobile.test") { "Test only" }
