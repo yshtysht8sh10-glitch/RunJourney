@@ -14,6 +14,10 @@ class RunAnnouncerModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("RunAnnouncer")
     Events("finishClock")
+    Function("paceAnnouncementBaseline") {
+      requireNotNull(appContext.reactContext).getSharedPreferences(RunAnnouncerService.PREFS, 0)
+        .getString("paceAnnouncementBaseline", "null") ?: "null"
+    }
     Function("detectorJournalDeviceScreen") {
       val context=requireNotNull(appContext.reactContext)
       check(context.packageName=="app.runjourney.mobile.test") { "Test only" }

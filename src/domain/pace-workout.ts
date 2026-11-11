@@ -2,7 +2,7 @@ import type { ActiveRun, LocationPoint } from '../types/run';
 import { analyzePoints } from '../utils/pace-analysis';
 import { inferMovement, usableObservation } from '../utils/movement-inference';
 import { stateOf, timeModel } from '../utils/run-model';
-import { savingsMessage, savingsSeconds } from './voice-guidance';
+import { spokenDuration, savingsSeconds } from './voice-guidance';
 
 export type PaceStatus = 'FAST' | 'ON_TARGET' | 'SLOW' | 'UNKNOWN';
 export type PaceSegment = {
@@ -67,8 +67,23 @@ export type PaceWorkoutState = {
   unknownIntervals: { start: number; end: number; reason: UnknownReason }[];
   omittedUnknownIntervals: number; reached: boolean; lastVoiceAt: number;
   lastGuidedStatus: PaceStatus;
-  notice?: { key: string; message: string; at: number; goal: boolean };
+  notice?: { key: string; message: string; at: number; goal: boolean; paceSample?: PaceAnnouncementSample };
 };
+export type PaceAnnouncementSample = { runId: string; at: number; savings: number; meters: number; target: number };
+export function paceAnnouncementMessage(sample: PaceAnnouncementSample, previous?: PaceAnnouncementSample): string {
+  if (![sample.at, sample.savings, sample.meters, sample.target].every(Number.isFinite) || sample.meters < 0) return '';
+  const cumulative = Math.round(sample.savings);
+  const total = cumulative < 0 ? `ここまでの走行で遅れは${spokenDuration(cumulative)}です。`
+    : `ここまでの走行で貯金は${spokenDuration(cumulative)}です。`;
+  const distance = `${Number((sample.meters / 1000).toFixed(2))}キロを通過。`;
+  if (!previous || previous.runId !== sample.runId || previous.target !== sample.target
+    || ![previous.at, previous.savings].every(Number.isFinite) || sample.at <= previous.at) return distance + total;
+  const elapsed = spokenDuration((sample.at - previous.at) / 1000);
+  const difference = Math.round(sample.savings) - Math.round(previous.savings);
+  const change = difference === 0 ? `この${elapsed}で貯金の増減はありません。`
+    : `この${elapsed}で${spokenDuration(difference)}貯金が${difference > 0 ? '増えました' : '減りました'}。`;
+  return change + distance + total;
+}
 export function createPaceWorkout(settings: PaceSettings, startedAt: number): PaceWorkoutState | undefined {
   if (!settings.enabled) return undefined;
   return { version: 1, workout: steadyWorkout(settings), voice: settings.voice, voiceIntervalSec: settings.voiceIntervalSec,
@@ -175,10 +190,11 @@ export function advancePaceWorkout(run: ActiveRun, now: number, force = false, s
   s.reached ||= reached;
   if (s.voice && !paused && (reached || s.status !== 'UNKNOWN' && now - s.lastVoiceAt >= s.voiceIntervalSec * 1000
     && (s.status !== 'ON_TARGET' || s.lastGuidedStatus === 'FAST' || s.lastGuidedStatus === 'SLOW'))) {
-    const message = reached ? 'ペース走の目標に到達しました。記録は継続します。'
-      : s.status === 'ON_TARGET' ? '目標ペースに戻りました。'
-        : savingsMessage(savingsSeconds(run.distanceMeters, activeMs, segment.targetPaceSecPerKm));
-    s.notice = { key: `${run.id}:${now}`, message, at: now, goal: reached }; s.lastVoiceAt = now;
+    const paceSample: PaceAnnouncementSample = { runId: run.id, at: now,
+      savings: savingsSeconds(run.distanceMeters, activeMs, segment.targetPaceSecPerKm),
+      meters: run.distanceMeters, target: segment.targetPaceSecPerKm };
+    const message = reached ? 'ペース走の目標に到達しました。記録は継続します。' : paceAnnouncementMessage(paceSample);
+    s.notice = { key: `${run.id}:${now}`, message, at: now, goal: reached, ...(reached ? {} : { paceSample }) }; s.lastVoiceAt = now;
     if (!reached) s.lastGuidedStatus = s.status;
   }
   s.evaluatedAt = now; s.accountedActiveMs = activeMs; s.lastEventCount = run.events?.length ?? 0;

@@ -128,6 +128,13 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   private fun audit(n: JSONObject, status: String) {
     try {
       val now = System.currentTimeMillis()
+      if (status == "STARTED" && n.optString("type") == "PACE_WARNING") {
+        val data = n.optJSONObject("data")
+        val sample = data?.optJSONObject("paceSample")
+        if (sample != null && !data.optBoolean("simulation", false)) {
+          preferences.edit().putString("paceAnnouncementBaseline", sample.toString()).apply()
+        }
+      }
       val record = JSONObject(n.toString()).put("status", status).put("loggedAt", now)
       if (n.has("nativeQueuedAt")) record.put("queueWaitMs", (n.optLong("startedAt", now) - n.optLong("nativeQueuedAt")).coerceAtLeast(0))
       val adaptive = n.optString("playbackMode") == "adaptive-local-synthesis"
