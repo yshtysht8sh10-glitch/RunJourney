@@ -13,6 +13,7 @@ import java.security.KeyStore
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.ArrayBlockingQueue
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -28,8 +29,15 @@ internal object DetectorJournalStorage {
   const val TOTAL_BYTES = 256L * 1024 * 1024
   const val RETENTION_MS = 7L * 86400000
   private const val ALIAS = "runjourney.detector-journal.v1"
-  private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "detector-journal").apply { isDaemon = true } }
+  private val worker = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "detector-journal").apply { isDaemon = true } }
   private val lock = Any()
+  private var cursor: Pair<String, Reader>? = null
+  private fun closeReader() {
+    val reader = cursor?.second
+    cursor = null
+    reader?.close()
+  }
+
   private var active: Journal? = null
   private var lastJournal: Journal? = null
   private var failureCode=""
@@ -71,6 +79,7 @@ internal object DetectorJournalStorage {
   fun open(context: Context): String = worker.submit<String> {
     val root = root(context)
     synchronized(lock) { check(active == null && !accepting && budget.count == 0) { "Capture busy" } }
+    closeReader()
     check(used(root) + 128 < TOTAL_BYTES) { "Capacity" }
     val journal = Journal(root, UUID.randomUUID().toString(), key())
     synchronized(lock) { active = journal;lastJournal=journal;failureCode=""; accepting = true; generation++
@@ -135,6 +144,113 @@ internal object DetectorJournalStorage {
     synchronized(lock) { check(active == null && !accepting) { "Capture must be OFF" } }
     readJournal(root, id, offset, key())
   }.get()
+
+  fun openReader(context: Context, id: String): String = worker.submit<String> {
+    val root = root(context)
+    synchronized(lock) { check(active == null && !accepting) { "Capture must be OFF" } }
+    check(cursor == null) { "Reader busy" }
+    val token = UUID.randomUUID().toString()
+    cursor = token to Reader(root, id, key())
+    worker.schedule({ if (cursor?.first == token) closeReader() }, 15, TimeUnit.MINUTES)
+    token
+  }.get()
+
+  fun nextPage(context: Context, token: String): String = worker.submit<String> {
+    root(context)
+    val current = cursor
+    check(current?.first == token) { "Reader expired" }
+    val reader = requireNotNull(current).second
+    try {
+      val page = reader.next()
+      if (page.getBoolean("done")) closeReader()
+      page.toString()
+    } catch (e: Exception) {
+      closeReader()
+      throw e
+    }
+  }.get()
+
+  fun closeReader(context: Context, token: String) {
+    root(context)
+    worker.submit { if (cursor?.first == token) closeReader() }.get()
+  }
+
+  internal class Reader(root: File, private val id: String, private val secret: SecretKey) : AutoCloseable {
+    private val dir = File(root, id)
+    private val segments: List<Pair<File, Long>>
+    private var segmentIndex = 0
+    private var input: DataInputStream? = null
+    private var remaining = 0L
+    private var seq = 0
+    private var previous = ""
+    private var lastKind = ""
+    private var pending: String? = null
+
+    init {
+      check(id.matches(Regex("[a-f0-9-]{36}")) && dir.isDirectory)
+      segments = dir.listFiles().orEmpty().filter { it.extension == "enc" }.sortedBy { it.name }
+        .mapIndexed { index, file ->
+          check(file.name == "%04d.enc".format(index) && file.isFile && file.length() > 0) { "Segment gap" }
+          file to file.length()
+        }
+      check(segments.isNotEmpty()) { "Empty capture" }
+    }
+
+    private fun readFrame(): String? {
+      if (remaining == 0L) {
+        close()
+        val (file, size) = segments.getOrNull(segmentIndex++) ?: return null
+        input = DataInputStream(file.inputStream().buffered())
+        remaining = size
+      }
+      val stream = requireNotNull(input)
+      check(remaining >= 4) { "Truncated frame" }
+      val length = stream.readInt()
+      check(length in 29..SEGMENT_BYTES.toInt() && length <= remaining - 4) { "Invalid frame size" }
+      val encrypted = ByteArray(length)
+      stream.readFully(encrypted)
+      remaining -= length + 4L
+      if (remaining == 0L) check(stream.read() == -1) { "Segment grew" }
+      val plain = JournalCipher.decrypt(secret, id, encrypted)
+      val frame = JSONObject(plain)
+      check(lastKind != "END" && frame.getInt("seq") == seq && frame.getString("previous") == previous) { "Sequence" }
+      val payload = frame.getString("payload")
+      val record = JSONObject(payload)
+      check(record.getInt("seq") == seq) { "Payload sequence" }
+      lastKind = record.getString("kind")
+      previous = JournalCipher.hash(plain)
+      seq++
+      return payload
+    }
+
+    fun next(): JSONObject {
+      val records = JSONArray()
+      var bytes = 0
+      while (records.length() < 128) {
+        val payload = pending ?: readFrame() ?: break
+        val size = payload.toByteArray(Charsets.UTF_8).size
+        if (records.length() > 0 && bytes + size > BUFFER_BYTES) {
+          pending = payload
+          break
+        }
+        pending = null
+        records.put(payload)
+        bytes += size
+      }
+      val done = pending == null && remaining == 0L && segmentIndex >= segments.size
+      val complete = done && lastKind == "END" &&
+        dir.listFiles().orEmpty().filter { it.extension == "enc" }.map { it.name }.toSet() == segments.map { it.first.name }.toSet() &&
+        segments.all { (file, size) -> file.length() == size } &&
+        File(dir, "status").takeIf { it.isFile }?.readText() == "SEALED:$previous"
+      return JSONObject().put("records", records).put("done", done).put("authenticatedRecords", seq)
+        .put("storageComplete", complete)
+    }
+
+    override fun close() {
+      input?.close()
+      input = null
+    }
+  }
 
   internal fun readJournal(root: File, id: String, offset: Int, secret: SecretKey): String {
     check(id.matches(Regex("[a-f0-9-]{36}")) && offset >= 0)

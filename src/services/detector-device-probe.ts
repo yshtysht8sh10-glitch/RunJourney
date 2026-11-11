@@ -85,16 +85,11 @@ export async function runDetectorDeviceProbe(mode:'short'|'long'|'failure'|'pace
   const sessions=JSON.parse(await native.detectorJournalList!()) as {id:string;bytes:number;sealState?:string}[];
   const session=sessions.find(s=>s.id===openedId);
   const stats=native.detectorJournalStats?JSON.parse(native.detectorJournalStats()):null;
-  let replay:unknown={complete:false,reason:'NOT_ATTEMPTED'};
-  if(mode!=='long'){try{replay=await replayLocalDetectorJournal(openedId);}catch{replay={complete:false,reason:'AUTHENTICATION_OR_REPLAY_FAILED'};}}
-  else {
-   // Current reader rescans the whole file per page; bound the initial device trial.
-   const started=performance.now();let offset=0,pages=0;
-   while(performance.now()-started<60000){const page=JSON.parse(await native.detectorJournalRead!(openedId,offset));pages++;offset+=page.records.length;if(page.done){replay={storageComplete:page.storageComplete,pages,recordsRead:offset,readMs:performance.now()-started,authenticatedRecords:page.authenticatedRecords,reason:'AUTHENTICATED_PAGES_ONLY'};break;}replay={pages,recordsRead:offset,readMs:performance.now()-started,authenticatedRecords:page.authenticatedRecords,reason:'READER_BUDGET_60S'};}
-  }
+  const replay=await replayLocalDetectorJournal(openedId);
+  const legacyReplay=mode==='short'?await replayLocalDetectorJournal(openedId,true):undefined;
   const result={schema:1,mode,build,synthetic:true,scope:'observation-ingest/detector/recorder; no OS GPS, actual RUN/SQLite checkpoint or battery acceptance',processed,virtualMinutes:processed/60,elapsedMs,throttledMs,firstFailureAtStep,offPulses,screenOffOn,screenOffOff,
    off:offResult,on:onResult,matchedBaseline:offResult.digest===onResult.digest,handoffMs:recorder.handoffSummary,recorderStatus:recorder.status,bytes:session?.bytes,sealState:session?.sealState,
-   estimatedBytesPerHour:session&&stats?.writtenInputs>0?session.bytes/stats.writtenInputs*3600:null,estimatedMinutesAt64MiB:session&&stats?.writtenInputs>0?64*1024*1024/(session.bytes/stats.writtenInputs)/60:null,stats,replay};
+   estimatedBytesPerHour:session&&stats?.writtenInputs>0?session.bytes/stats.writtenInputs*3600:null,estimatedMinutesAt64MiB:session&&stats?.writtenInputs>0?64*1024*1024/(session.bytes/stats.writtenInputs)/60:null,stats,replay,legacyReplay};
   diagnosticLog('DETECTOR_DEVICE_PROBE',reportId,'RESULT',result);return result;
  }catch{
   diagnosticLog('DETECTOR_DEVICE_PROBE',reportId,'FAILED',{mode,build,synthetic:true,scope:'no raw payload or exception text'});throw Error('人工入力検証に失敗しました。通常RUNは変更していません。');

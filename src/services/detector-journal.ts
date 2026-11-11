@@ -113,20 +113,38 @@ export const DetectorJournal = new DetectorJournalRecorder({
 }, detectorJournalAllowed);
 
 /** Internal memory-only reader, never Share/Backup/console. Run only with capture OFF. */
-export async function replayLocalDetectorJournal(id: string) {
+export async function replayLocalDetectorJournal(id: string, legacy = false, readBudgetMs = Infinity) {
   const native = detectorJournalNative();
-  if (!native.detectorJournalRead) throw new Error('Test only');
   const replay = createDetectorJournalReplay();
-  let offset = 0;
-  let storageComplete = false;
-  for (;;) {
-    const page = journalDecode(await native.detectorJournalRead(id, offset));
-    for (const text of page.records) replay.push(journalDecode(text));
-    offset += page.records.length;
-    if (page.done) { storageComplete = page.storageComplete === true; break; }
-    if (!page.records.length) throw new Error('Invalid page');
+  let token: string | undefined;
+  let recordsRead = 0, pages = 0, authenticatedRecords = 0, decryptions = 0;
+  let firstPageMs: number | undefined;
+  let readMs = 0;
+  const started = performance.now();
+  try {
+    if (!legacy) token = await native.detectorJournalOpenReader!(id);
+    for (;;) {
+      const page = journalDecode(await (token
+        ? native.detectorJournalNextPage!(token)
+        : native.detectorJournalRead!(id, recordsRead)));
+      const arrived = performance.now();
+      readMs = arrived - started;
+      firstPageMs ??= readMs;
+      pages++;
+      recordsRead += page.records.length;
+      authenticatedRecords = page.authenticatedRecords;
+      decryptions = legacy ? decryptions + authenticatedRecords : authenticatedRecords;
+      for (const text of page.records) replay.push(journalDecode(text));
+      const metrics = { pages, recordsRead, authenticatedRecords, decryptions, firstPageMs, readMs, totalMs: performance.now() - started };
+      if (page.done) {
+        const result = replay.finish();
+        if (page.storageComplete !== true) { result.complete = false; result.mismatches.push('NATIVE_NOT_SEALED'); }
+        return { ...result, ...metrics, storageComplete: page.storageComplete === true };
+      }
+      if (!page.records.length) throw new Error('Invalid page');
+      if (metrics.totalMs >= readBudgetMs) return { ...metrics, complete: false, storageComplete: false, mismatches: ['READER_BUDGET'] };
+    }
+  } finally {
+    if (token) await native.detectorJournalCloseReader!(token);
   }
-  const result = replay.finish();
-  if (!storageComplete) { result.complete = false; result.mismatches.push('NATIVE_NOT_SEALED'); }
-  return result;
 }

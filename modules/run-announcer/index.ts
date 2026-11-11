@@ -8,6 +8,9 @@ type RunAnnouncer = {
   detectorJournalOffer?(payload: string): boolean;
   detectorJournalStop?(): void;
   detectorJournalList?(): Promise<string>;
+  detectorJournalOpenReader?(id: string): Promise<string>;
+  detectorJournalNextPage?(token: string): Promise<string>;
+  detectorJournalCloseReader?(token: string): Promise<void>;
   detectorJournalRead?(id: string, offset: number): Promise<string>;
   finishGoalCues?(runId: string): boolean;
   noiseControl?(action: 'start' | 'stop' | 'finish' | 'preview' | 'enable' | 'pause', runId: string): string;

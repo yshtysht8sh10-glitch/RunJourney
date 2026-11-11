@@ -34,6 +34,16 @@ class RunAnnouncerModule : Module() {
       try { DetectorJournalStorage.read(requireNotNull(appContext.reactContext), id, offset) }
       catch (_: Exception) { throw IllegalStateException("Diagnostic journal unavailable") }
     }
+    AsyncFunction("detectorJournalOpenReader") { id: String ->
+      DetectorJournalStorage.openReader(requireNotNull(appContext.reactContext), id)
+    }
+    AsyncFunction("detectorJournalNextPage") { token: String ->
+      try { DetectorJournalStorage.nextPage(requireNotNull(appContext.reactContext), token) }
+      catch (_: Exception) { throw IllegalStateException("Diagnostic journal unavailable") }
+    }
+    AsyncFunction("detectorJournalCloseReader") { token: String ->
+      DetectorJournalStorage.closeReader(requireNotNull(appContext.reactContext), token)
+    }
     // Durable audio-only fence. No service start and no RUN/goal mutation.
     Function("finishGoalCues") { runId: String ->
       GoalCueFence.finish(requireNotNull(appContext.reactContext),runId)
