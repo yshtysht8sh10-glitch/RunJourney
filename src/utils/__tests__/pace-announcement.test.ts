@@ -11,10 +11,15 @@ test('unchanged savings and actual two-minute interval',()=>{
  expect(paceAnnouncementMessage({...sample,at:180000}, {...previous,savings:36})).toContain('この2分で貯金の増減はありません');
 });
 test('negative cumulative savings use delay while improvement remains positive',()=>{
- expect(paceAnnouncementMessage({...sample,savings:-36},{...previous,savings:-41})).toContain('5秒貯金が増えました。8.3キロを通過。ここまでの走行で遅れは36秒');
+ expect(paceAnnouncementMessage({...sample,savings:-36},{...previous,savings:-41})).toContain('5秒遅れが減りました。8.3キロを通過。ここまでの走行で遅れは36秒');
 });
 test('first, other RUN, changed target and invalid prior samples omit interval change',()=>{
  for(const prior of [undefined,{...previous,runId:'other'},{...previous,target:400},{...previous,savings:NaN},{...previous,at:120000}])
   expect(paceAnnouncementMessage(sample,prior)).toBe('8.3キロを通過。ここまでの走行で貯金は36秒です。');
  expect(paceAnnouncementMessage({...sample,meters:NaN})).toBe('');
+});
+
+test('growing delay and unchanged delay never say savings',()=>{
+ expect(paceAnnouncementMessage({...sample,savings:-36},{...previous,savings:-31})).toContain('5秒遅れが増えました');
+ expect(paceAnnouncementMessage({...sample,savings:-36},{...previous,savings:-36})).toContain('遅れの増減はありません');
 });
