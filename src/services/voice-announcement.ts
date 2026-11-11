@@ -1,3 +1,4 @@
+import { paceAnnouncementMessage, type PaceAnnouncementSample } from '@/domain/pace-workout';
 import { goalRevision, goalWarning, startMessage } from '@/domain/run-notices';
 import { GoalCues,cueContext } from './goal-cues';
 import { GoalCueSettings } from '@/repositories/goal-cue-settings';
@@ -45,7 +46,7 @@ export const VoiceAnnouncement = {
   async previewRunNotice(type: 'RUN_STARTED' | 'GOAL_WARNING' | 'KILOMETER_LAP' | 'FIVE_MINUTES' | 'PACE_WARNING' | 'AUTO_STOP_CONFIRMED' | 'AUTO_RESUME_CONFIRMED') {
     if (await RunRepository.getActiveRun()) throw Error('走行中はこのテストを使えません');
     const now=Date.now(), run:ActiveRun={id:`preview-${type}-${now}`,startedAt:new Date(now).toISOString(),createdAt:'',updatedAt:'',points:[],distanceMeters:0,finishGoal:{kind:'distance',meters:10000},features:{autoStop:true,break:false}};
-    const message=type==='RUN_STARTED'?startMessage(run,{enabled:true,minutes:10}):type==='GOAL_WARNING'?'目標まで残り500メートルです。延長する場合は目標を変更してください。':type==='KILOMETER_LAP'?'5キロを通過しました。'+lapDifferenceMessage(-3,12):type==='FIVE_MINUTES'?'5分経過しました。走行距離は1キロメートルです。':type==='PACE_WARNING'?'目標より少しペースが遅いです。':type==='AUTO_STOP_CONFIRMED'?'走行タイマーを一時停止しました。':'走行タイマーを再開しました。';
+    const message=type==='RUN_STARTED'?startMessage(run,{enabled:true,minutes:10}):type==='GOAL_WARNING'?'目標まで残り500メートルです。延長する場合は目標を変更してください。':type==='KILOMETER_LAP'?'5キロを通過しました。'+lapDifferenceMessage(-3,12):type==='FIVE_MINUTES'?'5分経過しました。走行距離は1キロメートルです。':type==='PACE_WARNING'?paceAnnouncementMessage({runId:'preview',at:120000,savings:36,meters:8300,target:360},{runId:'preview',at:60000,savings:41,meters:8100,target:360}):type==='AUTO_STOP_CONFIRMED'?'走行タイマーを一時停止しました。':'走行タイマーを再開しました。';
     const context=await noticeContext(run);
     if(type==='AUTO_STOP_CONFIRMED'){context.state='AUTO_STOP';context.paused=true;}
     const id=run.id+':test';diagnosticLog('VOICE_GENERATED',id,type,{runId:run.id,simulation:true});
@@ -298,7 +299,16 @@ async function updateGuidance(run: ActiveRun, stateOnly: boolean) {
           boundaryWallAt: wallAt, snapshotDistanceMeters: snapshot.distanceMeters, snapshotActiveMs: snapshot.activeMs });
     }
     const notice = validPaceState(run.paceWorkout) ? run.paceWorkout.notice : undefined;
-    if (notice) add(notice.key, notice.goal ? 'WORKOUT_GOAL' : 'PACE_WARNING', notice.message, notice.at, 20000, notice.goal ? 60 : 20);
+    if (notice) {
+      let message = notice.message;
+      if (notice.paceSample) {
+        let previous: PaceAnnouncementSample | undefined;
+        try { previous = JSON.parse(native?.paceAnnouncementBaseline?.() ?? 'null') ?? undefined; } catch { /* First announcement if unavailable. */ }
+        message = paceAnnouncementMessage(notice.paceSample, previous);
+      }
+      add(notice.key, notice.goal ? 'WORKOUT_GOAL' : 'PACE_WARNING', message, notice.at, 20000,
+        notice.goal ? 60 : 20, notice.paceSample ? { paceSample: notice.paceSample } : {});
+    }
   }
   if (periodic) {
     const clock = announcementClock(run);
