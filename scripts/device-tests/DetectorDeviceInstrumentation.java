@@ -29,7 +29,7 @@ public final class DetectorDeviceInstrumentation extends Instrumentation {
  private String text(File f) throws Exception{return new String(Files.readAllBytes(f.toPath()),StandardCharsets.UTF_8);}
  private void meta(File root,String name,String value)throws Exception{Files.write(new File(root,name).toPath(),value.getBytes(StandardCharsets.UTF_8));}
  private String record(int seq,String kind,JSONObject data)throws Exception{return new JSONObject().put("seq",seq).put("kind",kind).put("data",data).toString();}
- private DetectorJournalStorage.Journal journal(File root,String id,SecretKey secret){return new DetectorJournalStorage.Journal(root,id,secret,DetectorJournalStorage.SEGMENT_BYTES,DetectorJournalStorage.SESSION_BYTES,DetectorJournalStorage.TOTAL_BYTES);}
+ private DetectorJournalStorage.Journal journal(File root,String id,SecretKey secret){return new DetectorJournalStorage.Journal(root,id,secret,DetectorJournalStorage.SEGMENT_BYTES,DetectorJournalStorage.SESSION_BYTES,DetectorJournalStorage.TOTAL_BYTES,false);}
  @Override public void onStart(){
   Bundle output=new Bundle();JSONObject result=new JSONObject();PowerManager.WakeLock lock=null;
   try{
@@ -45,6 +45,49 @@ public final class DetectorDeviceInstrumentation extends Instrumentation {
      result.put(name,check);
     }
     result.put("nativeAcceptsAfterRestart",storage.offer(record(0,"PROBE_AFTER_RESTART",new JSONObject())));
+   }else if(mode.equals("compare")){
+    String id=UUID.randomUUID().toString();
+    DetectorJournalStorage.Journal journal=new DetectorJournalStorage.Journal(root,id,secret,
+      DetectorJournalStorage.SEGMENT_BYTES,DetectorJournalStorage.SESSION_BYTES,DetectorJournalStorage.TOTAL_BYTES,true);
+    int count=385;
+    for(int i=0;i<count;i++){
+     String kind=i==0?"START":i==count-1?"END":new String[]{"INPUT","ADMISSION","OUTPUT","BATCH_END"}[i%4];
+     JSONObject data=new JSONObject().put("synthetic",true).put("index",i).put("repeated","synthetic-state-window ".repeat(80));
+     journal.append(record(i,kind,data),System.currentTimeMillis(),SystemClock.elapsedRealtime());
+    }
+    journal.seal();
+    result.put("recordBytes",journal.recordBytes());
+    String[] hashes=new String[2];
+    for(int modeIndex=0;modeIndex<2;modeIndex++){
+     boolean sequential=modeIndex==0;
+     long began=SystemClock.elapsedRealtime(), firstPage=0,maxHeap=0;
+     int offset=0,decryptions=0,pages=0;
+     java.security.MessageDigest digest=java.security.MessageDigest.getInstance("SHA-256");
+     try(DetectorJournalStorage.Reader reader=sequential?new DetectorJournalStorage.Reader(root,id,secret):null){
+      while(true){
+       JSONObject page=sequential?reader.next():new JSONObject(storage.readJournal$run_announcer_release(root,id,offset,secret));
+       if(++pages==1)firstPage=SystemClock.elapsedRealtime()-began;
+       Runtime runtime=Runtime.getRuntime();
+       maxHeap=Math.max(maxHeap,runtime.totalMemory()-runtime.freeMemory());
+       int authenticated=page.getInt("authenticatedRecords");
+       decryptions=sequential?authenticated:decryptions+authenticated;
+       JSONArray rows=page.getJSONArray("records");
+       for(int i=0;i<rows.length();i++)digest.update(rows.getString(i).getBytes(StandardCharsets.UTF_8));
+       offset+=rows.length();
+       if(page.getBoolean("done")){
+        if(!page.getBoolean("storageComplete")||offset!=count)throw new IllegalStateException();
+        break;
+       }
+       if(rows.length()==0)throw new IllegalStateException();
+      }
+     }
+     hashes[modeIndex]=java.util.Arrays.toString(digest.digest());
+     result.put(sequential?"cursor":"legacy",new JSONObject().put("firstPageMs",firstPage)
+       .put("totalMs",SystemClock.elapsedRealtime()-began).put("decryptions",decryptions)
+       .put("records",offset).put("pages",pages).put("maxSampledJvmHeapBytes",maxHeap));
+    }
+    boolean matched=hashes[0].equals(hashes[1]);result.put("matchedRecords",matched);
+    if(!matched)throw new IllegalStateException();
    }else{
     String id=UUID.randomUUID().toString();DetectorJournalStorage.Journal j=journal(root,id,secret);
     if(mode.equals("seal")){

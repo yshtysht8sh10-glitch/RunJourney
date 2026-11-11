@@ -64,4 +64,3 @@ android.applicationVariants.all { variant ->
     return mod;
   });
 };
-

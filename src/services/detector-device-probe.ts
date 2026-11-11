@@ -76,7 +76,7 @@ export async function runDetectorDeviceProbe(mode:'short'|'long'|'failure'|'pace
    subscription?.remove();subscription=undefined;if(mode==='paced')offResult=pacedOff.finish();
   }else{
    for(let i=0;i<total;i++){
-    on.step();processed++;if(firstFailureAtStep===undefined&&recorder.status==='INCOMPLETE')firstFailureAtStep=processed;
+    on.step();processed++;if(firstFailureAtStep===undefined&&!recorder.recording)firstFailureAtStep=processed;
     if(i%16===15){if(await RunRepository.getActiveRun())throw Error('通常RUN開始');const waited=performance.now();await native.detectorJournalList!();throttledMs+=performance.now()-waited;await pause(0);}
    }
   }
