@@ -150,3 +150,26 @@ test('actual JS application-ID gate excludes Production, pace, debug and iOS', (
   Object.defineProperty(Platform, 'OS', { value: 'ios', configurable: true }); expect(detectorJournalAllowed()).toBe(false);
   Object.defineProperty(Platform, 'OS', { value: 'android', configurable: true });
 });
+
+test('95-minute capture closes while the same RUN continues to 150 minutes in SQLite',async()=>{
+ let mono=0;
+ const timer=jest.spyOn(performance,'now').mockImplementation(()=>mono);
+ try {
+  await RunRepository.saveActiveRun(base()); await DetectorJournal.arm('longrun-test');
+  await RunRepository.appendActiveObservations([fix(0)],'active');
+  mono=95*60000;
+  await RunRepository.appendActiveObservations([fix(95*60000)],'background');
+  expect(DetectorJournal.recording).toBe(false);
+  expect(records.at(-1)?.data.reason).toBe('DIAGNOSTIC_LIMIT_95_MINUTES');
+  const count=records.length;
+  await RunRepository.appendActiveObservations([fix(150*60000)],'background');
+  expect((await RunRepository.getActiveRun())?.endedAt).toBeUndefined();
+  await RunRepository.flushCheckpoint();
+  await RunRepository.prepareFinish(new Date(150*60000+1000).toISOString());
+  const saved=await RunRepository.finishActiveRun(new Date(150*60000+1000).toISOString());
+  expect(saved?.points.at(-1)?.timestamp).toBe(150*60000);
+  expect(await RunRepository.getRun(saved!.id)).toEqual(saved);
+  expect(records).toHaveLength(count);
+  expect(replayDetectorJournal(records)).toMatchObject({complete:true,inputs:2,mismatches:[]});
+ } finally {timer.mockRestore();}
+});
