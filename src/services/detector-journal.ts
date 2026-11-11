@@ -9,6 +9,7 @@ export class DetectorJournalRecorder {
   private enabled = false;
   private started = false;
   private deadlineMono = Infinity;
+  captureId: string | undefined;
   private seq = 0;
   private inputs = 0;
   private evaluations = 0;
@@ -32,8 +33,9 @@ export class DetectorJournalRecorder {
     this.opening = true;
     const epoch = ++this.epoch;
     try {
-      await this.transport.open();
+      const captureId = await this.transport.open();
       if (epoch !== this.epoch) { this.transport.stop(); return; }
+      this.captureId = captureId;
       this.enabled = true; this.started = false; this.seq = this.inputs = this.evaluations = this.batches = 0;
       this.buildGitHash = buildGitHash;
       this.last = undefined; this.maxHandoffMs = 0;this.handoffs.fill(0);this.handoffCount=0; this.status = 'ARMED';
