@@ -24,3 +24,13 @@ a6c64df / 9cf9acdで、RUN開始時刻からの経過を加味したmonotonic期
 95分の採取部分と、それ以後の通常RUN継続部分を分けて評価する。採取件数・暗号認証・seal・再現、SQLiteの5秒点選択と終了flush、Auto Stopの記録、容量/遅延/障害、取得可能な電池/温度/メモリ、元データの不変性を照合する。ユーザーが今回変更した設定と新規RUN追加は別に説明する。
 
 診断95分未達でも通常RUN継続を独立して評価する。実停止/再開の観察を聞き取り、正解ラベルがなければ正確率とは報告しない。実時間150分・実GPS95分・Doze・電池負荷は未検証。原GPS/経路/鍵/BackupをGitHub/CIへ出さない。既存RUNの復元・削除は行わない。PR #73 Draft、Issue #72 Openを維持する。
+
+## Test v31の実機準備結果
+
+実装SHA15f487bの統合Test v31をSO-51Bへ上書き更新。既存Testと同じ署名・package、versionCode31を照合した。更新直前/直後/無音試験後の全snapshotが一致し、Production APKハッシュも一致。
+
+時間短縮したlimit試験で、Native保存1入力/7フレーム→END・seal→全認証・リプレイ一致を確認。その後の判定は240入力まで継続して診断OFFとdigest一致。実GPS95分・実時間150分の検証は明日のRUNで行う。
+
+配布APKの試験補助フィールドfirstFailureAtStepは正常な期限終了を失敗位置と誤分類するが、Native failureCode空・拒否0・SEALED・再現一致で正常終了を確認した。78f27b1でソースを修正し、追加回帰試験・型チェック成功。この表示修正は配布APK15f487bに未収録。実RUNの診断処理は当該フィールドを使用しない。
+
+統合APKと操作手順 https://github.com/yshtysht8sh10-glitch/RunJourney/blob/codex/longrun-test-20261112/docs/longrun-20261112-operator.md
