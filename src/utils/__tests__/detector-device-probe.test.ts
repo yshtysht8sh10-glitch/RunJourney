@@ -43,3 +43,12 @@ test('paced probe drives ON/OFF from native pulses only with identical AppState 
  expect(r.replay).toMatchObject({complete:true,inputs:25,mismatches:[]});
  }finally{Object.defineProperty(AppState,'currentState',{value:prior,configurable:true,writable:true});}
 });
+
+test('normal timed capture completion is not a transport failure',async()=>{
+ const r=await runDetectorDeviceProbe('limit','unit-test');
+ expect(r.matchedBaseline).toBe(true);
+ expect(r.firstFailureAtStep).toBeUndefined();
+ expect(r.sealState).toBe('SEALED');
+ expect(r.replay).toMatchObject({complete:true,inputs:1,mismatches:[]});
+ expect(r.processed).toBe(240);
+});
