@@ -80,8 +80,10 @@ export function paceAnnouncementMessage(sample: PaceAnnouncementSample, previous
     || ![previous.at, previous.savings].every(Number.isFinite) || sample.at <= previous.at) return distance + total;
   const elapsed = spokenDuration((sample.at - previous.at) / 1000);
   const difference = Math.round(sample.savings) - Math.round(previous.savings);
-  const change = difference === 0 ? `この${elapsed}で貯金の増減はありません。`
-    : `この${elapsed}で${spokenDuration(difference)}貯金が${difference > 0 ? '増えました' : '減りました'}。`;
+  const label = cumulative < 0 ? '遅れ' : '貯金';
+  const increasing = cumulative < 0 ? difference < 0 : difference > 0;
+  const change = difference === 0 ? `この${elapsed}で${label}の増減はありません。`
+    : `この${elapsed}で${spokenDuration(difference)}${label}が${increasing ? '増えました' : '減りました'}。`;
   return change + distance + total;
 }
 export function createPaceWorkout(settings: PaceSettings, startedAt: number): PaceWorkoutState | undefined {
