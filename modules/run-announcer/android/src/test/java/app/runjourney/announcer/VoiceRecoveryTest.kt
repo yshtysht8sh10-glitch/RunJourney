@@ -40,6 +40,23 @@ class VoiceRecoveryTest {
     service.getSharedPreferences("runjourney-voice-debug", Context.MODE_PRIVATE).edit().clear().commit()
     set("ready", false)
   }
+  @Test fun paceBaselineUpdatesOnlyWhenRealBodyStarts() {
+    val preferences = service.getSharedPreferences(RunAnnouncerService.PREFS, Context.MODE_PRIVATE)
+    preferences.edit().remove("paceAnnouncementBaseline").commit()
+    val sample = JSONObject().put("runId", "r").put("at", 60000).put("savings", 12).put("meters", 1000).put("target", 360)
+    val event = notice("PACE_WARNING")
+    event.getJSONObject("data").put("paceSample", sample)
+    val audit = service.javaClass.getDeclaredMethod("audit", JSONObject::class.java, String::class.java).apply { isAccessible = true }
+    audit.invoke(service, event, "EXPIRED")
+    assertNull(preferences.getString("paceAnnouncementBaseline", null))
+    event.getJSONObject("data").put("simulation", true)
+    audit.invoke(service, event, "STARTED")
+    assertNull(preferences.getString("paceAnnouncementBaseline", null))
+    event.getJSONObject("data").remove("simulation")
+    audit.invoke(service, event, "STARTED")
+    assertEquals(sample.toString(), preferences.getString("paceAnnouncementBaseline", null))
+  }
+
   @After fun destroy() { service.onDestroy(); NoiseState.running = false }
   private fun cueBatch(label:Int, version:Int=1, enabled:Boolean=true, state:String="RUNNING", time:Boolean=false, remaining:Double=label.toDouble(), at:Long=System.currentTimeMillis()) {
     val n=notice("GOAL_COUNTDOWN","countdown-$label-$version").put("expiresAt",System.currentTimeMillis()+3000).apply {getJSONObject("data").put("goalRevision","cue").put("goalEpoch",0).put("cueVersion",version).put("label",label)}
