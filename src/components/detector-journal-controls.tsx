@@ -16,6 +16,7 @@ export function DetectorJournalControls({ buildGitHash }: { buildGitHash: string
   };
   return <View style={{ padding: 12, gap: 12, borderWidth: 1 }}>
     <Text>Issue #72：入力・判定ジャーナル（初期実装）</Text>
+    <Text>診断はRUN開始から95分後の最初のGPSバッチ完了で終了・sealします。通常RUNは継続します。診断をONにしてからSTARTしてください。</Text>
     <Text>採取範囲：JS_SUBMITTED_ONLY。OS未配信・開始前・終了freeze後は含みません。sealと判定再現一致は別に確認します。</Text>
     <Text selectable>{message}</Text>
     {(['short','paced','long','failure','crash'] as const).map(mode=><Pressable key={mode} accessibilityRole="button" disabled={busy} onPress={()=>void action(async()=>{setMessage('人工入力を検証中。通常RUNは保存しません。');setMessage(JSON.stringify(await runDetectorDeviceProbe(mode,buildGitHash)));})}><Text>{({short:'実機検証：短時間ON/OFF比較',paced:'実機検証：画面OFF 1Hz（ON/OFF各25秒）',long:'実機検証：95分相当の入力負荷',failure:'実機検証：記録受付拒否後の継続',crash:'実機検証：強制終了用（途中でPCから終了）'})[mode]}</Text></Pressable>)}

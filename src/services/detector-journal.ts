@@ -8,6 +8,7 @@ type Transport = { open(): Promise<string>; offer(payload: string): boolean; sto
 export class DetectorJournalRecorder {
   private enabled = false;
   private started = false;
+  private deadlineMono = Infinity;
   private seq = 0;
   private inputs = 0;
   private evaluations = 0;
@@ -25,7 +26,7 @@ export class DetectorJournalRecorder {
     return {count:this.handoffCount,p50:this.handoffCount?q(.5):null,p95:this.handoffCount?q(.95):null,max:this.maxHandoffMs,binMs:.1,overflowAtMs:200};
   }
   get recording() { return this.enabled && this.started; }
-  constructor(private transport: Transport, private allowed: () => boolean) {}
+  constructor(private transport: Transport, private allowed: () => boolean, private captureLimitMs?: number) {}
   async arm(buildGitHash = 'unknown') {
     if (!this.allowed() || this.enabled || this.opening) return;
     this.opening = true;
@@ -52,6 +53,10 @@ export class DetectorJournalRecorder {
     if (!this.enabled) return;
     if (this.started) { this.boundary('OBSERVATION_SESSION_INIT', run, true); return; }
     this.started = true; this.status = 'RECORDING';
+    const startedAt = Date.parse(run.startedAt);
+    const elapsed = Number.isFinite(startedAt) ? Math.max(0, Date.now() - startedAt) : 0;
+    this.deadlineMono = this.captureLimitMs === undefined ? Infinity
+      : performance.now() + Math.max(0, this.captureLimitMs - elapsed);
     this.emit('START', () => {
       this.last = detectorSnapshot(run);
       return { schema: 1, algorithm: 'v4-f1476f7', sourceSHA: 'f1476f7947779b0fa4aeb28a054efd44255ef0c8', buildGitHash: this.buildGitHash,
@@ -71,6 +76,7 @@ export class DetectorJournalRecorder {
   batchEnd(run: ActiveRun) {
     if (!this.started) return;
     this.emit('BATCH_END', () => { this.last = detectorSnapshot(run); return { after: this.last }; });
+    if (performance.now() >= this.deadlineMono) this.end(run, 'DIAGNOSTIC_LIMIT_95_MINUTES');
   }
   boundary(reason: string, after: ActiveRun, reset = false) {
     if (!this.started) {
@@ -82,11 +88,11 @@ export class DetectorJournalRecorder {
       return { reason, before, after: this.last, reset, lastPersisted: after.points.at(-1)?.timestamp, lastObserved: after.diagnostics?.counts.GPS_OBS_LAST_TIMESTAMP };
     });
   }
-  end(run: ActiveRun) {
+  end(run: ActiveRun, reason = 'RUN_FINISH') {
     if (!this.started || !this.enabled) return;
-    this.boundary('RUN_FINISH', run);
+    this.boundary(reason, run);
     if (!this.enabled) return;
-    this.emit('END', () => ({ after: detectorSnapshot(run), inputs: this.inputs, evaluations: this.evaluations, batches: this.batches, maxHandoffMs: this.maxHandoffMs }));
+    this.emit('END', () => ({ after: detectorSnapshot(run), inputs: this.inputs, evaluations: this.evaluations, batches: this.batches, maxHandoffMs: this.maxHandoffMs, reason }));
     if (!this.enabled) return;
     this.enabled = false; this.status = 'SEALED_PENDING_VERIFICATION';
     try { this.transport.stop(); } catch { this.status = 'INCOMPLETE'; }
@@ -110,7 +116,7 @@ export const DetectorJournal = new DetectorJournalRecorder({
   open: async () => { const native = detectorJournalNative(); if (!native.detectorJournalOpen) throw new Error('missing'); return native.detectorJournalOpen(); },
   offer: payload => detectorJournalNative().detectorJournalOffer?.(payload) === true,
   stop: () => { if (detectorJournalAllowed()) detectorJournalNative().detectorJournalStop?.(); },
-}, detectorJournalAllowed);
+}, detectorJournalAllowed, 95 * 60_000);
 
 /** Internal memory-only reader, never Share/Backup/console. Run only with capture OFF. */
 export async function replayLocalDetectorJournal(id: string, legacy = false, readBudgetMs = Infinity) {
