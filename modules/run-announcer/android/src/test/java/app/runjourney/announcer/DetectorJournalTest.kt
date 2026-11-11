@@ -97,7 +97,7 @@ class DetectorJournalTest {
   }
   @Test fun sessionAndTotalLimitsRefuseAndNeverDeleteExistingCapture() = temporary { root ->
     val existing = File(root, "existing.enc").apply { writeBytes(ByteArray(500)) }
-    val journal = DetectorJournalStorage.Journal(root, id, secret, sessionLimit = 1200, totalLimit = 1800)
+    val journal = DetectorJournalStorage.Journal(root, id, secret, sessionLimit = 1200, totalLimit = 1800, compact = false)
     journal.append(payload(0), 0, 0)
     assertRejected { journal.append(payload(1, text = "x".repeat(2000)), 0, 0) }
     assertTrue(existing.exists()); assertTrue(File(root, id).listFiles()!!.any { it.extension == "enc" })
@@ -123,6 +123,44 @@ class DetectorJournalTest {
     journal.failed = true; journal.seal()
     assertEquals("INCOMPLETE", File(File(root, id), "status").readText())
   }
+  @Test fun cursorAuthenticatesEachFrameOnceAndReadsBothEncodings() = temporary { root ->
+    for (compact in listOf(false, true)) {
+      val journalId = UUID.randomUUID().toString()
+      val journal = DetectorJournalStorage.Journal(root, journalId, secret, segmentLimit = 32_000, compact = compact)
+      val records = (0..260).map { payload(it, if (it == 260) "END" else "INPUT", "repeated fixture ".repeat(80)) }
+      records.forEachIndexed { index, record -> journal.append(record, index.toLong(), index.toLong()) }
+      journal.seal()
+      val actual = mutableListOf<String>()
+      DetectorJournalStorage.Reader(root, journalId, secret).use { reader ->
+        repeat(3) { index ->
+          val page = reader.next()
+          val rows = page.getJSONArray("records")
+          for (j in 0 until rows.length()) actual.add(rows.getString(j))
+          assertEquals(actual.size, page.getInt("authenticatedRecords"))
+          assertEquals(index == 2, page.getBoolean("storageComplete"))
+          val legacy = JSONObject(DetectorJournalStorage.readJournal(root, journalId, index * 128, secret))
+          assertEquals(legacy.getJSONArray("records").toString(), rows.toString())
+        }
+      }
+      assertEquals(records, actual)
+      val size = journal.recordBytes().getJSONObject("INPUT")
+      if (compact) assertTrue(size.getLong("storedBytes") < size.getLong("legacyBytes") / 2)
+      else assertEquals(size.getLong("legacyBytes"), size.getLong("storedBytes"))
+    }
+  }
+
+  @Test fun cursorRejectsMissingSegmentBetweenPages() = temporary { root ->
+    val journal = DetectorJournalStorage.Journal(root, id, secret, segmentLimit = 700)
+    for (i in 0..260) journal.append(payload(i, if (i == 260) "END" else "INPUT"), 0, 0)
+    journal.seal()
+    DetectorJournalStorage.Reader(root, id, secret).use { reader ->
+      assertFalse(reader.next().getBoolean("storageComplete"))
+      val last = File(root, id).listFiles()!!.filter { it.extension == "enc" }.maxBy { it.name }
+      assertTrue(last.delete())
+      assertRejected { while (!reader.next().getBoolean("done")) Unit }
+    }
+  }
+
   @Test fun sevenDayExpiryIsReportedWithoutAutomaticDeletion() {
     val app = RuntimeEnvironment.getApplication()
     val context = object : ContextWrapper(app) { override fun getPackageName() = "app.runjourney.mobile.test" }

@@ -119,7 +119,7 @@ export async function replayLocalDetectorJournal(id: string, legacy = false, rea
   let token: string | undefined;
   let recordsRead = 0, pages = 0, authenticatedRecords = 0, decryptions = 0;
   let firstPageMs: number | undefined;
-  let readMs = 0;
+  let readMs = 0, maxSampledJvmHeapBytes = 0;
   const started = performance.now();
   try {
     if (!legacy) token = await native.detectorJournalOpenReader!(id);
@@ -131,11 +131,12 @@ export async function replayLocalDetectorJournal(id: string, legacy = false, rea
       readMs = arrived - started;
       firstPageMs ??= readMs;
       pages++;
+      maxSampledJvmHeapBytes = Math.max(maxSampledJvmHeapBytes, page.jvmHeapUsedBytes ?? 0);
       recordsRead += page.records.length;
       authenticatedRecords = page.authenticatedRecords;
       decryptions = legacy ? decryptions + authenticatedRecords : authenticatedRecords;
       for (const text of page.records) replay.push(journalDecode(text));
-      const metrics = { pages, recordsRead, authenticatedRecords, decryptions, firstPageMs, readMs, totalMs: performance.now() - started };
+      const metrics = { pages, recordsRead, authenticatedRecords, decryptions, firstPageMs, readMs, maxSampledJvmHeapBytes, totalMs: performance.now() - started };
       if (page.done) {
         const result = replay.finish();
         if (page.storageComplete !== true) { result.complete = false; result.mismatches.push('NATIVE_NOT_SEALED'); }
