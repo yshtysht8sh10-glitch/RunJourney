@@ -35,17 +35,20 @@ class RunMarkerService : Service() {
     @Volatile private var lastAt = 0L
     @Volatile private var failure = ""
     @Volatile private var endReason = ""
+    @Volatile private var ready = false
+    @Volatile private var alive = false
+    @Volatile private var activeToken = ""
     private fun test(c: Context) = c.packageName == PACKAGE
     fun control(c: Context, action: String): Boolean {
       if (!test(c) || action !in listOf("trial", "field", "off")) return false
-      if (action != "off" && state in listOf("STARTING", "RECORDING", "CLOSING")) return false
+      if (action != "off" && (alive || state in listOf("STARTING", "RECORDING", "CLOSING"))) return false
       val intent = Intent(c, RunMarkerService::class.java).putExtra("action", action)
       if (action == "off" && state !in listOf("STARTING", "RECORDING")) return true
       c.startForegroundService(intent); return true
     }
     fun stats(c: Context): String = if (!test(c)) JSONObject().put("state", "UNAVAILABLE").toString() else JSONObject()
       .put("state", state).put("count", count).put("mode", mode).put("lastLabel", lastLabel)
-      .put("lastReceivedAt", lastAt).put("failure", failure).put("endReason", endReason).put("physicalPressTimeMeasured", false).toString()
+      .put("lastReceivedAt", lastAt).put("failure", failure).put("endReason", endReason).put("ready", ready).put("physicalPressTimeMeasured", false).toString()
     private fun key(): SecretKey {
       val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
       (store.getKey(ALIAS, null) as? SecretKey)?.let { return it }
@@ -73,6 +76,11 @@ class RunMarkerService : Service() {
   private var lock: PowerManager.WakeLock? = null
   private var log: MarkerLog? = null
   private var recording = ""
+  private var sessionMode = ""
+  private var sessionCount = 0
+  @Volatile private var destroyed = false
+  private fun owns() = !destroyed && recording == activeToken
+  override fun onCreate() { super.onCreate(); alive = true }
   private val routeWatch = object : AudioDeviceCallback() {
     override fun onAudioDevicesRemoved(devices: Array<out AudioDeviceInfo>) {
       if (devices.any { it.type in listOf(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, AudioDeviceInfo.TYPE_BLUETOOTH_SCO, AudioDeviceInfo.TYPE_BLE_HEADSET) }) close("HEADSET_ROUTE_REMOVED")
@@ -89,9 +97,11 @@ class RunMarkerService : Service() {
     if (intent?.getStringExtra("action") == "off") { close("USER_ENDED"); return START_NOT_STICKY }
     if (recording.isNotEmpty()) return START_NOT_STICKY
     mode = intent?.getStringExtra("action") ?: "trial"
+    sessionMode = mode
     if (mode !in listOf("trial", "field")) { stopSelf(); return START_NOT_STICKY }
-    state = "STARTING"; count = 0; lastLabel = ""; lastAt = 0; failure = ""; endReason = ""
+    state = "STARTING"; count = 0; lastLabel = ""; lastAt = 0; failure = ""; endReason = ""; ready = false
     recording = UUID.randomUUID().toString()
+    activeToken = recording
     val token = recording
     lock = getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "RunJourney:MarkerPoC")
       .apply { acquire(if (mode == "trial") 910000 else 10810000) }
@@ -100,11 +110,11 @@ class RunMarkerService : Service() {
         val root = File(noBackupFilesDir, "run-markers-v1")
         check((root.listFiles()?.sumOf { it.length() } ?: 0) < 10_000_000) { "Marker total capacity" }
         val file = File(root, "$token.jsonl")
-        log = MarkerLog(file, key()).also { it.append("START", stamp().put("mode", mode).put("simulation", mode == "trial")
+        log = MarkerLog(file, key()).also { it.append("START", stamp().put("mode", sessionMode).put("simulation", sessionMode == "trial")
           .put("association", "independent session; match to RUN by time after recording")
           .put("labelSource", "USER_BUTTON_NOT_GPS").put("physicalPressTimeMeasured", false)) }
         getSharedPreferences("runjourney-markers", 0).edit().putString("last", file.name).commit()
-        handler.post { if (recording == token && state == "STARTING") { state = "RECORDING"; activate() } }
+        handler.post { if (owns() && recording == token && state == "STARTING") { state = "RECORDING"; activate() } }
       } catch (e: Exception) { fail(e) }
     } } catch (e: Exception) { fail(e) }
     handler.postDelayed({ if (recording == token) close(if (mode == "trial") "TRIAL_TIMEOUT" else "LIMIT_3_HOURS") },
@@ -112,8 +122,9 @@ class RunMarkerService : Service() {
     return START_NOT_STICKY
   }
   private fun fail(e: Exception) {
+    if (activeToken != recording) return
     failure = e.javaClass.simpleName + ":" + (e.message ?: "")
-    state = "FAILED"; handler.post { stopSelf() }
+    state = "FAILED"; handler.post { if (owns()) stopSelf() }
   }
   private fun activate() {
     getSystemService(AudioManager::class.java).registerAudioDeviceCallback(routeWatch, handler)
@@ -140,47 +151,51 @@ class RunMarkerService : Service() {
       player = MediaPlayer().also { p ->
         p.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
         resources.openRawResourceFd(R.raw.run_notice).use { fd -> p.setDataSource(fd.fileDescriptor, fd.startOffset, fd.length) }
-        fun completed() { if (player === p) { p.release(); player = null; session?.setPlaybackState(PlaybackState.Builder()
-          .setActions(PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE).setState(PlaybackState.STATE_PAUSED, 0, 0f).build()) } }
-        p.setOnCompletionListener { completed() }; p.setOnErrorListener { _, _, _ -> completed(); true }
+        fun completed(success: Boolean) { if (player === p) { p.release(); player = null; session?.setPlaybackState(PlaybackState.Builder()
+          .setActions(PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE).setState(PlaybackState.STATE_PAUSED, 0, 0f).build())
+          if (success) ready = true else fail(IllegalStateException("ACTIVATION_CUE_FAILED")) } }
+        p.setOnCompletionListener { completed(true) }; p.setOnErrorListener { _, _, _ -> completed(false); true }
         p.prepare(); p.start()
         session?.setPlaybackState(PlaybackState.Builder().setActions(PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE)
           .setState(PlaybackState.STATE_PLAYING, 0, 1f).build())
-        handler.postDelayed({ completed() }, 2000)
+        handler.postDelayed({ completed(false) }, 2000)
       }
     } catch (e: Exception) { fail(e) }
   }
   private fun marker(data: JSONObject) {
-    if (state != "RECORDING") return
+    if (!owns() || state != "RECORDING" || !ready) return
     try { worker.execute {
       try {
-        val label = if (mode == "trial") "TEST" else if (count % 2 == 0) "STOP" else "RESUME"
-        log!!.append("MARKER", data.put("label", label).put("markerIndex", count).put("labelSource", "USER_BUTTON_NOT_GPS"))
-        log!!.append("ACK", stamp().put("markerIndex", count).put("receivedElapsed", data.getLong("elapsed")))
-        count++; lastLabel = label; lastAt = data.getLong("wall")
-        if (mode == "trial" && count == 10) handler.post { close("TRIAL_COMPLETED") }
+        val label = if (sessionMode == "trial") "TEST" else if (sessionCount % 2 == 0) "STOP" else "RESUME"
+        log!!.append("MARKER", data.put("label", label).put("markerIndex", sessionCount).put("labelSource", "USER_BUTTON_NOT_GPS"))
+        log!!.append("ACK", stamp().put("markerIndex", sessionCount).put("receivedElapsed", data.getLong("elapsed")))
+        sessionCount++
+        if (owns()) { count = sessionCount; lastLabel = label; lastAt = data.getLong("wall") }
+        if (sessionMode == "trial" && sessionCount == 10) handler.post { if (owns()) close("TRIAL_COMPLETED") }
       } catch (e: Exception) { fail(e) }
     } } catch (e: Exception) { fail(e) }
   }
   private fun close(reason: String) {
     if (state !in listOf("STARTING", "RECORDING")) { stopSelf(); return }
-    state = "CLOSING"; endReason = reason; session?.isActive = false
+    state = "CLOSING"; endReason = reason; ready = false; session?.isActive = false
     try { worker.execute {
       try {
-        log?.append("END", stamp().put("reason", reason).put("markerCount", count)
+        log?.append("END", stamp().put("reason", reason).put("markerCount", sessionCount)
           .put("complete", reason in listOf("USER_ENDED", "TRIAL_COMPLETED")))
-        state = if (reason in listOf("USER_ENDED", "TRIAL_COMPLETED")) "SEALED" else "INCOMPLETE"
-        handler.post { stopSelf() }
+        if (activeToken == recording) state = if (reason in listOf("USER_ENDED", "TRIAL_COMPLETED")) "SEALED" else "INCOMPLETE"
+        handler.post { if (owns()) stopSelf() }
       } catch (e: Exception) { fail(e) }
     } } catch (e: Exception) { fail(e) }
   }
   override fun onDestroy() {
+    destroyed = true
     handler.removeCallbacksAndMessages(null)
+    if (activeToken == recording) { ready = false; alive = false }
     session?.isActive = false; session?.release(); session = null
     player?.release(); player = null
     getSystemService(AudioManager::class.java).unregisterAudioDeviceCallback(routeWatch)
     lock?.let { if (it.isHeld) it.release() }
-    if (state in listOf("RECORDING", "STARTING")) { state = "INTERRUPTED"; failure = "SERVICE_DESTROYED_NO_END" }
+    if (activeToken == recording && state in listOf("RECORDING", "STARTING")) { state = "INTERRUPTED"; failure = "SERVICE_DESTROYED_NO_END" }
     super.onDestroy()
   }
   override fun onBind(intent: Intent?): IBinder? = null
