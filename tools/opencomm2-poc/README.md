@@ -2,7 +2,7 @@
 
 This is a **test-only instrumentation helper**, not a RunJourney field APK. It targets only `app.runjourney.mobile.test`, requires the matching Test signing certificate, and additionally checks the package at runtime. Do not distribute it as the running application.
 
-No RunJourney application source, GPS registration, Auto Stop detector, SQLite, diagnostic journal or existing voice-log append/read code is called. The optional activation cue plays the existing common chime resource directly once. It does not exercise the normal voice queue. A paused MediaSession is never reported as playing except during that real cue; no silent audio track, forced routing, audio-focus request or preference reset is used.
+The default receiver does not call GPS registration, the Auto Stop detector, SQLite, diagnostic journals or existing voice-log append/read code. Its optional activation cue plays the existing common chime resource directly once. A paused MediaSession is never reported as playing except during that real cue; no silent audio track, forced routing, audio-focus request or preference reset is used. The separate `speech=true` diagnostic option calls the unchanged native voice queue with artificial text and redirects only that process's audit writer to a new private directory, preserving original voice chunks. Never use instrumentation during a real RUN.
 
 ## Build and policy test
 
@@ -13,7 +13,7 @@ Use a private output directory outside the repository. Android SDK platform/buil
 adb install -r -t --no-incremental <private-output>/marker-probe.apk
 ```
 
-The build runs the standalone `MarkerKeysTest`: key-up/repeat/unrelated inputs, duplicate downs, separate devices and the 1,024-key fail-closed capacity. It checks 1,030 assertions, not 1,030 independent test scenarios.
+The build runs the standalone `MarkerKeysTest`: key-up/repeat/unrelated inputs, duplicate downs, separate devices and the 1,024-key fail-closed capacity. It checks 2,084 assertions, not 2,084 independent scenarios. Its key policy source is shared with the Test marker service. On the tested phone the headset reports zero key timestamps: complete down/up cycles must be accepted independently, rather than storing `device:0` as a duplicate forever. Receipt time is not physical-press time.
 
 ## Device run
 
