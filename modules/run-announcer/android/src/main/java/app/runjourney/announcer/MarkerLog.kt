@@ -3,7 +3,6 @@ package app.runjourney.announcer
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
-import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
@@ -15,13 +14,13 @@ internal class MarkerLog(private val file: File, private val key: SecretKey) {
   private var sequence = 0
   private var previous = ""
   private var ended = false
-  private val random = SecureRandom()
   init { check(!file.exists()) { "No overwrite" }; check(file.parentFile!!.isDirectory || file.parentFile!!.mkdirs()) }
   fun append(kind: String, data: JSONObject) {
     check(!ended && sequence < 4096 && file.length() < 2_000_000) { "Marker capacity or closed" }
     val plain = JSONObject().put("seq", sequence).put("previous", previous).put("kind", kind).put("data", data).toString().toByteArray(Charsets.UTF_8)
-    val iv = ByteArray(12).also { random.nextBytes(it) }
-    val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(128, iv)) }
+    // Android Keystore with randomized encryption forbids caller-supplied IVs.
+    val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key) }
+    val iv = cipher.iv.also { check(it.size == 12) }
     val payload = JSONObject().put("iv", Base64.encodeToString(iv, Base64.NO_WRAP))
       .put("cipher", Base64.encodeToString(cipher.doFinal(plain), Base64.NO_WRAP)).toString() + "\n"
     check(file.length() + payload.toByteArray(Charsets.UTF_8).size <= 2_000_000)

@@ -17,6 +17,14 @@ class MarkerLogTest {
   @get:Rule val temporary = TemporaryFolder()
   private val key = SecretKeySpec(ByteArray(32) { 7 }, "AES")
   private fun fresh() = File(temporary.newFolder(), "markers.jsonl")
+  @Test fun providerGeneratesFreshNinetySixBitIvForEachEncryption() {
+    val a = fresh(); val b = fresh()
+    MarkerLog(a, key).append("START", JSONObject()); MarkerLog(b, key).append("START", JSONObject())
+    val av = JSONObject(a.readText()).getString("iv"); val bv = JSONObject(b.readText()).getString("iv")
+    assertEquals(12, android.util.Base64.decode(av, android.util.Base64.NO_WRAP).size)
+    assertNotEquals(av, bv)
+    assertFalse(MarkerLog.read(a, key).getBoolean("complete"))
+  }
   @Test fun authenticatedSequenceRoundTripsAndCloses() {
     val file = fresh(); val log = MarkerLog(file, key)
     log.append("START", JSONObject().put("simulation", true))

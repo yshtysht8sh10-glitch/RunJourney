@@ -12,7 +12,8 @@ import org.json.JSONObject;
 /** Read-only hashes. Output is private evidence, never a repository/CI artifact. */
 public final class MarkerInventory extends Instrumentation {
   private boolean readMarker;
-  @Override public void onCreate(Bundle args) { super.onCreate(args); readMarker = "true".equals(args.getString("readMarker")); start(); }
+  private boolean cryptoCheck;
+  @Override public void onCreate(Bundle args) { super.onCreate(args); readMarker = "true".equals(args.getString("readMarker")); cryptoCheck = "true".equals(args.getString("cryptoCheck")); start(); }
   @Override public void onStart() {
     Bundle result = new Bundle();
     try {
@@ -23,6 +24,27 @@ public final class MarkerInventory extends Instrumentation {
       visit(diagnostic, diagnostic, "diagnostic/", hashes);
       visit(voice, voice, "voice/", hashes);
       result.putString("hashes", hashes.toString());
+      if (cryptoCheck) {
+        android.content.Context c = getTargetContext();
+        Class<?> service = Class.forName("app.runjourney.announcer.RunMarkerService", true, c.getClassLoader());
+        Object companion = service.getDeclaredField("Companion").get(null);
+        java.lang.reflect.Method keyMethod = companion.getClass().getDeclaredMethod("key"); keyMethod.setAccessible(true);
+        javax.crypto.SecretKey key = (javax.crypto.SecretKey)keyMethod.invoke(companion);
+        javax.crypto.Cipher encoder = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding");
+        encoder.init(javax.crypto.Cipher.ENCRYPT_MODE, key);
+        byte[] iv = encoder.getIV();
+        byte[] plain = "synthetic-marker-keystore-check".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] encrypted = encoder.doFinal(plain);
+        javax.crypto.Cipher decoder = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding");
+        decoder.init(javax.crypto.Cipher.DECRYPT_MODE, key, new javax.crypto.spec.GCMParameterSpec(128, iv));
+        if (iv.length != 12 || !java.util.Arrays.equals(plain, decoder.doFinal(encrypted))) throw new IllegalStateException("Keystore roundtrip");
+        encrypted[0] ^= 1;
+        boolean rejected = false;
+        try { decoder.init(javax.crypto.Cipher.DECRYPT_MODE, key, new javax.crypto.spec.GCMParameterSpec(128, iv)); decoder.doFinal(encrypted); }
+        catch (javax.crypto.AEADBadTagException expected) { rejected = true; }
+        if (!rejected) throw new IllegalStateException("Tamper not rejected");
+        result.putString("cryptoCheck", "KEYSTORE_PROVIDER_IV_ROUNDTRIP_AND_TAMPER_PASS");
+      }
       if (readMarker) {
         android.content.Context c = getTargetContext();
         ClassLoader loader = c.getClassLoader();
