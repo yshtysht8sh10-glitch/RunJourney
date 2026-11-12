@@ -3,6 +3,7 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
   <uses-permission android:name="android.permission.RECORD_AUDIO" />
   <application>
+    <service android:name="app.runjourney.announcer.RunMarkerService" android:exported="false" android:foregroundServiceType="mediaPlayback" />
     <service android:name="app.runjourney.announcer.NoiseMonitorService" android:exported="false" android:foregroundServiceType="microphone" />
     <service android:name="app.runjourney.announcer.FinishClockService" android:exported="false" android:foregroundServiceType="location" />
     <service android:name="app.runjourney.announcer.RunAnnouncerService" android:exported="false" android:foregroundServiceType="mediaPlayback" />

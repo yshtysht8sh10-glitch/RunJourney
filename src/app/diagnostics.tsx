@@ -62,6 +62,7 @@ export default function Diagnostics() {
     <View style={{paddingHorizontal:24,paddingTop:8,paddingBottom:12}}>
       <Text style={{color:'#FFFFFF',fontSize:22,fontWeight:'700',marginBottom:8}}>Auto Stop Diagnostics</Text>
       {isStandaloneTest() && <DetectorJournalControls buildGitHash={String(Constants.expoConfig?.extra?.buildGitHash ?? 'unknown')} />}
+      {isStandaloneTest() && <Pressable style={styles.button} onPress={() => router.push('/marker-poc')}><Text style={styles.text}>実停止マーカー（OpenComm2 Test PoC）</Text></Pressable>}
     </View>
     <ScrollView contentContainerStyle={styles.content}>
     <Pressable onPress={() => id ? router.replace({ pathname: '/run-detail', params: { id } }) : router.replace('/settings')} style={styles.button}><Text style={styles.text}>‹ 戻る</Text></Pressable>

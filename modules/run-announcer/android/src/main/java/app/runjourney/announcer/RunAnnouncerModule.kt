@@ -121,6 +121,9 @@ class RunAnnouncerModule : Module() {
     }
     // Dispatch the tiny service intent directly; do not wait on the shared
     // async-module executor behind database/file work. Playback stays async.
+    Function("markerControl") { action: String -> RunMarkerService.control(requireNotNull(appContext.reactContext), action) }
+    Function("markerStats") { RunMarkerService.stats(requireNotNull(appContext.reactContext)) }
+    AsyncFunction("markerRead") { promise: Promise -> RunMarkerService.read(requireNotNull(appContext.reactContext), promise) }
     Function("notifyBatch") { payload: String ->
       val context = requireNotNull(appContext.reactContext)
       val intent = Intent(context, RunAnnouncerService::class.java).apply {
