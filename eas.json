@@ -28,6 +28,7 @@
       "env": { "RUNJOURNEY_REQUIRE_CLOUD": "1" }
     },
     "sqliteTest": {
+      "env": { "RUNJOURNEY_MARKER_POC": "1" },
       "distribution": "internal",
       "environment": "preview",
       "node": "22.13.1",

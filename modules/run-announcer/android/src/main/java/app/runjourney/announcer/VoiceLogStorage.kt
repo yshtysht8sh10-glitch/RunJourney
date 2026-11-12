@@ -16,8 +16,11 @@ internal object VoiceLogStorage {
   private var journal: VoiceLogJournal? = null
   private fun store(context: Context): VoiceLogJournal {
     journal?.let { return it }
-    val target = File(context.filesDir, "voice-log-v2")
-    VoiceLogJournal.migrateLegacy(target, {
+    // Keep the field-v32 chunks immutable during the marker-only Test release.
+    // Queue, speech and retention policy are unchanged; only Test's new destination differs.
+    val markerTest = context.packageName == "app.runjourney.mobile.test"
+    val target = File(context.filesDir, if (markerTest) "voice-log-marker-v33" else "voice-log-v2")
+    if (!markerTest) VoiceLogJournal.migrateLegacy(target, {
       val old = JSONArray(context.getSharedPreferences("runjourney-voice-debug", 0).getString("entries", "[]"))
       (0 until old.length()).map { i -> val e = old.getJSONObject(i); e.optLong("loggedAt") to e.toString() }
     }, System.currentTimeMillis())
