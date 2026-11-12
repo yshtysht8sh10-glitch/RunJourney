@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { router } from 'expo-router';
+import { useCallback, useState } from 'react';
+import { router, useFocusEffect } from 'expo-router';
 import { Alert, Platform, Pressable, ScrollView, Share, StyleSheet, Text } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { isStandaloneTest } from '@/utils/build';
@@ -14,10 +14,10 @@ function bridge() {
 export default function MarkerPoc() {
   const [status, setStatus] = useState<Status>({ state: 'OFF' });
   const [pending, setPending] = useState(false);
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     const read = () => { try { setStatus(JSON.parse(bridge()?.markerStats?.() ?? '{"state":"UNAVAILABLE"}')); } catch { setStatus({ state: 'UNAVAILABLE' }); } };
     read(); const timer = setInterval(read, 500); return () => clearInterval(timer);
-  }, []);
+  }, []));
   const control = async (action: 'trial' | 'field' | 'off') => {
     setPending(true);
     try {
