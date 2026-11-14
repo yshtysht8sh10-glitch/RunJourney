@@ -16,6 +16,7 @@ import { type FinishGoal, goalAchievement } from '@/domain/finish-goal';
 import { AdaptiveAudio } from '@/services/adaptive-audio';
 import { FinishClock } from '@/services/finish-clock';
 import { completionLog } from '@/services/completion-log';
+import { SensorDiagnostics } from '@/services/sensor-diagnostics';
 
 const trackingOptions: Location.LocationTaskOptions = {
   accuracy: Location.Accuracy.High,
@@ -71,6 +72,7 @@ async function startLocationTask(): Promise<void> {
     await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME, { ...trackingOptions,
       timeInterval: isStandaloneTest() ? 1000 : trackingOptions.timeInterval,
       distanceInterval: isStandaloneTest() || active?.features?.autoStop ? 0 : trackingOptions.distanceInterval });
+    if (active) { SensorDiagnostics.runId = active.id; SensorDiagnostics.begin(active.id); }
   }
 }
 
@@ -217,6 +219,7 @@ export const RunService = {
       }
       const saved = await RunRepository.finishActiveRun(frozen.endedAt!);
       if (saved) {
+        SensorDiagnostics.end(saved.id);
         lastFinished = saved;
         completionLog('SAVE_SUCCEEDED', { runId: saved.id, endedAt: saved.endedAt, voiceEventId: saved.achievement ? `${saved.id}:finish` : null });
         // Neither listeners nor speech can turn committed history into a save failure.

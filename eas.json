@@ -3,6 +3,10 @@
     "version": ">= 16.0.0"
   },
   "build": {
+    "sensorTest": {
+      "extends": "sqliteTest",
+      "env": { "RUNJOURNEY_SENSOR_DIAGNOSTICS": "1" }
+    },
     "development": {
       "developmentClient": true,
       "distribution": "internal"

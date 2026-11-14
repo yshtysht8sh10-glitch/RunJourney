@@ -5,6 +5,7 @@ import { RunRepository } from '@/repositories/run-repository';
 import { RunService } from '@/services/run-service';
 import { isStandaloneTest } from '@/utils/build';
 import { ActiveRun } from '@/types/run';
+import { SensorDiagnostics } from '@/services/sensor-diagnostics';
 jest.mock('@/utils/build', () => ({ isStandaloneTest: jest.fn(() => true) }));
 jest.mock('@/services/voice-announcement', () => ({ VoiceAnnouncement: { goalChanged: jest.fn(), started: jest.fn(), beforeGoal: jest.fn().mockResolvedValue(undefined), restore: jest.fn(), updateState: jest.fn(), updateDistance: jest.fn(), updateRun: jest.fn() } }));
 jest.mock('expo-task-manager', () => ({ isTaskDefined: () => false, defineTask: jest.fn() }));
@@ -36,4 +37,15 @@ test.each([true, false])('TaskManager Test=%s routes batches without changing Pr
   expect(saved.points).toHaveLength(testBuild ? 2 : 6);
   expect(saved.diagnostics?.counts.GPS_OBS_COUNT).toBe(testBuild ? 6 : undefined);
   if (testBuild) expect((await RunRepository.getRecentObservations(10000, 5000)).at(-1)).toMatchObject({ speed: null, accuracy: null });
+});
+test('diagnostic failure leaves normal observations and storage identical', async () => {
+  const observations = Array.from({ length: 8 }, (_, i) => ({ timestamp: i * 1000,
+    coords: { latitude: 35, longitude: 139, accuracy: 3, speed: 0, altitude: null } }));
+  const spy = jest.spyOn(SensorDiagnostics, 'gps').mockImplementation(() => { /* Native unavailable or rejected: observer absorbs it. */ });
+  await callback({ data: { locations: observations }, error: null, executionInfo: {} } as never);
+  const saved = (await RunRepository.getActiveRun())!;
+  expect(saved.diagnostics?.counts.GPS_OBS_COUNT).toBe(8);
+  expect(saved.points.map(p => p.timestamp)).toEqual([0, 5000]);
+  expect(saved.events).toEqual([]);
+  spy.mockRestore();
 });

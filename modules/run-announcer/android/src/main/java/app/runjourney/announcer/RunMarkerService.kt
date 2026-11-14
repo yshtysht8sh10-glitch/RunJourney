@@ -40,7 +40,7 @@ class RunMarkerService : Service() {
     @Volatile private var activeToken = ""
     private fun test(c: Context) = c.packageName == PACKAGE
     fun control(c: Context, action: String): Boolean {
-      if (!test(c) || action !in listOf("trial", "field", "off")) return false
+      if (!test(c) || action !in listOf("trial", "field", "protocol", "off")) return false
       if (action != "off" && (alive || state in listOf("STARTING", "RECORDING", "CLOSING"))) return false
       val intent = Intent(c, RunMarkerService::class.java).putExtra("action", action)
       if (action == "off" && state !in listOf("STARTING", "RECORDING")) return true
@@ -98,7 +98,7 @@ class RunMarkerService : Service() {
     if (recording.isNotEmpty()) return START_NOT_STICKY
     mode = intent?.getStringExtra("action") ?: "trial"
     sessionMode = mode
-    if (mode !in listOf("trial", "field")) { stopSelf(); return START_NOT_STICKY }
+    if (mode !in listOf("trial", "field", "protocol")) { stopSelf(); return START_NOT_STICKY }
     state = "STARTING"; count = 0; lastLabel = ""; lastAt = 0; failure = ""; endReason = ""; ready = false
     recording = UUID.randomUUID().toString()
     activeToken = recording
@@ -164,11 +164,15 @@ class RunMarkerService : Service() {
   }
   private fun marker(data: JSONObject) {
     if (!owns() || state != "RECORDING" || !ready) return
+    if (sessionMode == "protocol" && !SensorDiagnostics.recording()) return
     try { worker.execute {
       try {
-        val label = if (sessionMode == "trial") "TEST" else if (sessionCount % 2 == 0) "STOP" else "RESUME"
+        val label = if (sessionMode == "trial") "TEST" else if (sessionMode == "protocol") {
+          if (sessionCount % 2 == 0) "BEGIN" else "END"
+        } else if (sessionCount % 2 == 0) "STOP" else "RESUME"
         log!!.append("MARKER", data.put("label", label).put("markerIndex", sessionCount).put("labelSource", "USER_BUTTON_NOT_GPS"))
         log!!.append("ACK", stamp().put("markerIndex", sessionCount).put("receivedElapsed", data.getLong("elapsed")))
+        if (sessionMode == "protocol") SensorDiagnostics.marker(applicationContext, data)
         sessionCount++
         if (owns()) { count = sessionCount; lastLabel = label; lastAt = data.getLong("wall") }
         if (sessionMode == "trial" && sessionCount == 10) handler.post { if (owns()) close("TRIAL_COMPLETED") }

@@ -13,6 +13,10 @@ import expo.modules.kotlin.modules.ModuleDefinition
 class RunAnnouncerModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("RunAnnouncer")
+    Function("sensorControl") { action: String, value: String -> SensorDiagnostics.control(requireNotNull(appContext.reactContext), action, value) }
+    Function("sensorStats") { SensorDiagnostics.stats(requireNotNull(appContext.reactContext)) }
+    Function("sensorGps") { payload: String -> SensorDiagnostics.gps(requireNotNull(appContext.reactContext), payload) }
+    AsyncFunction("sensorRead") { SensorDiagnostics.read(requireNotNull(appContext.reactContext)) }
     Events("finishClock")
     Function("paceAnnouncementBaseline") {
       requireNotNull(appContext.reactContext).getSharedPreferences(RunAnnouncerService.PREFS, 0)

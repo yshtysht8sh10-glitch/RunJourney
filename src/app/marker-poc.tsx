@@ -18,7 +18,7 @@ export default function MarkerPoc() {
     const read = () => { try { setStatus(JSON.parse(bridge()?.markerStats?.() ?? '{"state":"UNAVAILABLE"}')); } catch { setStatus({ state: 'UNAVAILABLE' }); } };
     read(); const timer = setInterval(read, 500); return () => clearInterval(timer);
   }, []));
-  const control = async (action: 'trial' | 'field' | 'off') => {
+  const control = async (action: 'trial' | 'field' | 'protocol' | 'off') => {
     setPending(true);
     try {
       if (action !== 'off' && await RunRepository.getActiveRun()) throw Error('START前に準備してください。RUNのタイマーは操作しません。');
@@ -58,6 +58,8 @@ export default function MarkerPoc() {
     <Pressable disabled={pending || busy} style={[styles.button, busy && styles.disabled]} onPress={() => void control('trial')}><Text style={styles.text}>試し押し（10回で終了）</Text></Pressable>
     <Pressable disabled={pending || busy} style={[styles.button, busy && styles.disabled]} onPress={() => void voiceTrial()}><Text style={styles.text}>音声中の試し押し（開始）</Text></Pressable>
     <Pressable disabled={pending || busy} style={[styles.button, busy && styles.disabled]} onPress={() => void control('field')}><Text style={styles.text}>実走マーカー開始（START前）</Text></Pressable>
+    <Pressable disabled={pending || busy} style={[styles.button, busy && styles.disabled]} onPress={() => void control('protocol')}><Text style={styles.text}>5条件マーカー開始（START前・BEGIN/END）</Text></Pressable>
+    <Text style={styles.text}>5条件モードはセンサー診断をARMEDにし、通常START後に受付します。直立→足振り→弾む→歩行→Uターン→Uターン→歩行→弾む→足振り→直立。各区間の開始/終了で1回ずつ。歩行/Uターンで停止する指示ではありません。</Text>
     <Pressable disabled={pending || !busy} style={[styles.button, !busy && styles.disabled]} onPress={() => void control('off')}><Text style={styles.text}>マーカーのみ終了（RUNは継続）</Text></Pressable>
     <Text style={styles.text}>開始音の後、実際に止まったら再生ボタンを1回、走り出すときに1回。STOP/RESUMEを交互に自己申告します。音声通知やGPSの状態でラベルを選びません。</Text>
     <Text style={styles.text}>試し押しは実走とは別ファイル。実走開始で件数を0に戻します。RUN開始・終了はラン画面で通常どおり操作し、終了後にここでマーカーも終了してください。</Text>
