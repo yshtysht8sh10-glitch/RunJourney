@@ -61,7 +61,7 @@ export default function MarkerPoc() {
     <Pressable disabled={pending || busy} style={[styles.button, busy && styles.disabled]} onPress={() => void control('protocol')}><Text style={styles.text}>5条件マーカー開始（START前・BEGIN/END）</Text></Pressable>
     <Text style={styles.text}>5条件モードはセンサー診断をARMEDにし、通常START後に受付します。直立→足振り→弾む→歩行→Uターン→Uターン→歩行→弾む→足振り→直立。各区間の開始/終了で1回ずつ。歩行/Uターンで停止する指示ではありません。</Text>
     <Pressable disabled={pending || !busy} style={[styles.button, !busy && styles.disabled]} onPress={() => void control('off')}><Text style={styles.text}>マーカーのみ終了（RUNは継続）</Text></Pressable>
-    <Text style={styles.text}>開始音の後、実際に止まったら再生ボタンを1回、走り出すときに1回。STOP/RESUMEを交互に自己申告します。音声通知やGPSの状態でラベルを選びません。</Text>
+    <Text style={styles.text}>{status.mode === 'protocol' ? '5条件モードでは区間の開始/終了をBEGIN/ENDとして記録します。歩行・走行Uターンでは止まらず、決めた順番で押してください。' : '開始音の後、実際に止まったら再生ボタンを1回、走り出すときに1回。STOP/RESUMEを交互に自己申告します。音声通知やGPSの状態でラベルを選びません。'}</Text>
     <Text style={styles.text}>試し押しは実走とは別ファイル。実走開始で件数を0に戻します。RUN開始・終了はラン画面で通常どおり操作し、終了後にここでマーカーも終了してください。</Text>
     <Text style={styles.text}>暗号化して端末内保存。キー時刻が取れない機種は端末受信時刻のみで、実停止の厳密な時刻ではありません。再起動・切断・押し忘れは未検証区間にします。Test限定の受信維持処理による電池増分は未測定です。</Text>
     <Pressable disabled={busy} style={[styles.button, busy && styles.disabled]} onPress={() => void (async () => { try {

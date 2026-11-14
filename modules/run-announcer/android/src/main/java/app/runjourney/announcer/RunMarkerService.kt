@@ -92,8 +92,8 @@ class RunMarkerService : Service() {
     if (!test(this)) { stopSelf(); return START_NOT_STICKY }
     getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel("run-markers", "実停止マーカー（Test）", NotificationManager.IMPORTANCE_LOW))
     startForeground(6073, Notification.Builder(this, "run-markers").setSmallIcon(applicationInfo.icon)
-      .setContentTitle("実停止マーカーを記録中")
-      .setContentText("ボタン1回で停止/再開を交互に記録。RUNのタイマーは変更しません").setOngoing(true).build())
+      .setContentTitle(if (intent?.getStringExtra("action") == "protocol") "試験区間マーカーを記録中" else "実停止マーカーを記録中")
+      .setContentText(if (intent?.getStringExtra("action") == "protocol") "区間の開始/終了を記録。歩行・Uターンでは止まりません" else "ボタン1回で停止/再開を交互に記録。RUNのタイマーは変更しません").setOngoing(true).build())
     if (intent?.getStringExtra("action") == "off") { close("USER_ENDED"); return START_NOT_STICKY }
     if (recording.isNotEmpty()) return START_NOT_STICKY
     mode = intent?.getStringExtra("action") ?: "trial"

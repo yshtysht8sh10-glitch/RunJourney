@@ -47,6 +47,8 @@ internal class SensorJournal(val file: File, private val key: SecretKey,
     fun verify(file: File, key: SecretKey): JSONObject {
       var seq = 0; var previous = ByteArray(32); var ended = false
       var samples = 0L; var gps = 0; var labels = 0; var healthFrames = 0
+      val timing = mapOf(1 to SensorTiming(), 4 to SensorTiming())
+      var captureStart: Long? = null; var captureEnd: Long? = null
       val events = org.json.JSONArray()
       DataInputStream(BufferedInputStream(FileInputStream(file))).use { input ->
         while (input.available() > 0) {
@@ -64,16 +66,24 @@ internal class SensorJournal(val file: File, private val key: SecretKey,
             check(seq > 0 || kind == "START")
             if (kind == "SAMPLES") {
               DataInputStream(ByteArrayInputStream(payload)).use { block ->
-                check(block.readInt() in listOf(1, 4)); val count = block.readInt(); check(count in 1..2048)
+                val type = block.readInt(); check(type in listOf(1, 4)); val count = block.readInt(); check(count in 1..2048)
                 check(block.available() == count * 32); samples += count
+                repeat(count) {
+                  timing.getValue(type).observe(block.readLong(), block.readLong())
+                  repeat(3) { block.readFloat() }; block.readInt()
+                }
               }
             } else {
               val data = JSONObject(String(payload, Charsets.UTF_8))
               if (kind == "GPS") gps++
               if (kind == "LABEL") labels++
+              if (kind == "CAPTURE_BEGIN") captureStart = data.getString("elapsedBeforeNs").toLong()
               if (kind == "HEALTH") healthFrames++
               if (kind !in listOf("GPS", "HEALTH")) events.put(JSONObject().put("kind", kind).put("data", data))
-              if (kind == "END") check(data.getLong("sampleCount") == samples) { "SAMPLE_COUNT" }
+              if (kind == "END") {
+                check(data.getLong("sampleCount") == samples) { "SAMPLE_COUNT" }
+                captureEnd = data.optJSONObject("clock")?.optString("elapsedBeforeNs")?.toLongOrNull()
+              }
               ended = kind == "END"
             }
           }
@@ -81,8 +91,10 @@ internal class SensorJournal(val file: File, private val key: SecretKey,
         }
       }
       val complete = ended && events.getJSONObject(events.length() - 1).getJSONObject("data").optBoolean("complete")
-      return JSONObject().put("schema", 1).put("authenticatedFrames", seq).put("samples", samples)
+      return JSONObject().put("schema", 1).put("bytes", file.length()).put("authenticatedFrames", seq).put("samples", samples)
         .put("gpsLinks", gps).put("labels", labels).put("healthFrames", healthFrames).put("storageComplete", ended).put("complete", complete).put("events", events)
+        .put("verifiedAccel", if (captureStart != null && captureEnd != null) timing.getValue(1).json(captureEnd!!, captureStart!!) else timing.getValue(1).json())
+        .put("verifiedGyro", if (captureStart != null && captureEnd != null) timing.getValue(4).json(captureEnd!!, captureStart!!) else timing.getValue(4).json())
     }
   }
 }

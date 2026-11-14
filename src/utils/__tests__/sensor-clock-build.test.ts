@@ -1,6 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 const plugin = jest.requireActual('../../../plugins/with-sensor-clock');
+test('Test source-build override preserves existing module exclusions and is idempotent', () => {
+  const config = { expo: { autolinking: { android: { exclude: ['preserve-me'] } } } };
+  const once = plugin.sourceBuildPackage(config);
+  const twice = plugin.sourceBuildPackage(JSON.parse(JSON.stringify(once)));
+  expect(twice).toEqual(once);
+  expect(twice.expo.autolinking.android.exclude).toEqual(['preserve-me']);
+  expect(twice.expo.autolinking.android.buildFromSource).toEqual(['^expo-location$']);
+});
 test('clock patch is pinned, idempotent, and fails closed on drift or partial patch', () => {
   const source = fs.readFileSync(path.join(process.cwd(), 'node_modules/expo-location/android/src/main/java/expo/modules/location/records/LocationResults.kt'), 'utf8');
   const patched = plugin.patch(source);

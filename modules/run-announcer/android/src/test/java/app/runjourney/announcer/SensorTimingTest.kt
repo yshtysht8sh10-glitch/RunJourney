@@ -9,6 +9,14 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
 class SensorTimingTest {
+  @Test fun stoppedStreamAndNoSamplesCannotLookLikeAHealthyTwentyFiveHzRecording() {
+    val timing = SensorTiming()
+    assertFalse(timing.json(5_000_000_000, 1_000_000_000).getBoolean("qualityPass"))
+    repeat(26) { i -> timing.observe(1_000_000_000 + i * 40_000_000L, 1_010_000_000 + i * 40_000_000L) }
+    assertTrue(timing.json(2_010_000_000, 1_000_000_000).getBoolean("qualityPass"))
+    assertFalse(timing.json(10_000_000_000, 1_000_000_000).getBoolean("qualityPass"))
+    assertEquals(8000.0, timing.json(10_000_000_000, 1_000_000_000).getDouble("tailGapMs"), .1)
+  }
   @Test fun detectsRealRateGapAndReverseWithoutPretendingExactHardwareLoss() {
     val timing = SensorTiming()
     repeat(26) { i -> timing.observe(1_000_000_000 + i * 40_000_000L, 1_010_000_000 + i * 40_000_000L) }

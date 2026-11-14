@@ -51,6 +51,7 @@ internal object SensorDiagnostics : SensorEventListener {
   private var sampleWritten = 0L // writer thread only
   @Volatile private var maxWriteMs = 0.0
   @Volatile private var maxSyncMs = 0.0
+  @Volatile private var storedBytes = 0L
   private var ticks = 0
   private val timings = mutableMapOf<Int, SensorTiming>()
   private val buffers = mutableMapOf<Int, ByteArrayOutputStream>()
@@ -103,7 +104,7 @@ internal object SensorDiagnostics : SensorEventListener {
     state = "STARTING"; context = c; runId = id; mode = captureMode; failure = ""; writerFailed = false; failNextWrite = false
     session = UUID.randomUUID().toString(); gpsCount = 0; missingGpsClock = 0; labelCount = 0; captureStarted = SystemClock.elapsedRealtime()
     lastGpsMono = 0; gpsReversals = 0; maxClockRoundTrip = 0; sampleWritten = 0; maxWriteMs = 0.0
-    maxEpochResidualMs = 0.0; maxAnchorUncertaintyMs = 0.0; cpuStarted = android.os.Process.getElapsedCpuTime(); maxSyncMs = 0.0; ticks = 0
+    maxEpochResidualMs = 0.0; maxAnchorUncertaintyMs = 0.0; cpuStarted = android.os.Process.getElapsedCpuTime(); maxSyncMs = 0.0; ticks = 0; storedBytes = 0
     timings.clear(); buffers.clear(); blockCounts.clear(); blockStarted.clear()
     manager = c.getSystemService(SensorManager::class.java)
     val sensors = listOf(1, 4).map { manager?.getDefaultSensor(it) }
@@ -114,14 +115,14 @@ internal object SensorDiagnostics : SensorEventListener {
       .put("powerMaReported", sensor.power.toDouble()).put("wakeUp", sensor.isWakeUpSensor) })
     val file = File(root(c), "$session.sdiag")
     val start = stamp().put("schema", 1).put("runId", id).put("mode", mode).put("position", position)
-      .put("sensors", metadata).put("requestedHz", 25).put("reportLatencyUs", 1_000_000)
+      .put("sensors", metadata).put("requestedHz", if (sensorsEnabled) 25 else 0).put("reportLatencyUs", if (sensorsEnabled) 1_000_000 else 0)
       .put("algorithmApplied", false).put("clockBasis", "ANDROID_ELAPSED_REALTIME_NANOS")
       .put("sensorsEnabled", sensorsEnabled)
       .put("processCpuStartMs", cpuStarted).put("battery", battery())
     worker.execute {
       try {
         check(c.filesDir.usableSpace >= 100L * 1024 * 1024) { "LOW_STORAGE" }
-        log = SensorJournal(file, key(true)); log!!.json("START", start); log!!.sync()
+        log = SensorJournal(file, key(true)); log!!.json("START", start); log!!.sync(); storedBytes = file.length()
         c.getSharedPreferences("sensor-diagnostic-v1", 0).edit().putString("last", file.name).apply()
         handler.post {
           if (state != "STARTING") { finish("START_CANCELLED", false); return@post }
@@ -151,6 +152,7 @@ internal object SensorDiagnostics : SensorEventListener {
           check(SystemClock.elapsedRealtime() - queuedAt <= 10_000) { "WRITER_LAG" }
           val before = SystemClock.elapsedRealtimeNanos()
           log!!.append(kind, payload); sampleWritten += sampleCount
+          storedBytes = log!!.file.length()
           maxWriteMs = maxOf(maxWriteMs, (SystemClock.elapsedRealtimeNanos() - before) / 1e6)
         }
       } catch (e: Exception) { writerFailed = true; failure = e.javaClass.simpleName + ":" + (e.message ?: ""); handler.post { finish("WRITE_FAILED", false) } }
@@ -182,8 +184,13 @@ internal object SensorDiagnostics : SensorEventListener {
       if (state != "RECORDING") return
       if (SystemClock.elapsedRealtime() >= deadline) { finish("CAPTURE_LIMIT", true); return }
       for (type in listOf(1, 4)) flush(type)
-      if (ticks++ % 5 == 0) json("HEALTH", snapshot().put("clock", stamp()).put("processCpuMs", android.os.Process.getElapsedCpuTime() - cpuStarted)
-        .put("pssKb", Debug.getPss()).put("battery", battery()))
+      if (Build.VERSION.SDK_INT >= 29 && (context?.getSystemService(PowerManager::class.java)?.currentThermalStatus ?: 0) >= PowerManager.THERMAL_STATUS_SEVERE) { finish("THERMAL_LIMIT", true); return }
+      if (ticks++ % 5 == 0) {
+        val currentBattery = battery()
+        if (currentBattery.optInt("level", -1) in 0..15) { finish("LOW_BATTERY", true); return }
+        json("HEALTH", snapshot().put("clock", stamp()).put("processCpuMs", android.os.Process.getElapsedCpuTime() - cpuStarted)
+          .put("pssKb", Debug.getPss()).put("battery", currentBattery))
+      }
       try { worker.execute { try { if (!writerFailed) { val start = SystemClock.elapsedRealtimeNanos(); log?.sync(); maxSyncMs = maxOf(maxSyncMs, (SystemClock.elapsedRealtimeNanos() - start) / 1e6) } } catch (_: Exception) { writerFailed = true; handler.post { finish("SYNC_FAILED", false) } } } }
       catch (_: java.util.concurrent.RejectedExecutionException) { finish("QUEUE_CAPACITY", false) }
       handler.postDelayed(this, 2000)
@@ -229,12 +236,14 @@ internal object SensorDiagnostics : SensorEventListener {
     }
   }
   private fun snapshot(): JSONObject = JSONObject().put("state", state).put("mode", mode).put("runId", runId)
-    .put("position", position).put("failure", failure).put("sensorsEnabled", sensorsEnabled).put("requestedHz", 25).put("gpsLinks", gpsCount)
+    .put("position", position).put("failure", failure).put("sensorsEnabled", sensorsEnabled).put("requestedHz", if (sensorsEnabled) 25 else 0).put("gpsLinks", gpsCount)
     .put("missingGpsClock", missingGpsClock).put("gpsTimestampReversals", gpsReversals)
     .put("maxSerializeToBridgeMs", maxClockRoundTrip / 1e6).put("labelBoundaries", labelCount)
     .put("maxGpsEpochResidualMs", maxEpochResidualMs).put("maxWallAnchorUncertaintyMs", maxAnchorUncertaintyMs)
     .put("pendingBytes", pendingBytes.get()).put("maxFrameWriteMs", maxWriteMs).put("maxFsyncMs", maxSyncMs)
-    .put("accel", timings[1]?.json() ?: JSONObject.NULL).put("gyro", timings[4]?.json() ?: JSONObject.NULL)
+    .put("storedBytes", storedBytes).put("sessionLimitBytes", 16 * 1024 * 1024)
+    .put("accel", timings[1]?.json(SystemClock.elapsedRealtimeNanos(), captureStarted * 1_000_000) ?: JSONObject.NULL)
+    .put("gyro", timings[4]?.json(SystemClock.elapsedRealtimeNanos(), captureStarted * 1_000_000) ?: JSONObject.NULL)
     .put("clockPatch", clockPatch()).put("nextCondition", conditions.getOrNull(labelCount / 2) ?: "COMPLETE")
   fun stats(c: Context): String {
     if (!allowed(c)) return "{\"state\":\"UNAVAILABLE\"}"
@@ -246,10 +255,12 @@ internal object SensorDiagnostics : SensorEventListener {
     val c = context ?: return JSONObject()
     val intent = c.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
     val charge = c.getSystemService(BatteryManager::class.java).getIntProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER)
+    val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+    val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
     return JSONObject().put("chargeCounterUah", if (charge != Int.MIN_VALUE) charge else JSONObject.NULL)
-      .put("level", intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1)
-      .put("temperatureDeciC", intent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1) ?: -1)
-      .put("plugged", intent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1) ?: -1)
+      .put("level", if (level >= 0 && scale > 0) level * 100.0 / scale else JSONObject.NULL)
+      .put("temperatureDeciC", if (intent?.hasExtra(BatteryManager.EXTRA_TEMPERATURE) == true) intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) else JSONObject.NULL)
+      .put("plugged", if (intent?.hasExtra(BatteryManager.EXTRA_PLUGGED) == true) intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) else JSONObject.NULL)
   }
   private fun finish(reason: String, complete: Boolean) {
     if (state !in listOf("STARTING", "RECORDING")) return
