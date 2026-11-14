@@ -1,7 +1,11 @@
 import { requireNativeModule } from 'expo-modules-core';
 
 type RunAnnouncer = {
-  markerControl?(action: 'trial' | 'field' | 'off'): boolean;
+  markerControl?(action: 'trial' | 'field' | 'protocol' | 'off'): boolean;
+  sensorControl?(action: string, value: string): boolean;
+  sensorStats?(): string;
+  sensorGps?(payload: string): void;
+  sensorRead?(): Promise<string>;
   markerStats?(): string;
   markerRead?(): Promise<string>;
   paceAnnouncementBaseline?(): string;
