@@ -33,7 +33,9 @@ internal object SensorDiagnostics : SensorEventListener {
   private var manager: SensorManager? = null
   private var log: SensorJournal? = null // writer thread only
   @Volatile private var writerFailed = false
+  @Volatile private var failNextWrite = false
   private var position = ""
+  private var sensorsEnabled = true
   private var session = ""
   private var captureStarted = 0L
   private var deadline = 0L
@@ -56,7 +58,7 @@ internal object SensorDiagnostics : SensorEventListener {
   private val blockStarted = mutableMapOf<Int, Long>()
   private val conditions = listOf("STILL", "LEG_SWING", "BOUNCE", "WALK", "RUNNING_UTURN", "RUNNING_UTURN", "WALK", "BOUNCE", "LEG_SWING", "STILL")
   fun allowed(c: Context) = c.packageName == PACKAGE
-  fun recording() = state == "RECORDING" && mode == "RUN"
+  fun recording() = state == "RECORDING" && mode == "RUN" && sensorsEnabled
   private fun clockPatch(): Boolean = try {
     Class.forName("expo.modules.location.records.LocationResponse").declaredFields.any { it.name == "diagnosticElapsedNanos" }
   } catch (_: Exception) { false }
@@ -73,28 +75,32 @@ internal object SensorDiagnostics : SensorEventListener {
   }
   fun control(c: Context, action: String, value: String): Boolean {
     if (!allowed(c)) return false
-    if (action == "arm") {
+    if (action in listOf("arm", "armMetrics")) {
       if (state in listOf("STARTING", "RECORDING", "CLOSING")) return false
       if (value !in listOf("WAIST_POUCH", "POCKET", "HAND", "ARM", "OTHER")) return false
       if (!clockPatch()) { failure = "GPS_CLOCK_PATCH_UNAVAILABLE"; state = "UNAVAILABLE"; return false }
-      position = value; state = "ARMED"; failure = ""; return true
+      sensorsEnabled = action == "arm"; position = value; state = "ARMED"; failure = ""; return true
     }
     if (action == "off") { if (state == "ARMED") state = "OFF" else handler.post { finish("USER_ENDED", true) }; return true }
     if (action == "begin") { handler.post { if (state == "ARMED") begin(c.applicationContext, value, "RUN", 95 * 60_000L) }; return true }
     // Foreground desk collection, not a RUN and not a screen-OFF guarantee.
     if (action == "bench") {
       if (state in listOf("STARTING", "RECORDING", "CLOSING")) return false
-      position = "DESK"; state = "ARMED"
+      sensorsEnabled = true; position = "DESK"; state = "ARMED"
       handler.post { begin(c.applicationContext, "bench-" + UUID.randomUUID(), "DESK", 60_000L) }; return true
     }
     if (action == "endRun") { handler.post { if (runId == value) finish("RUN_FINISH", true) }; return true }
     if (action == "gpsEnded") { handler.post { if (mode == "RUN" && runId == value) finish("GPS_DIAGNOSTIC_ENDED", true) }; return true }
     if (action == "gpsFailed") { handler.post { if (mode == "RUN" && runId == value) finish("GPS_DIAGNOSTIC_FAILED", false) }; return true }
+    if (action == "testWriteFailure") {
+      if (state != "RECORDING") return false
+      failNextWrite = true; return true
+    }
     return false
   }
   private fun begin(c: Context, id: String, captureMode: String, limitMs: Long) {
     if (state != "ARMED" || id.isBlank()) return
-    state = "STARTING"; context = c; runId = id; mode = captureMode; failure = ""; writerFailed = false
+    state = "STARTING"; context = c; runId = id; mode = captureMode; failure = ""; writerFailed = false; failNextWrite = false
     session = UUID.randomUUID().toString(); gpsCount = 0; missingGpsClock = 0; labelCount = 0; captureStarted = SystemClock.elapsedRealtime()
     lastGpsMono = 0; gpsReversals = 0; maxClockRoundTrip = 0; sampleWritten = 0; maxWriteMs = 0.0
     maxEpochResidualMs = 0.0; maxAnchorUncertaintyMs = 0.0; cpuStarted = android.os.Process.getElapsedCpuTime(); maxSyncMs = 0.0; ticks = 0
@@ -110,6 +116,8 @@ internal object SensorDiagnostics : SensorEventListener {
     val start = stamp().put("schema", 1).put("runId", id).put("mode", mode).put("position", position)
       .put("sensors", metadata).put("requestedHz", 25).put("reportLatencyUs", 1_000_000)
       .put("algorithmApplied", false).put("clockBasis", "ANDROID_ELAPSED_REALTIME_NANOS")
+      .put("sensorsEnabled", sensorsEnabled)
+      .put("processCpuStartMs", cpuStarted).put("battery", battery())
     worker.execute {
       try {
         check(c.filesDir.usableSpace >= 100L * 1024 * 1024) { "LOW_STORAGE" }
@@ -118,7 +126,7 @@ internal object SensorDiagnostics : SensorEventListener {
         handler.post {
           if (state != "STARTING") { finish("START_CANCELLED", false); return@post }
           captureStarted = SystemClock.elapsedRealtime(); deadline = captureStarted + limitMs
-          for (sensor in sensors) {
+          for (sensor in if (sensorsEnabled) sensors else emptyList()) {
             timings[sensor!!.type] = SensorTiming()
             if (manager?.registerListener(this, sensor, 40_000, 1_000_000, handler) != true) {
               finish("REGISTER_FAILED", false); return@post
@@ -139,6 +147,7 @@ internal object SensorDiagnostics : SensorEventListener {
     try { worker.execute {
       try {
         if (!writerFailed) {
+          if (failNextWrite) { failNextWrite = false; throw IOException("SYNTHETIC_WRITE_FAILURE") }
           check(SystemClock.elapsedRealtime() - queuedAt <= 10_000) { "WRITER_LAG" }
           val before = SystemClock.elapsedRealtimeNanos()
           log!!.append(kind, payload); sampleWritten += sampleCount
@@ -220,7 +229,7 @@ internal object SensorDiagnostics : SensorEventListener {
     }
   }
   private fun snapshot(): JSONObject = JSONObject().put("state", state).put("mode", mode).put("runId", runId)
-    .put("position", position).put("failure", failure).put("requestedHz", 25).put("gpsLinks", gpsCount)
+    .put("position", position).put("failure", failure).put("sensorsEnabled", sensorsEnabled).put("requestedHz", 25).put("gpsLinks", gpsCount)
     .put("missingGpsClock", missingGpsClock).put("gpsTimestampReversals", gpsReversals)
     .put("maxSerializeToBridgeMs", maxClockRoundTrip / 1e6).put("labelBoundaries", labelCount)
     .put("maxGpsEpochResidualMs", maxEpochResidualMs).put("maxWallAnchorUncertaintyMs", maxAnchorUncertaintyMs)
@@ -248,6 +257,7 @@ internal object SensorDiagnostics : SensorEventListener {
     for (type in listOf(1, 4)) flush(type)
     val final = snapshot().put("reason", reason).put("complete", complete && missingGpsClock == 0L)
       .put("labelProtocolComplete", labelCount == conditions.size * 2)
+      .put("processCpuMs", android.os.Process.getElapsedCpuTime() - cpuStarted).put("battery", battery())
       .put("clock", stamp()).put("captureElapsedMs", SystemClock.elapsedRealtime() - captureStarted)
     // Reserved queue slot is not guaranteed; retry sealing after queued frames drain.
     fun seal() {

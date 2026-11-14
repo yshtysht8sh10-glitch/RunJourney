@@ -20,11 +20,11 @@ export default function SensorDiagnosticsScreen() {
     const read = () => { try { setStatus(JSON.parse(bridge()?.sensorStats?.() ?? '{"state":"UNAVAILABLE"}')); } catch { /* Preserve display. */ } };
     read(); const timer = setInterval(read, 1000); return () => clearInterval(timer);
   }, []));
-  const action = async (name: 'arm' | 'off' | 'bench') => {
+  const action = async (name: 'arm' | 'armMetrics' | 'off' | 'bench') => {
     setPending(true);
     try {
       if (name !== 'off' && await RunRepository.getActiveRun()) throw Error('RUN開始前に準備してください。実RUN中の試験開始は禁止です。');
-      if (name === 'arm' && DetectorJournal.status !== 'ARMED') throw Error('先にAuto Stop Diagnosticsで「次のRUNの診断をON」にしてください。');
+      if (['arm', 'armMetrics'].includes(name) && DetectorJournal.status !== 'ARMED') throw Error('先にAuto Stop Diagnosticsで「次のRUNの診断をON」にしてください。');
       if (!SensorDiagnostics.control(name, position)) throw Error('開始できません。対応Test APK・時計拡張・終了状態を確認してください。');
     } catch (e) { Alert.alert('センサー診断', String(e)); } finally { setPending(false); }
   };
@@ -37,7 +37,13 @@ export default function SensorDiagnosticsScreen() {
     <Text style={styles.text}>装着位置（RUN前に選択）</Text>
     {([['WAIST_POUCH', '腰ポーチ'], ['POCKET', 'ポケット'], ['HAND', '手持ち'], ['ARM', '腕'], ['OTHER', 'その他']] as const).map(([value, label]) => <Pressable key={value} disabled={busy} style={styles.button} onPress={() => setPosition(value)}><Text style={styles.text}>{position === value ? '● ' : '○ '}{label}</Text></Pressable>)}
     {button('次のRUNのセンサー診断をON（ARMED）', () => void action('arm'), busy)}
+    {button('比較用：センサーOFF・時計/負荷だけ記録（ARMED）', () => void action('armMetrics'), busy)}
     {button('センサー診断だけ終了 / OFF', () => void action('off'))}
+    {button('診断保存失敗の試験（RUNは継続）', () => {
+      Alert.alert('診断だけを不完全終了します', '実走の採取には使わず、端末内検証時だけ実行してください。RUNは停止しません。', [
+        { text: 'キャンセル', style: 'cancel' }, { text: '診断保存失敗を発生', onPress: () => { SensorDiagnostics.control('testWriteFailure'); } },
+      ]);
+    }, String(status.state) !== 'RECORDING')}
     {button('机上60秒採取（RUNは開始しない）', () => void action('bench'), busy)}
     <Text style={styles.text}>実走では元GPS診断もARMEDにしてください。5条件の順番：直立→足プラプラ→その場で弾む→歩行→走行Uターン→走行Uターン→歩行→その場で弾む→足プラプラ→直立。</Text>
     <Text style={styles.text}>各区間の開始と終了でShokzを1回ずつ、合計20回。歩行・Uターンでは止まらず、区間境界を押します。動作は本人の申告ラベルで、センサーから正解を生成しません。</Text>

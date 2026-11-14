@@ -6,11 +6,13 @@ PR #76のTest v34を基点とする別ブランチ。Auto Stop判定・GPS要求
 ## 実装
 
 - 初期OFF、1RUNだけARMED、装着位置（腰ポーチ/ポケット/手持ち/腕/その他）を記録。
+- 比較用に「センサーOFF・時計/負荷のみ」の別ARMEDを用意。同じGPS診断経路と負荷計測で、センサーを登録しない対照を採取できる。
 - 25Hz要求、Native専用HandlerThread、2秒ごとの暗号化書込み、UIへは集計のみ。
 - イベント時計/受信時計を別保存。実Hz、間隔p50/p95/max、80ms超ギャップ、欠測推定（正確なOS欠損数ではない）、時刻逆転を集計。
 - SDK57/expo-location 57.0.20固定のTestビルド限定パッチで、同じLocationへelapsedRealtimeNanosとシリアライズ時刻を追加する。新しいGPS要求を追加しない。依存ソースのSHA256不一致でビルド失敗。
 - GPS/センサーはAndroidの同じboot内単調時計を使用。GPS epoch時計との残差、wall時計アンカーの不確かさ、Nativeシリアライズ→JS経由bridge到着時間を区別する。ナノ秒単位は物理同期精度の保証ではない。
 - 専用noBackupディレクトリとKeystore alias、AES-GCM、フレーム連番/ハッシュ鎖/ENDによるseal。既存診断を移動・削除しない。
+- Test v35の音声ログだけを新規`voice-log-sensors-v35`へ保存。旧v32/v34ログへ保持期限処理を起動しない。キュー・文言・優先順位・音声設定は変更しない。
 - 16MiB/セッション・64MiB/専用ストア・512KiB pending上限・writer滞留10秒上限。容量や書込み失敗はセンサー診断のみ終了。RUNは継続。
 - 上限95分。元GPS診断終了/失敗・通常RUN終了でもセンサーだけを閉じる。Auto Stop中は採取を続ける。プロセス死ではENDがなく不完全記録になる。
 - 既存のlocation FGSと同一プロセスで採取。新FGS、センサー用wakelock、マイク/身体センサー権限、GPS設定変更なし。

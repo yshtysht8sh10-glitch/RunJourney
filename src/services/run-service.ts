@@ -217,9 +217,9 @@ export const RunService = {
       if (await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME)) {
         await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
       }
+      SensorDiagnostics.end(frozen.id);
       const saved = await RunRepository.finishActiveRun(frozen.endedAt!);
       if (saved) {
-        SensorDiagnostics.end(saved.id);
         lastFinished = saved;
         completionLog('SAVE_SUCCEEDED', { runId: saved.id, endedAt: saved.endedAt, voiceEventId: saved.achievement ? `${saved.id}:finish` : null });
         // Neither listeners nor speech can turn committed history into a save failure.
