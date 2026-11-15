@@ -4,7 +4,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { SensorDiagnostics } from '@/services/sensor-diagnostics';
 import { DetectorJournal } from '@/services/detector-journal';
 
-type Sensor = { state?: string; displayState?: string; warning?: string; endReason?: string; auditFailure?: string;
+type Sensor = { notificationsAllowed?: boolean; state?: string; displayState?: string; warning?: string; endReason?: string; auditFailure?: string;
   accel?: { count?: number; actualHz?: number }; gyro?: { count?: number; actualHz?: number };
   accelLastReceivedAgoMs?: number; gyroLastReceivedAgoMs?: number };
 type Marker = { state?: string; accepting?: boolean; count?: number; received?: number; rejected?: number; lastResult?: string; acceptanceReason?: string };
@@ -29,6 +29,7 @@ function ActiveDiagnosticStatus({ compact = false }: { compact?: boolean }) {
     <Text style={m.accepting ? styles.text : styles.warning}>マーカー {m.accepting ? '受付可能' : '受付不可'}：保存{m.count ?? 0}件 / 拒否{m.rejected ?? 0}件</Text>
     {!compact && <Text style={styles.text}>受信{m.received ?? 0}件 / 最終結果 {m.lastResult ?? 'なし'} / {m.acceptanceReason ?? '確認中'}</Text>}
     {!compact && <Text style={styles.text}>GPS診断：{DetectorJournal.status} / 診断終了理由：{s.endReason || 'なし'}</Text>}
+    {(!compact || !s.notificationsAllowed) && <Text style={s.notificationsAllowed ? styles.text : styles.warning}>警告通知：{s.notificationsAllowed ? 'ON（無音）' : 'OFF（画面内警告のみ）'}</Text>}
     {!!s.warning && <Text accessibilityRole="alert" style={styles.warning}>{s.warning}</Text>}
     {!!s.auditFailure && <Text accessibilityRole="alert" style={styles.warning}>診断ログの保存失敗：{s.auditFailure}。検証成功とは扱えません。</Text>}
     {compact && <Pressable accessibilityRole="button" onPress={() => router.push('/sensor-diagnostics')}><Text style={styles.link}>採取状態の詳細を開く</Text></Pressable>}

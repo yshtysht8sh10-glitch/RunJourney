@@ -65,3 +65,9 @@ RUN画面で両件数増加/RECORDING/受付可能を確認してから行動す
 各区間BEGIN/ENDでShokzを短く1回。歩行/Uターンで停止しない。RUN通常終了・保存確認後にマーカー終了。GPS・センサー・マーカー・新状態ログを回収して照合する。
 
 Draft維持。Production配信、マージ、Issue Close、既存データ削除・復元は禁止。
+
+## 端末確認で見つかった通知権限の補完
+
+最初のda1a274 APKで実サンプル増加/RECORDING/受付可能は確認できた。一方、Android13のPOST_NOTIFICATIONS未宣言が判明し、無音警告通知は未成立だった。Test限定config pluginで宣言し、明示的な許可ボタンと通知ON/OFF表示を追加。拒否時も通常RUNを継続し、画面内警告を維持する。許可/実通知の端末確認が終わるまで通知合格とはしない。
+
+再ビルド時間を抑えるためsensorTestだけarm64-v8aを対象とする。対象SO-51Bがarm64-v8a対応であることを確認済み。Production/Pace/その他Test profileのABIは変更しない。今回のAPKは32bit専用端末・x86 emulatorを対象としない。

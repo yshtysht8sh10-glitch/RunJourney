@@ -140,6 +140,7 @@ class RunMarkerService : Service() {
     lastResult = "SAVE_OR_SERVICE_FAILED"
     audit("MARKER_FAILED", data = JSONObject().put("reason", e.javaClass.simpleName))
     failure = e.javaClass.simpleName + ":" + (e.message ?: "")
+    SensorDiagnostics.markerFailure(applicationContext, e.javaClass.simpleName)
     state = "FAILED"; handler.post { if (owns()) stopSelf() }
   }
   private fun activate() {

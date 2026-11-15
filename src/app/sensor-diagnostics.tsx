@@ -38,6 +38,7 @@ export default function SensorDiagnosticsScreen() {
     <Text style={styles.text}>判定・音声には使いません。通常RUNのSTARTが別に必要です。要求25Hz、95分上限。終了後もRUNは継続します。</Text>
     <Text style={styles.text}>装着位置（RUN前に選択）</Text>
     {([['WAIST_POUCH', '腰ポーチ'], ['POCKET', 'ポケット'], ['HAND', '手持ち'], ['ARM', '腕'], ['OTHER', 'その他']] as const).map(([value, label]) => <Pressable key={value} disabled={busy} style={styles.button} onPress={() => setPosition(value)}><Text style={styles.text}>{position === value ? '● ' : '○ '}{label}</Text></Pressable>)}
+    {button('診断警告の通知を許可（Android）', () => void (async () => { if (!await SensorDiagnostics.requestAlerts()) Alert.alert('通知がOFFです', '画面内の警告は表示しますが、画面OFF中の警告通知は出せません。'); })())}
     {button('次のRUNのセンサー診断をON（ARMED）', () => void action('arm'), busy)}
     {button('比較用：センサーOFF・時計/負荷だけ記録（ARMED）', () => void action('armMetrics'), busy)}
     {button('センサー診断だけ終了 / OFF', () => void action('off'))}

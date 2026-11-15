@@ -61,6 +61,11 @@ internal object SensorDiagnostics : SensorEventListener {
       changed(failure)
     }
   }
+  fun markerFailure(c: Context, reason: String) {
+    if (!allowed(c)) return
+    initialize(c)
+    handler.post { warn("マーカーの受付・保存が停止しました（" + reason + "）。通常RUNは継続します。") }
+  }
   private fun warn(text: String) {
     warning = text
     val c = context ?: return

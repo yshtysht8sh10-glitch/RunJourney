@@ -5,7 +5,12 @@
   "build": {
     "sensorTest": {
       "extends": "sqliteTest",
-      "env": { "RUNJOURNEY_SENSOR_DIAGNOSTICS": "1" }
+      "env": {
+        "RUNJOURNEY_SENSOR_DIAGNOSTICS": "1"
+      },
+      "android": {
+        "gradleCommand": ":app:assembleStandaloneTest -PreactNativeArchitectures=arm64-v8a"
+      }
     },
     "development": {
       "developmentClient": true,
@@ -20,7 +25,9 @@
     "production": {},
     "paceWorkout": {
       "extends": "sqliteTest",
-      "env": { "RUNJOURNEY_PACE_ISOLATED": "1" },
+      "env": {
+        "RUNJOURNEY_PACE_ISOLATED": "1"
+      },
       "android": {
         "withoutCredentials": true,
         "gradleCommand": ":app:assemblePaceWorkout",
@@ -29,10 +36,14 @@
     },
     "cloudSyncTest": {
       "extends": "sqliteTest",
-      "env": { "RUNJOURNEY_REQUIRE_CLOUD": "1" }
+      "env": {
+        "RUNJOURNEY_REQUIRE_CLOUD": "1"
+      }
     },
     "sqliteTest": {
-      "env": { "RUNJOURNEY_MARKER_POC": "1" },
+      "env": {
+        "RUNJOURNEY_MARKER_POC": "1"
+      },
       "distribution": "internal",
       "environment": "preview",
       "node": "22.13.1",

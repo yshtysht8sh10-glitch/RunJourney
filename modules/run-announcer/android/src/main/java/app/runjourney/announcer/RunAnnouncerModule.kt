@@ -14,6 +14,11 @@ class RunAnnouncerModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("RunAnnouncer")
     Function("sensorControl") { action: String, value: String -> SensorDiagnostics.control(requireNotNull(appContext.reactContext), action, value) }
+    Function("sensorNotificationsAllowed") {
+      val c = requireNotNull(appContext.reactContext)
+      SensorDiagnostics.allowed(c) && (Build.VERSION.SDK_INT < 33 || c.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) &&
+        c.getSystemService(android.app.NotificationManager::class.java).let { it.areNotificationsEnabled() && it.getNotificationChannel("sensor-diagnostic-alerts-v36")?.importance != android.app.NotificationManager.IMPORTANCE_NONE }
+    }
     Function("sensorStats") { SensorDiagnostics.stats(requireNotNull(appContext.reactContext)) }
     AsyncFunction("diagnosticAuditRead") { promise: Promise -> DiagnosticAudit.read(requireNotNull(appContext.reactContext), promise) }
     Function("sensorGps") { payload: String -> SensorDiagnostics.gps(requireNotNull(appContext.reactContext), payload) }

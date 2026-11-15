@@ -1,4 +1,4 @@
-import { Platform } from 'react-native';
+import { Platform, PermissionsAndroid } from 'react-native';
 import * as Application from 'expo-application';
 import { DetectorJournal } from '@/services/detector-journal';
 
@@ -13,11 +13,24 @@ export const SensorDiagnostics = {
   available: () => Platform.OS === 'android' && Application.applicationId === 'app.runjourney.mobile.test',
   control(action: string, value = '') { try { return native()?.sensorControl?.(action, value) ?? false; } catch { return false; } },
   begin(runId: string) { this.runId = runId; this.control('gpsStatus', DetectorJournal.status); this.control('begin', runId); },
+  async requestAlerts() {
+    if (!this.available()) return false;
+    try {
+      if (Number(Platform.Version) >= 33) await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS, {
+        title: 'Test診断の警告通知', message: '画面OFF中も診断の停止を確認するための通知です。既存の音声案内には追加しません。', buttonPositive: '続ける', buttonNegative: 'キャンセル',
+      });
+      this.lastAlertsCheck = 0;
+      return native()?.sensorNotificationsAllowed?.() === true;
+    } catch { return false; }
+  },
+  lastAlertsCheck: 0,
+  alertsAllowed: false,
   status() {
     try {
       const bridge = native(); if (!bridge) return null;
       if (!bridge.sensorStats || !bridge.markerStats) throw Error('DIAGNOSTIC_API_UNAVAILABLE');
-      return { sensor: JSON.parse(bridge.sensorStats?.() ?? '{}'), marker: JSON.parse(bridge.markerStats?.() ?? '{}') };
+      if (Date.now() - this.lastAlertsCheck >= 5000) { this.lastAlertsCheck = Date.now(); this.alertsAllowed = bridge.sensorNotificationsAllowed?.() === true; }
+      return { sensor: { ...JSON.parse(bridge.sensorStats?.() ?? '{}'), notificationsAllowed: this.alertsAllowed }, marker: JSON.parse(bridge.markerStats?.() ?? '{}') };
     } catch { return { sensor: { state: 'FAILED', warning: '診断状態を取得できません。採取成立を確認できません。' }, marker: { accepting: false } }; }
   },
   end(runId: string) { this.control('endRun', runId); },

@@ -32,3 +32,9 @@ test.each(['app.runjourney.mobile', 'app.runjourney.mobile.pace'])('diagnostic s
   expect(SensorDiagnostics.available()).toBe(false);
   expect(SensorDiagnostics.status()).toBeNull();
 });
+
+test.each(['app.runjourney.mobile', 'app.runjourney.mobile.pace'])('never request diagnostic alert permission in %s', async applicationId => {
+  Object.assign(Application, { applicationId });
+  await expect(SensorDiagnostics.requestAlerts()).resolves.toBe(false);
+  expect(mockControl).not.toHaveBeenCalled();
+});

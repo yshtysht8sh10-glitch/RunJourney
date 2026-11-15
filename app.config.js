@@ -47,6 +47,7 @@ module.exports = ({ config }) => {
       "expo-sqlite",
       "./plugins/with-android-build-variants",
       "./plugins/with-sensor-clock",
+      "./plugins/with-test-diagnostic-alerts",
     ],
     extra: {
       ...config.extra,
