@@ -21,6 +21,8 @@
 4. MediaSession受信、キーの重複/リピート判定、センサー未準備による拒否、queue待機後の状態変化、MARKER+ACK保存成否を追跡。拒否はBEGIN/END番号を進めない。KEY_UPは物理1押下の拒否数に加算しない。
 5. 起動時に専用最終状態checkpointを読み、前プロセスのARMED/STARTING/RECORDING/CLOSINGを成功として復旧しない。PROCESS_RESTARTED警告を残す。自動再ARM/既存RUN復元はしない。
 
+終了writerがstateを確定してからcache/checkpointを更新していた競合可能性も修正。完了反映をセンサーactorで一括実施し、新しいARMEDでは前回件数をリセットする。これを元実走の原因と断定する証拠はない。
+
 ## 保存と失敗処理
 
 - 新規noBackupFilesDir/diagnostic-lifecycle-v36、別Keystore alias RunJourney.Test.DiagnosticLifecycle.v36。

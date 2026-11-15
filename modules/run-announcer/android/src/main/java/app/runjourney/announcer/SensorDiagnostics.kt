@@ -137,6 +137,12 @@ internal object SensorDiagnostics : SensorEventListener {
       sensorsEnabled = action == "arm"; position = value; state = "ARMED"; failure = ""; warning = ""; endReason = ""
       runId = ""; session = UUID.randomUUID().toString(); noSamplesNext = false
       c.getSystemService(NotificationManager::class.java).cancel(6036)
+      val armedSession = session
+      cached = JSONObject().put("state", "ARMED").put("displayState", "ARMED").put("sessionId", armedSession).toString()
+      handler.post { if (state == "ARMED" && session == armedSession) {
+        readiness.reset(); timings.clear(); lastAccelReceived = 0; lastGyroReceived = 0; labelCount = 0
+        cached = snapshot().toString()
+      } }
       changed("ARMED_SET"); return true
     }
     if (action == "off") { if (state == "ARMED") { state = "OFF"; changed("USER_DISARMED") } else handler.post { finish("USER_ENDED", true) }; return true }
@@ -360,14 +366,20 @@ internal object SensorDiagnostics : SensorEventListener {
     // Reserved queue slot is not guaranteed; retry sealing after queued frames drain.
     fun seal() {
       try { worker.execute {
+        var sealed = false
         try {
           final.put("sampleCount", sampleWritten).put("complete", final.getBoolean("complete") && !writerFailed)
           log?.json("END", final); log?.close(); log = null
-          state = if (final.getBoolean("complete")) "SEALED" else "INCOMPLETE"
-        } catch (_: Exception) { state = "INCOMPLETE"; try { log?.close() } catch (_: Exception) { }; log = null }
-        cached = final.put("state", state).put("displayState", if (state == "SEALED") "STOPPED" else "FAILED").toString()
-        changed(if (state == "SEALED") "SENSOR_SEALED" else "SENSOR_FAILED")
-        audit("SENSOR_END", JSONObject().put("reason", reason).put("complete", state == "SEALED"), true)
+          sealed = final.getBoolean("complete")
+        } catch (_: Exception) { try { log?.close() } catch (_: Exception) { }; log = null }
+        // Keep CLOSING until the actor applies the entire completion. A new arm
+        // cannot interleave between state, cached counts and durable checkpoint.
+        handler.post {
+          state = if (sealed) "SEALED" else "INCOMPLETE"
+          cached = final.put("state", state).put("displayState", if (sealed) "STOPPED" else "FAILED").toString()
+          changed(if (sealed) "SENSOR_SEALED" else "SENSOR_FAILED")
+          audit("SENSOR_END", JSONObject().put("reason", reason).put("complete", sealed), true)
+        }
       } } catch (_: java.util.concurrent.RejectedExecutionException) { handler.postDelayed({ seal() }, 50) }
     }
     seal()
