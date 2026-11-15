@@ -71,3 +71,5 @@ Draft維持。Production配信、マージ、Issue Close、既存データ削除
 最初のda1a274 APKで実サンプル増加/RECORDING/受付可能は確認できた。一方、Android13のPOST_NOTIFICATIONS未宣言が判明し、無音警告通知は未成立だった。Test限定config pluginで宣言し、明示的な許可ボタンと通知ON/OFF表示を追加。拒否時も通常RUNを継続し、画面内警告を維持する。許可/実通知の端末確認が終わるまで通知合格とはしない。
 
 再ビルド時間を抑えるためsensorTestだけarm64-v8aを対象とする。対象SO-51Bがarm64-v8a対応であることを確認済み。Production/Pace/その他Test profileのABIは変更しない。今回のAPKは32bit専用端末・x86 emulatorを対象としない。
+
+コールド起動のバックグラウンドGPS入口でもcheckpointを確認し、失われたARMED/RECORDINGを警告する。前景の画面表示だけに初期化を依存させない。通常GPSの判定入力は変更しない。実端末でのプロセス再起動検証は残件。

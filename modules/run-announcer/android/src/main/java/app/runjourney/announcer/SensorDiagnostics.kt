@@ -285,7 +285,9 @@ internal object SensorDiagnostics : SensorEventListener {
     }
   }
   fun gps(c: Context, payload: String) {
-    if (!allowed(c) || state !in listOf("STARTING", "RECORDING")) return
+    if (!allowed(c)) return
+    initialize(c) // A cold headless GPS callback must also expose lost ARMED/RECORDING state.
+    if (state !in listOf("STARTING", "RECORDING")) return
     val received = SystemClock.elapsedRealtimeNanos()
     // The bridge never blocks normal GPS ingestion waiting for the diagnostic actor.
     handler.post {

@@ -16,6 +16,7 @@ class SensorPackageTest {
       val c = object : ContextWrapper(RuntimeEnvironment.getApplication()) { override fun getPackageName() = name }
       assertFalse(SensorDiagnostics.control(c, "arm", "POCKET"))
       assertFalse(SensorDiagnostics.control(c, "bench", ""))
+      SensorDiagnostics.gps(c, "{}") // Must not initialize diagnostic state in Production/Pace.
       assertTrue(SensorDiagnostics.stats(c).contains("UNAVAILABLE"))
     }
   }
