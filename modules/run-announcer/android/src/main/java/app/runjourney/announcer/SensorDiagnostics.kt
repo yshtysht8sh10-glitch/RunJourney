@@ -1,6 +1,9 @@
 package app.runjourney.announcer
 
 import android.content.Context
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.hardware.*
 import android.os.*
 import android.security.keystore.KeyGenParameterSpec
@@ -30,6 +33,50 @@ internal object SensorDiagnostics : SensorEventListener {
   @Volatile private var runId = ""
   @Volatile private var mode = ""
   private var context: Context? = null
+  private var initialized = false
+  private var registered = false
+  @Volatile private var lastAccelReceived = 0L
+  @Volatile private var lastGyroReceived = 0L
+  private var noSamplesNext = false
+  private var simulateNoSamples = false
+  private val readiness = SensorReadiness()
+  @Volatile private var warning = ""
+  @Volatile private var endReason = ""
+  @Volatile private var gpsStatus = "UNKNOWN"
+  private fun audit(event: String, data: JSONObject = JSONObject(), seal: Boolean = false) {
+    context?.let { DiagnosticAudit.record(it, event, runId, session, data.put("sensorState", state).put("markerSessionId", RunMarkerService.activeSessionId()), seal) }
+  }
+  private fun changed(reason: String) {
+    context?.let { DiagnosticAudit.checkpoint(it, state, runId, session, reason) }
+    audit("SENSOR_STATE", JSONObject().put("reason", reason))
+  }
+  @Synchronized private fun initialize(c: Context) {
+    if (initialized || !allowed(c)) return
+    initialized = true; context = c.applicationContext
+    val saved = c.getSharedPreferences("diagnostic-lifecycle-v36", 0)
+    if (saved.getString("sensorState", "") in listOf("ARMED", "STARTING", "RECORDING", "CLOSING")) {
+      runId = saved.getString("runId", "") ?: ""; session = saved.getString("session", "") ?: ""
+      state = "INCOMPLETE"; failure = "PROCESS_RESTARTED"; endReason = failure
+      warn("診断の準備・採取状態が再起動で失われました。今回のRUNの採取成立を確認してください。")
+      changed(failure)
+    }
+  }
+  private fun warn(text: String) {
+    warning = text
+    val c = context ?: return
+    audit("DIAGNOSTIC_WARNING", JSONObject().put("message", text))
+    try {
+      val nm = c.getSystemService(NotificationManager::class.java)
+      nm.createNotificationChannel(NotificationChannel("sensor-diagnostic-alerts-v36", "Test診断の警告", NotificationManager.IMPORTANCE_DEFAULT).apply {
+        setSound(null, null); enableVibration(false)
+      })
+      val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("runjourney://sensor-diagnostics")).setPackage(c.packageName)
+      val pending = android.app.PendingIntent.getActivity(c, 6036, intent, android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE)
+      nm.notify(6036, Notification.Builder(c, "sensor-diagnostic-alerts-v36").setSmallIcon(c.applicationInfo.icon)
+        .setContentTitle("Test診断を確認してください").setContentText(text).setStyle(Notification.BigTextStyle().bigText(text))
+        .setContentIntent(pending).setAutoCancel(false).build())
+    } catch (_: Exception) { /* Persistent screen warning remains; never interrupt normal RUN. */ }
+  }
   private var manager: SensorManager? = null
   private var log: SensorJournal? = null // writer thread only
   @Volatile private var writerFailed = false
@@ -59,7 +106,11 @@ internal object SensorDiagnostics : SensorEventListener {
   private val blockStarted = mutableMapOf<Int, Long>()
   private val conditions = listOf("STILL", "LEG_SWING", "BOUNCE", "WALK", "RUNNING_UTURN", "RUNNING_UTURN", "WALK", "BOUNCE", "LEG_SWING", "STILL")
   fun allowed(c: Context) = c.packageName == PACKAGE
-  fun recording() = state == "RECORDING" && mode == "RUN" && sensorsEnabled
+  fun associatedRunId() = runId
+  fun busy() = state in listOf("STARTING", "RECORDING", "CLOSING")
+  fun associatedSessionId() = session
+  fun recording() = state == "RECORDING" && mode == "RUN" && sensorsEnabled &&
+    SystemClock.elapsedRealtime() - lastAccelReceived <= 10_000 && SystemClock.elapsedRealtime() - lastGyroReceived <= 10_000
   private fun clockPatch(): Boolean = try {
     Class.forName("expo.modules.location.records.LocationResponse").declaredFields.any { it.name == "diagnosticElapsedNanos" }
   } catch (_: Exception) { false }
@@ -76,21 +127,33 @@ internal object SensorDiagnostics : SensorEventListener {
   }
   fun control(c: Context, action: String, value: String): Boolean {
     if (!allowed(c)) return false
+    initialize(c)
+    if (action == "gpsStatus") { gpsStatus = value; return true }
+    if (action == "testNoSamplesNext") { if (state != "ARMED") return false; noSamplesNext = true; audit("TEST_NO_SAMPLES_ARMED"); return true }
     if (action in listOf("arm", "armMetrics")) {
       if (state in listOf("STARTING", "RECORDING", "CLOSING")) return false
       if (value !in listOf("WAIST_POUCH", "POCKET", "HAND", "ARM", "OTHER")) return false
-      if (!clockPatch()) { failure = "GPS_CLOCK_PATCH_UNAVAILABLE"; state = "UNAVAILABLE"; return false }
-      sensorsEnabled = action == "arm"; position = value; state = "ARMED"; failure = ""; return true
+      if (!clockPatch()) { failure = "GPS_CLOCK_PATCH_UNAVAILABLE"; state = "UNAVAILABLE"; changed(failure); return false }
+      sensorsEnabled = action == "arm"; position = value; state = "ARMED"; failure = ""; warning = ""; endReason = ""
+      runId = ""; session = UUID.randomUUID().toString(); noSamplesNext = false
+      c.getSystemService(NotificationManager::class.java).cancel(6036)
+      changed("ARMED_SET"); return true
     }
-    if (action == "off") { if (state == "ARMED") state = "OFF" else handler.post { finish("USER_ENDED", true) }; return true }
-    if (action == "begin") { handler.post { if (state == "ARMED") begin(c.applicationContext, value, "RUN", 95 * 60_000L) }; return true }
+    if (action == "off") { if (state == "ARMED") { state = "OFF"; changed("USER_DISARMED") } else handler.post { finish("USER_ENDED", true) }; return true }
+    if (action == "begin") { handler.post {
+      if (runId == value && state in listOf("STARTING", "RECORDING", "CLOSING", "SEALED", "INCOMPLETE")) return@post
+      runId = value; audit("RUN_START")
+      if (state == "ARMED") begin(c.applicationContext, value, "RUN", 95 * 60_000L)
+      else { audit("SENSOR_BEGIN_REJECTED", JSONObject().put("reason", "NOT_ARMED"))
+        if (RunMarkerService.protocolActive()) { state = "INCOMPLETE"; failure = "NOT_ARMED_AT_RUN_START"; endReason = failure; changed(failure); warn("センサー診断が開始できませんでした。5条件マーカーは受付不可です。通常RUNは継続します。") } }
+    }; return true }
     // Foreground desk collection, not a RUN and not a screen-OFF guarantee.
     if (action == "bench") {
       if (state in listOf("STARTING", "RECORDING", "CLOSING")) return false
-      sensorsEnabled = true; position = "DESK"; state = "ARMED"
+      sensorsEnabled = true; position = "DESK"; state = "ARMED"; session = UUID.randomUUID().toString(); warning = ""; changed("DESK_ARMED")
       handler.post { begin(c.applicationContext, "bench-" + UUID.randomUUID(), "DESK", 60_000L) }; return true
     }
-    if (action == "endRun") { handler.post { if (runId == value) finish("RUN_FINISH", true) }; return true }
+    if (action == "endRun") { handler.post { if (runId == value) { audit("RUN_END", seal = true); finish("RUN_FINISH", true) } }; return true }
     if (action == "gpsEnded") { handler.post { if (mode == "RUN" && runId == value) finish("GPS_DIAGNOSTIC_ENDED", true) }; return true }
     if (action == "gpsFailed") { handler.post { if (mode == "RUN" && runId == value) finish("GPS_DIAGNOSTIC_FAILED", false) }; return true }
     if (action == "testWriteFailure") {
@@ -102,17 +165,22 @@ internal object SensorDiagnostics : SensorEventListener {
   private fun begin(c: Context, id: String, captureMode: String, limitMs: Long) {
     if (state != "ARMED" || id.isBlank()) return
     state = "STARTING"; context = c; runId = id; mode = captureMode; failure = ""; writerFailed = false; failNextWrite = false
-    session = UUID.randomUUID().toString(); gpsCount = 0; missingGpsClock = 0; labelCount = 0; captureStarted = SystemClock.elapsedRealtime()
+    registered = false; lastAccelReceived = 0; lastGyroReceived = 0; readiness.reset(); simulateNoSamples = noSamplesNext; noSamplesNext = false
+    endReason = ""; changed("SENSOR_BEGIN_REQUEST")
+    if (session.isBlank()) session = UUID.randomUUID().toString()
+    gpsCount = 0; missingGpsClock = 0; labelCount = 0; captureStarted = SystemClock.elapsedRealtime()
     lastGpsMono = 0; gpsReversals = 0; maxClockRoundTrip = 0; sampleWritten = 0; maxWriteMs = 0.0
     maxEpochResidualMs = 0.0; maxAnchorUncertaintyMs = 0.0; cpuStarted = android.os.Process.getElapsedCpuTime(); maxSyncMs = 0.0; ticks = 0; storedBytes = 0
     timings.clear(); buffers.clear(); blockCounts.clear(); blockStarted.clear()
     manager = c.getSystemService(SensorManager::class.java)
     val sensors = listOf(1, 4).map { manager?.getDefaultSensor(it) }
-    if (sensors.any { it == null }) { state = "UNAVAILABLE"; failure = "SENSOR_MISSING"; return }
-    val metadata = JSONArray(sensors.map { sensor -> sensor!!; JSONObject().put("type", sensor.type).put("name", sensor.name)
+    if (sensorsEnabled && sensors.any { it == null }) { failure = "SENSOR_MISSING"; finish("SENSOR_MISSING", false); return }
+    val metadata = JSONArray(sensors.filterNotNull().map { sensor -> JSONObject().put("type", sensor.type).put("name", sensor.name)
       .put("vendor", sensor.vendor).put("unit", if (sensor.type == 1) "m/s2_gravity_included" else "rad/s")
       .put("minDelayUs", sensor.minDelay).put("fifoMax", sensor.fifoMaxEventCount).put("fifoReserved", sensor.fifoReservedEventCount)
       .put("powerMaReported", sensor.power.toDouble()).put("wakeUp", sensor.isWakeUpSensor) })
+    val startingSession = session
+    handler.postDelayed({ if (session == startingSession && state == "STARTING") finish("START_OR_FIRST_SAMPLE_TIMEOUT", false) }, 10_000)
     val file = File(root(c), "$session.sdiag")
     val start = stamp().put("schema", 1).put("runId", id).put("mode", mode).put("position", position)
       .put("sensors", metadata).put("requestedHz", if (sensorsEnabled) 25 else 0).put("reportLatencyUs", if (sensorsEnabled) 1_000_000 else 0)
@@ -127,13 +195,16 @@ internal object SensorDiagnostics : SensorEventListener {
         handler.post {
           if (state != "STARTING") { finish("START_CANCELLED", false); return@post }
           captureStarted = SystemClock.elapsedRealtime(); deadline = captureStarted + limitMs
+          json("CAPTURE_BEGIN", stamp())
           for (sensor in if (sensorsEnabled) sensors else emptyList()) {
             timings[sensor!!.type] = SensorTiming()
             if (manager?.registerListener(this, sensor, 40_000, 1_000_000, handler) != true) {
               finish("REGISTER_FAILED", false); return@post
             }
           }
-          state = "RECORDING"; json("CAPTURE_BEGIN", stamp()); handler.post(tick)
+          registered = true; audit("NATIVE_REGISTER_SUCCEEDED", JSONObject().put("types", if (sensorsEnabled) "1,4" else "METRICS_ONLY"))
+          if (!sensorsEnabled) { state = "RECORDING"; changed("METRICS_RECORDING_NO_SENSORS") }
+          handler.post(tick)
         }
       } catch (e: Exception) { failure = e.javaClass.simpleName + ":" + (e.message ?: ""); writerFailed = true; handler.post { finish("START_FAILED", false) } }
     }
@@ -163,8 +234,11 @@ internal object SensorDiagnostics : SensorEventListener {
   }
   private fun json(kind: String, data: JSONObject) = offer(kind, data.toString().toByteArray(Charsets.UTF_8))
   override fun onSensorChanged(event: SensorEvent) {
-    if (state != "RECORDING") return
+    if (state !in listOf("STARTING", "RECORDING") || !registered || simulateNoSamples) return
     val received = SystemClock.elapsedRealtimeNanos(); val type = event.sensor.type
+    if (type == 1) lastAccelReceived = SystemClock.elapsedRealtime() else if (type == 4) lastGyroReceived = SystemClock.elapsedRealtime()
+    if (readiness.receive(type, SystemClock.elapsedRealtime())) audit("FIRST_SENSOR_SAMPLE", JSONObject().put("sensorType", type))
+    if (state == "STARTING" && readiness.ready()) { state = "RECORDING"; changed("ACTUAL_SAMPLES_CONFIRMED") }
     timings[type]?.observe(event.timestamp, received)
     val buffer = buffers.getOrPut(type) { ByteArrayOutputStream() }
     DataOutputStream(buffer).apply { writeLong(event.timestamp); writeLong(received); writeFloat(event.values[0]); writeFloat(event.values[1]); writeFloat(event.values[2]); writeInt(event.accuracy) }
@@ -181,7 +255,10 @@ internal object SensorDiagnostics : SensorEventListener {
   }
   private val tick = object : Runnable {
     override fun run() {
-      if (state != "RECORDING") return
+      if (state !in listOf("STARTING", "RECORDING")) return
+      val now = SystemClock.elapsedRealtime()
+      if (sensorsEnabled && state == "STARTING" && now - captureStarted >= 10_000) { finish("NO_SAMPLES_TIMEOUT", false); return }
+      if (sensorsEnabled && readiness.stale(now)) { finish("SAMPLES_STALE", false); return }
       if (SystemClock.elapsedRealtime() >= deadline) { finish("CAPTURE_LIMIT", true); return }
       for (type in listOf(1, 4)) flush(type)
       if (Build.VERSION.SDK_INT >= 29 && (context?.getSystemService(PowerManager::class.java)?.currentThermalStatus ?: 0) >= PowerManager.THERMAL_STATUS_SEVERE) { finish("THERMAL_LIMIT", true); return }
@@ -225,17 +302,24 @@ internal object SensorDiagnostics : SensorEventListener {
   }
   /** Independent experimental interval labels, never STOP/RESUME detector commands. */
   fun marker(c: Context, data: JSONObject) {
-    if (!allowed(c) || state != "RECORDING" || mode != "RUN") return
+    if (!allowed(c)) return
+    if (state != "RECORDING" || mode != "RUN") { audit("LABEL_REJECTED", JSONObject().put("reason", "SENSOR_NOT_RECORDING")); return }
     val copy = JSONObject(data.toString())
     handler.post {
-      if (state != "RECORDING" || labelCount >= conditions.size * 2) return@post
+      if (state != "RECORDING" || labelCount >= conditions.size * 2) { audit("LABEL_REJECTED", JSONObject().put("reason", "STATE_CHANGED_OR_COMPLETE")); return@post }
       val trial = labelCount / 2
       copy.put("trial", trial + 1).put("condition", conditions[trial]).put("boundary", if (labelCount % 2 == 0) "BEGIN" else "END")
         .put("physicalTruth", "USER_REPORTED_WITH_REACTION_AND_BLUETOOTH_UNCERTAINTY")
-      labelCount++; json("LABEL", copy)
+      labelCount++; json("LABEL", copy); audit("LABEL_QUEUED", JSONObject().put("markerIndex", copy.optInt("markerIndex")).put("boundary", copy.getString("boundary")))
     }
   }
   private fun snapshot(): JSONObject = JSONObject().put("state", state).put("mode", mode).put("runId", runId)
+    .put("displayState", if (!sensorsEnabled && state == "RECORDING") "METRICS_ONLY（センサーOFF）" else when(state) { "SEALED" -> "STOPPED"; "INCOMPLETE", "UNAVAILABLE" -> "FAILED"; "CLOSING" -> "STOPPED"; else -> state })
+    .put("sessionId", session).put("warning", warning).put("endReason", endReason).put("registered", registered)
+    .put("gpsDiagnosticState", gpsStatus).put("sampleConfirmed", readiness.ready())
+    .put("accelLastReceivedAgoMs", readiness.age(1, SystemClock.elapsedRealtime()) ?: JSONObject.NULL)
+    .put("gyroLastReceivedAgoMs", readiness.age(4, SystemClock.elapsedRealtime()) ?: JSONObject.NULL)
+    .put("auditFailure", DiagnosticAudit.failure).put("auditEventsWritten", DiagnosticAudit.written).put("auditMaxWriteMs", DiagnosticAudit.maxWriteMs)
     .put("position", position).put("failure", failure).put("sensorsEnabled", sensorsEnabled).put("requestedHz", if (sensorsEnabled) 25 else 0).put("gpsLinks", gpsCount)
     .put("missingGpsClock", missingGpsClock).put("gpsTimestampReversals", gpsReversals)
     .put("maxSerializeToBridgeMs", maxClockRoundTrip / 1e6).put("labelBoundaries", labelCount)
@@ -247,6 +331,7 @@ internal object SensorDiagnostics : SensorEventListener {
     .put("clockPatch", clockPatch()).put("nextCondition", conditions.getOrNull(labelCount / 2) ?: "COMPLETE")
   fun stats(c: Context): String {
     if (!allowed(c)) return "{\"state\":\"UNAVAILABLE\"}"
+    initialize(c)
     // UI is a bounded asynchronous snapshot: no sensor/raw samples cross to JS.
     return cached.also { handler.post { cached = snapshot().toString() } }
   }
@@ -264,7 +349,9 @@ internal object SensorDiagnostics : SensorEventListener {
   }
   private fun finish(reason: String, complete: Boolean) {
     if (state !in listOf("STARTING", "RECORDING")) return
-    state = "CLOSING"; manager?.unregisterListener(this); handler.removeCallbacks(tick)
+    state = "CLOSING"; endReason = reason; registered = false; manager?.unregisterListener(this); handler.removeCallbacks(tick)
+    changed(reason)
+    if (mode == "RUN" && reason != "RUN_FINISH") warn("センサー診断が終了しました（" + reason + "）。5条件マーカーは受付不可です。通常RUNは継続します。")
     for (type in listOf(1, 4)) flush(type)
     val final = snapshot().put("reason", reason).put("complete", complete && missingGpsClock == 0L)
       .put("labelProtocolComplete", labelCount == conditions.size * 2)
@@ -278,7 +365,9 @@ internal object SensorDiagnostics : SensorEventListener {
           log?.json("END", final); log?.close(); log = null
           state = if (final.getBoolean("complete")) "SEALED" else "INCOMPLETE"
         } catch (_: Exception) { state = "INCOMPLETE"; try { log?.close() } catch (_: Exception) { }; log = null }
-        cached = final.put("state", state).toString()
+        cached = final.put("state", state).put("displayState", if (state == "SEALED") "STOPPED" else "FAILED").toString()
+        changed(if (state == "SEALED") "SENSOR_SEALED" else "SENSOR_FAILED")
+        audit("SENSOR_END", JSONObject().put("reason", reason).put("complete", state == "SEALED"), true)
       } } catch (_: java.util.concurrent.RejectedExecutionException) { handler.postDelayed({ seal() }, 50) }
     }
     seal()

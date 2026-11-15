@@ -4,6 +4,7 @@ type RunAnnouncer = {
   markerControl?(action: 'trial' | 'field' | 'protocol' | 'off'): boolean;
   sensorControl?(action: string, value: string): boolean;
   sensorStats?(): string;
+  diagnosticAuditRead?(): Promise<string>;
   sensorGps?(payload: string): void;
   sensorRead?(): Promise<string>;
   markerStats?(): string;

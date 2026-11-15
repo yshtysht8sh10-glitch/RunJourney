@@ -21,3 +21,14 @@ test.each(['app.runjourney.mobile', 'app.runjourney.mobile.pace', 'app.runjourne
   SensorDiagnostics.gps([{ timestamp: 100 }], 150);
   expect(mockGps).not.toHaveBeenCalled(); expect(mockControl).not.toHaveBeenCalled();
 });
+
+test('missing diagnostic status API is explicitly unavailable rather than reporting recording', () => {
+  const status = SensorDiagnostics.status();
+  expect(status?.sensor.state).toBe('FAILED');
+  expect(status?.marker.accepting).toBe(false);
+});
+test.each(['app.runjourney.mobile', 'app.runjourney.mobile.pace'])('diagnostic status is absent for %s', applicationId => {
+  Object.assign(Application, { applicationId });
+  expect(SensorDiagnostics.available()).toBe(false);
+  expect(SensorDiagnostics.status()).toBeNull();
+});

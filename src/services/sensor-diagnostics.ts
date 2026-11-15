@@ -10,12 +10,23 @@ function native() {
 }
 /** Optional diagnostic observer. Never returns data to the RUN model or speech. */
 export const SensorDiagnostics = {
+  available: () => Platform.OS === 'android' && Application.applicationId === 'app.runjourney.mobile.test',
   control(action: string, value = '') { try { return native()?.sensorControl?.(action, value) ?? false; } catch { return false; } },
-  begin(runId: string) { this.control('begin', runId); },
+  begin(runId: string) { this.runId = runId; this.control('gpsStatus', DetectorJournal.status); this.control('begin', runId); },
+  status() {
+    try {
+      const bridge = native(); if (!bridge) return null;
+      if (!bridge.sensorStats || !bridge.markerStats) throw Error('DIAGNOSTIC_API_UNAVAILABLE');
+      return { sensor: JSON.parse(bridge.sensorStats?.() ?? '{}'), marker: JSON.parse(bridge.markerStats?.() ?? '{}') };
+    } catch { return { sensor: { state: 'FAILED', warning: '診断状態を取得できません。採取成立を確認できません。' }, marker: { accepting: false } }; }
+  },
   end(runId: string) { this.control('endRun', runId); },
   gps(locations: ClockLocation[], receivedAt: number) {
     try {
       const bridge = native(); if (!bridge) return;
+      if (this.lastGpsStatus !== DetectorJournal.status) {
+        this.lastGpsStatus = DetectorJournal.status; bridge.sensorControl?.('gpsStatus', DetectorJournal.status);
+      }
       if (this.runId && !['ARMED', 'RECORDING'].includes(DetectorJournal.status)) {
         bridge.sensorControl?.(DetectorJournal.status === 'SEALED_PENDING_VERIFICATION' ? 'gpsEnded' : 'gpsFailed', this.runId); return;
       }
@@ -26,4 +37,5 @@ export const SensorDiagnostics = {
     } catch { /* An optional diagnostic must never reject normal GPS. */ }
   },
   runId: '',
+  lastGpsStatus: '',
 };

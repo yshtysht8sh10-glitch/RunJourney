@@ -1,3 +1,4 @@
+import { TestDiagnosticStatus } from '@/components/test-diagnostic-status';
 import { useCallback, useState } from 'react';
 import { router, useFocusEffect } from 'expo-router';
 import { Alert, Platform, Pressable, ScrollView, Share, StyleSheet, Text } from 'react-native';
@@ -5,7 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { isStandaloneTest } from '@/utils/build';
 import { RunRepository } from '@/repositories/run-repository';
 
-type Status = { state: string; count?: number; mode?: string; lastLabel?: string; failure?: string; endReason?: string; ready?: boolean };
+type Status = { state: string; count?: number; mode?: string; lastLabel?: string; failure?: string; endReason?: string; ready?: boolean; accepting?: boolean; rejected?: number; lastResult?: string; acceptanceReason?: string };
 function bridge() {
   if (Platform.OS !== 'android' || !isStandaloneTest()) return null;
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -49,10 +50,11 @@ export default function MarkerPoc() {
   };
   return <SafeAreaView style={styles.screen}><ScrollView contentContainerStyle={styles.content}>
     <Text style={styles.title}>実停止マーカー（Test PoC）</Text>
+    <TestDiagnosticStatus />
     <Text style={styles.text}>RUN・GPS・Auto Stopを変更しない独立記録です。採用前の実機試験が必要です。</Text>
     <Text accessibilityLiveRegion="polite" style={styles.status}>状態: {status.state} / 保存: {status.count ?? 0}件 / {status.mode ?? ''}</Text>
-    {busy && <Text style={styles.text}>{status.ready ? 'ボタン受付中' : '準備・終了処理中'}</Text>}
-    <Text style={styles.text}>直近: {status.lastLabel || 'なし'}</Text>
+    {busy && <Text style={styles.text}>{status.accepting ? 'ボタン受付可能' : `受付不可：${status.acceptanceReason ?? '確認中'}`}</Text>}
+    <Text style={styles.text}>直近: {status.lastResult || status.lastLabel || 'なし'} / 拒否{status.rejected ?? 0}件</Text>
     {!!status.endReason && <Text style={styles.text}>終了理由: {status.endReason}</Text>}
     {!!status.failure && <Text style={styles.error}>{status.failure}</Text>}
     <Pressable disabled={pending || busy} style={[styles.button, busy && styles.disabled]} onPress={() => void control('trial')}><Text style={styles.text}>試し押し（10回で終了）</Text></Pressable>

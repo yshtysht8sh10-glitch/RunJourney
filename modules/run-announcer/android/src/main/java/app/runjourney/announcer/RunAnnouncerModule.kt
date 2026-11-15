@@ -15,6 +15,7 @@ class RunAnnouncerModule : Module() {
     Name("RunAnnouncer")
     Function("sensorControl") { action: String, value: String -> SensorDiagnostics.control(requireNotNull(appContext.reactContext), action, value) }
     Function("sensorStats") { SensorDiagnostics.stats(requireNotNull(appContext.reactContext)) }
+    AsyncFunction("diagnosticAuditRead") { promise: Promise -> DiagnosticAudit.read(requireNotNull(appContext.reactContext), promise) }
     Function("sensorGps") { payload: String -> SensorDiagnostics.gps(requireNotNull(appContext.reactContext), payload) }
     AsyncFunction("sensorRead") { SensorDiagnostics.read(requireNotNull(appContext.reactContext)) }
     Events("finishClock")

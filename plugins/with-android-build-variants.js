@@ -49,7 +49,7 @@ module.exports = function withAndroidBuildVariants(config) {
         }$1$2`);
     }
 
-    const testVersion = process.env.RUNJOURNEY_SENSOR_DIAGNOSTICS === '1' ? 35 : 34;
+    const testVersion = process.env.RUNJOURNEY_SENSOR_DIAGNOSTICS === '1' ? 36 : 34;
     source = source.replace(/output.versionCodeOverride = \d+/g, 'output.versionCodeOverride = ' + testVersion);
     if (!source.includes('output.versionCodeOverride = ' + testVersion)) {
       source += `

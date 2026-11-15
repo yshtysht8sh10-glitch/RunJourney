@@ -1,3 +1,4 @@
+import { TestDiagnosticStatus } from '@/components/test-diagnostic-status';
 import { useCallback, useState } from 'react';
 import { router, useFocusEffect } from 'expo-router';
 import { Alert, Platform, Pressable, ScrollView, Share, StyleSheet, Text } from 'react-native';
@@ -32,6 +33,7 @@ export default function SensorDiagnosticsScreen() {
   const button = (title: string, onPress: () => void, disabled = false) => <Pressable disabled={pending || disabled} style={[styles.button, disabled && { opacity: .4 }]} onPress={onPress}><Text style={styles.text}>{title}</Text></Pressable>;
   return <SafeAreaView style={styles.screen}><ScrollView contentContainerStyle={styles.content}>
     <Text style={styles.title}>加速度・ジャイロ診断（Test）</Text>
+    <TestDiagnosticStatus />
     <Text style={styles.status}>状態: {String(status.state)} / {String(status.mode ?? '')}</Text>
     <Text style={styles.text}>判定・音声には使いません。通常RUNのSTARTが別に必要です。要求25Hz、95分上限。終了後もRUNは継続します。</Text>
     <Text style={styles.text}>装着位置（RUN前に選択）</Text>
@@ -44,6 +46,7 @@ export default function SensorDiagnosticsScreen() {
         { text: 'キャンセル', style: 'cancel' }, { text: '診断保存失敗を発生', onPress: () => { SensorDiagnostics.control('testWriteFailure'); } },
       ]);
     }, String(status.state) !== 'RECORDING')}
+    {button('開始失敗の試験（次のRUNで実サンプルを遮断）', () => { Alert.alert('診断開始失敗の試験', '次のRUNで診断サンプルだけを遮断し、10秒後の警告を確認します。通常RUNは継続します。', [{ text: 'キャンセル' }, { text: '試験を設定', onPress: () => { SensorDiagnostics.control('testNoSamplesNext'); } }]); }, String(status.state) !== 'ARMED')}
     {button('机上60秒採取（RUNは開始しない）', () => void action('bench'), busy)}
     <Text style={styles.text}>実走では元GPS診断もARMEDにしてください。5条件の順番：直立→足プラプラ→その場で弾む→歩行→走行Uターン→走行Uターン→歩行→その場で弾む→足プラプラ→直立。</Text>
     <Text style={styles.text}>各区間の開始と終了でShokzを1回ずつ、合計20回。歩行・Uターンでは止まらず、区間境界を押します。動作は本人の申告ラベルで、センサーから正解を生成しません。</Text>
@@ -51,6 +54,10 @@ export default function SensorDiagnosticsScreen() {
     {button('認証・保存件数を確認（共有は本人操作）', () => void (async () => {
       try { const result = await bridge()?.sensorRead?.(); if (!result) throw Error('保存記録なし'); await Share.share({ title: 'Sensor diagnostic verification', message: result }); }
       catch (e) { Alert.alert('認証読取り', String(e)); }
+    })(), busy)}
+    {button('開始・受付ログを認証して共有（RUN・マーカー終了後）', () => void (async () => {
+      try { const result = await bridge()?.diagnosticAuditRead?.(); if (!result) throw Error('記録なし'); await Share.share({ title: 'Test diagnostic lifecycle', message: result }); }
+      catch (e) { Alert.alert('状態ログの認証', String(e)); }
     })(), busy)}
     <Text selectable style={styles.text}>{JSON.stringify(status, null, 2)}</Text>
     {button('ラン画面へ（通常START）', () => router.push('/'))}

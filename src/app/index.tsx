@@ -1,3 +1,4 @@
+import { TestDiagnosticStatus } from '@/components/test-diagnostic-status';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { router } from 'expo-router';
 import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -113,6 +114,7 @@ export default function RunScreen() {
       <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
         <Text style={styles.brand}>RUNJOURNEY</Text>
         <BuildInfo />
+    <TestDiagnosticStatus compact />
         <ScrollView contentContainerStyle={styles.content}>
           {activeRun ? (
             <>
