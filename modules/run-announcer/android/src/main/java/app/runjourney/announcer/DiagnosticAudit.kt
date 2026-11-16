@@ -55,11 +55,11 @@ internal object DiagnosticAudit {
     } } catch (_: java.util.concurrent.RejectedExecutionException) { failure = "AUDIT_QUEUE_CAPACITY" }
   }
   /** Small last-state checkpoint, separate from RUN/settings and from the encrypted ledger. */
-  fun checkpoint(c: Context, state: String, runId: String, session: String, reason: String) {
+  fun checkpoint(c: Context, state: String, runId: String, session: String, reason: String, summary: String = "") {
     if (c.packageName != "app.runjourney.mobile.test") return
     try { writer.execute {
       if (!c.getSharedPreferences("diagnostic-lifecycle-v36", 0).edit().putString("sensorState", state)
-          .putString("runId", runId).putString("session", session).putString("reason", reason).commit()) failure = "AUDIT_CHECKPOINT_FAILED"
+          .putString("runId", runId).putString("session", session).putString("reason", reason).putString("summary", summary).commit()) failure = "AUDIT_CHECKPOINT_FAILED"
     } } catch (_: java.util.concurrent.RejectedExecutionException) { failure = "AUDIT_QUEUE_CAPACITY" }
   }
   fun read(c: Context, promise: Promise) {

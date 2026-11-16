@@ -34,7 +34,7 @@ export default function SensorDiagnosticsScreen() {
   return <SafeAreaView style={styles.screen}><ScrollView contentContainerStyle={styles.content}>
     <Text style={styles.title}>加速度・ジャイロ診断（Test）</Text>
     <TestDiagnosticStatus />
-    <Text style={styles.status}>状態: {String(status.state)} / {String(status.mode ?? '')}</Text>
+    <Text style={styles.status}>状態: {String(status.displayState ?? status.state)} / {String(status.mode ?? '')}</Text>
     <Text style={styles.text}>判定・音声には使いません。通常RUNのSTARTが別に必要です。要求25Hz、95分上限。終了後もRUNは継続します。</Text>
     <Text style={styles.text}>装着位置（RUN前に選択）</Text>
     {([['WAIST_POUCH', '腰ポーチ'], ['POCKET', 'ポケット'], ['HAND', '手持ち'], ['ARM', '腕'], ['OTHER', 'その他']] as const).map(([value, label]) => <Pressable key={value} disabled={busy} style={styles.button} onPress={() => setPosition(value)}><Text style={styles.text}>{position === value ? '● ' : '○ '}{label}</Text></Pressable>)}

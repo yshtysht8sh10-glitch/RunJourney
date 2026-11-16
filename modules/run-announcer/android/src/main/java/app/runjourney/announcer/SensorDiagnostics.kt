@@ -34,6 +34,7 @@ internal object SensorDiagnostics : SensorEventListener {
   @Volatile private var mode = ""
   private var context: Context? = null
   private var initialized = false
+  private var restoredSummary: JSONObject? = null
   private var registered = false
   @Volatile private var lastAccelReceived = 0L
   @Volatile private var lastGyroReceived = 0L
@@ -46,8 +47,8 @@ internal object SensorDiagnostics : SensorEventListener {
   private fun audit(event: String, data: JSONObject = JSONObject(), seal: Boolean = false) {
     context?.let { DiagnosticAudit.record(it, event, runId, session, data.put("sensorState", state).put("markerSessionId", RunMarkerService.activeSessionId()), seal) }
   }
-  private fun changed(reason: String) {
-    context?.let { DiagnosticAudit.checkpoint(it, state, runId, session, reason) }
+  private fun changed(reason: String, summary: JSONObject? = null) {
+    context?.let { DiagnosticAudit.checkpoint(it, state, runId, session, reason, summary?.toString() ?: "") }
     audit("SENSOR_STATE", JSONObject().put("reason", reason))
   }
   @Synchronized private fun initialize(c: Context) {
@@ -59,6 +60,19 @@ internal object SensorDiagnostics : SensorEventListener {
       state = "INCOMPLETE"; failure = "PROCESS_RESTARTED"; endReason = failure
       warn("診断の準備・採取状態が再起動で失われました。今回のRUNの採取成立を確認してください。")
       changed(failure)
+    } else if (saved.getString("sensorState", "") in listOf("SEALED", "INCOMPLETE", "UNAVAILABLE")) {
+      // A stopped/failed capture remains stopped/failed after process recreation.
+      // Restore only aggregate state, never restart listeners or load raw samples.
+      try {
+        val value = SensorSavedState.decode(saved.getString("sensorState", ""), saved.getString("summary", ""))
+        if (value != null) {
+          restoredSummary = value; state = value.getString("state")
+          runId = value.optString("runId"); session = value.optString("sessionId")
+          mode = value.optString("mode"); endReason = value.optString("endReason", value.optString("reason"))
+          warning = value.optString("warning"); failure = value.optString("failure")
+          cached = snapshot().toString()
+        }
+      } catch (_: Exception) { /* No historical summary: current acquisition remains OFF, not successful. */ }
     }
   }
   fun markerFailure(c: Context, reason: String) {
@@ -139,6 +153,7 @@ internal object SensorDiagnostics : SensorEventListener {
       if (state in listOf("STARTING", "RECORDING", "CLOSING")) return false
       if (value !in listOf("WAIST_POUCH", "POCKET", "HAND", "ARM", "OTHER")) return false
       if (!clockPatch()) { failure = "GPS_CLOCK_PATCH_UNAVAILABLE"; state = "UNAVAILABLE"; changed(failure); return false }
+      restoredSummary = null
       sensorsEnabled = action == "arm"; position = value; state = "ARMED"; failure = ""; warning = ""; endReason = ""
       runId = ""; session = UUID.randomUUID().toString(); noSamplesNext = false
       c.getSystemService(NotificationManager::class.java).cancel(6036)
@@ -153,6 +168,7 @@ internal object SensorDiagnostics : SensorEventListener {
     if (action == "off") { if (state == "ARMED") { state = "OFF"; changed("USER_DISARMED") } else handler.post { finish("USER_ENDED", true) }; return true }
     if (action == "begin") { handler.post {
       if (runId == value && state in listOf("STARTING", "RECORDING", "CLOSING", "SEALED", "INCOMPLETE")) return@post
+      if (runId != value) restoredSummary = null
       runId = value; audit("RUN_START")
       if (state == "ARMED") begin(c.applicationContext, value, "RUN", 95 * 60_000L)
       else { audit("SENSOR_BEGIN_REJECTED", JSONObject().put("reason", "NOT_ARMED"))
@@ -175,6 +191,7 @@ internal object SensorDiagnostics : SensorEventListener {
   }
   private fun begin(c: Context, id: String, captureMode: String, limitMs: Long) {
     if (state != "ARMED" || id.isBlank()) return
+    restoredSummary = null
     state = "STARTING"; context = c; runId = id; mode = captureMode; failure = ""; writerFailed = false; failNextWrite = false
     registered = false; lastAccelReceived = 0; lastGyroReceived = 0; readiness.reset(); simulateNoSamples = noSamplesNext; noSamplesNext = false
     endReason = ""; changed("SENSOR_BEGIN_REQUEST")
@@ -326,7 +343,16 @@ internal object SensorDiagnostics : SensorEventListener {
       labelCount++; json("LABEL", copy); audit("LABEL_QUEUED", JSONObject().put("markerIndex", copy.optInt("markerIndex")).put("boundary", copy.getString("boundary")))
     }
   }
-  private fun snapshot(): JSONObject = JSONObject().put("state", state).put("mode", mode).put("runId", runId)
+  private fun snapshot(): JSONObject {
+    restoredSummary?.let { stored ->
+      if (state in listOf("SEALED", "INCOMPLETE", "UNAVAILABLE")) {
+        val copy = SensorSavedState.snapshot(stored, SystemClock.elapsedRealtime(), System.currentTimeMillis())
+          .put("warning", warning).put("failure", failure).put("endReason", endReason)
+          .put("auditFailure", DiagnosticAudit.failure).put("auditEventsWritten", DiagnosticAudit.written)
+        return copy
+      }
+    }
+    return JSONObject().put("state", state).put("mode", mode).put("runId", runId)
     .put("displayState", if (!sensorsEnabled && state == "RECORDING") "METRICS_ONLY（センサーOFF）" else when(state) { "SEALED" -> "STOPPED"; "INCOMPLETE", "UNAVAILABLE" -> "FAILED"; "CLOSING" -> "STOPPED"; else -> state })
     .put("sessionId", session).put("warning", warning).put("endReason", endReason).put("registered", registered)
     .put("gpsDiagnosticState", gpsStatus).put("sampleConfirmed", readiness.ready())
@@ -342,6 +368,7 @@ internal object SensorDiagnostics : SensorEventListener {
     .put("accel", timings[1]?.json(SystemClock.elapsedRealtimeNanos(), captureStarted * 1_000_000) ?: JSONObject.NULL)
     .put("gyro", timings[4]?.json(SystemClock.elapsedRealtimeNanos(), captureStarted * 1_000_000) ?: JSONObject.NULL)
     .put("clockPatch", clockPatch()).put("nextCondition", conditions.getOrNull(labelCount / 2) ?: "COMPLETE")
+  }
   fun stats(c: Context): String {
     if (!allowed(c)) return "{\"state\":\"UNAVAILABLE\"}"
     initialize(c)
@@ -369,7 +396,7 @@ internal object SensorDiagnostics : SensorEventListener {
     val final = snapshot().put("reason", reason).put("complete", complete && missingGpsClock == 0L)
       .put("labelProtocolComplete", labelCount == conditions.size * 2)
       .put("processCpuMs", android.os.Process.getElapsedCpuTime() - cpuStarted).put("battery", battery())
-      .put("clock", stamp()).put("captureElapsedMs", SystemClock.elapsedRealtime() - captureStarted)
+      .put("clock", stamp()).put("accelReceiptElapsedMs", lastAccelReceived).put("gyroReceiptElapsedMs", lastGyroReceived).put("captureElapsedMs", SystemClock.elapsedRealtime() - captureStarted)
     // Reserved queue slot is not guaranteed; retry sealing after queued frames drain.
     fun seal() {
       try { worker.execute {
@@ -384,7 +411,7 @@ internal object SensorDiagnostics : SensorEventListener {
         handler.post {
           state = if (sealed) "SEALED" else "INCOMPLETE"
           cached = final.put("state", state).put("displayState", if (sealed) "STOPPED" else "FAILED").toString()
-          changed(if (sealed) "SENSOR_SEALED" else "SENSOR_FAILED")
+          changed(if (sealed) "SENSOR_SEALED" else "SENSOR_FAILED", final)
           audit("SENSOR_END", JSONObject().put("reason", reason).put("complete", sealed), true)
         }
       } } catch (_: java.util.concurrent.RejectedExecutionException) { handler.postDelayed({ seal() }, 50) }
@@ -395,6 +422,9 @@ internal object SensorDiagnostics : SensorEventListener {
     check(allowed(c)); check(state !in listOf("STARTING", "RECORDING", "CLOSING")) { "BUSY" }
     val name = c.getSharedPreferences("sensor-diagnostic-v1", 0).getString("last", "") ?: ""
     check(name.matches(Regex("[0-9a-f-]{36}\\.sdiag"))) { "NO_RECORD" }
-    return SensorJournal.verify(File(root(c), name), key(false)).toString()
+    val verified = SensorJournal.verify(File(root(c), name), key(false))
+    val recordedRun = verified.getJSONArray("events").getJSONObject(0).getJSONObject("data").optString("runId")
+    check(runId.isBlank() || recordedRun == runId) { "NO_RECORD_FOR_CURRENT_RUN" }
+    return verified.put("recordRunId", recordedRun).put("matchesKnownRun", if (runId.isBlank()) JSONObject.NULL else true).toString()
   }
 }
