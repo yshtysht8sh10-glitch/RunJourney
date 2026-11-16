@@ -21,7 +21,7 @@ function ActiveDiagnosticStatus({ compact = false }: { compact?: boolean }) {
   const { sensor: s, marker: m } = data;
   if (compact && !s.warning && !s.auditFailure && s.state === 'OFF' && (!m.state || m.state === 'OFF')) return null;
   const hz = (n?: number) => n == null ? '—' : n.toFixed(1);
-  const age = (n?: number, count = 0) => n == null ? count > 0 ? '不明（再起動後）' : '未受信' : `${(n / 1000).toFixed(1)}秒前`;
+  const age = (n?: number, count = 0) => n == null ? count > 0 ? '不明（時計基準未確認）' : '未受信' : `${(n / 1000).toFixed(1)}秒前`;
   return <View style={styles.box}>
     <Text style={styles.text}>Test採取確認：{s.displayState ?? s.state ?? '確認中'}</Text>
     {!!s.restoredSummary && <Text style={styles.text}>前回の終了状態です。現在の採取ではありません。</Text>}
