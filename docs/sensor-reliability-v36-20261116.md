@@ -73,3 +73,5 @@ Draft維持。Production配信、マージ、Issue Close、既存データ削除
 再ビルド時間を抑えるためsensorTestだけarm64-v8aを対象とする。対象SO-51Bがarm64-v8a対応であることを確認済み。Production/Pace/その他Test profileのABIは変更しない。今回のAPKは32bit専用端末・x86 emulatorを対象としない。
 
 コールド起動のバックグラウンドGPS入口でもcheckpointを確認し、失われたARMED/RECORDINGを警告する。前景の画面表示だけに初期化を依存させない。通常GPSの判定入力は変更しない。実端末でのプロセス再起動検証は残件。
+
+ユーザーから今回Test限定のローカルビルド例外承認を取得。EAS無料枠上限のため既存署名でローカルGradleを使用する。中断前の候補v36ログも保全するため、最終修正版の音声出力先をvoice-log-reliability-v36へ分離し、候補のvoice-log-sensors-v36へ保持期限処理を起動しない。
