@@ -713,7 +713,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     })
     handler.postDelayed({
       if (currentNotice === notice) { tts?.stop(); finishUtterance("PLAYBACK_TIMEOUT") }
-    }, if (diagnostic(notice)) 5000 else 30000)
+    }, 30000)
     if (tts?.speak(message, TextToSpeech.QUEUE_FLUSH, params, utteranceKey) != TextToSpeech.SUCCESS) finishUtterance("SPEAK_FAILED")
   }
 

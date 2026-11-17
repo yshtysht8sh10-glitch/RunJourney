@@ -101,4 +101,12 @@ class DiagnosticVoiceQueueTest {
     call("receiveDiagnosticFeedback",feedback("next","MARKER_FAILED").toString())
     service.onInit(TextToSpeech.ERROR);assertTrue(queue().isEmpty())
   }
+  @Test fun slowFeedbackBodyIsNotCutOffByAFiveSecondBudget() {
+    set("ready",true)
+    call("receiveDiagnosticFeedback",feedback("slow").toString())
+    org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(6))
+    assertEquals("slow",(get("currentNotice") as JSONObject).getString("id"))
+    call("finishUtterance","DONE")
+    assertNull(get("currentNotice"))
+  }
 }
