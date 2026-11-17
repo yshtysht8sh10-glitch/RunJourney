@@ -256,6 +256,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   private fun validInState(n: JSONObject): Boolean {
     val type = n.optString("type")
     if (diagnostic(n)) return packageName == "app.runjourney.mobile.test" &&
+      !GoalCueFence.ended(this, n.optJSONObject("data")?.optString("runId") ?: "") &&
       (n.optJSONObject("data")?.optString("markerSessionId").isNullOrBlank() || n.getJSONObject("data").optString("markerSessionId") == RunMarkerService.lastSessionId()) &&
       (n.optJSONObject("data")?.optString("feedbackKind") != "SENSOR_STARTED" || SensorDiagnostics.recording()) && DiagnosticFeedbackPolicy.valid(
       n.optJSONObject("data")?.optString("runId") ?: "", n.optJSONObject("data")?.optString("sensorSessionId") ?: "",
@@ -505,7 +506,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     // Deferred information follows state feedback, ahead of new periodic items.
     messages.sortByDescending { if (it.optBoolean("deferred")) 75 else it.optInt("priority") }
     val notice = messages.removeAt(0)
-    if (batchMode && !validInState(notice)) {
+    if ((batchMode || diagnostic(notice)) && !validInState(notice)) {
       audit(notice, "STALE_STATE")
       if (messages.isEmpty()) finishTest() else speakNext()
       return
@@ -617,7 +618,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
 
   private fun bodyEligible(notice: JSONObject): Boolean {
     if (currentNotice !== notice) return false
-    if (System.currentTimeMillis() > notice.optLong("expiresAt") || (batchMode && !validInState(notice))) {
+    if (System.currentTimeMillis() > notice.optLong("expiresAt") || ((batchMode || diagnostic(notice)) && !validInState(notice))) {
       tts?.stop(); finishUtterance("EXPIRED_OR_INVALID_BEFORE_BODY"); return false
     }
     return true

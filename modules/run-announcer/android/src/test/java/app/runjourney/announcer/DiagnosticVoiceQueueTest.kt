@@ -69,6 +69,17 @@ class DiagnosticVoiceQueueTest {
     assertTrue(queue().isEmpty())
     call("receiveDiagnosticFeedback",feedback("p2").toString());assertTrue(queue().isEmpty())
   }
+  @Test fun normalVoiceOffStillHonorsRunEndFenceWithoutAnyBatchContext() {
+    assertFalse(get("batchMode") as Boolean)
+    call("receiveDiagnosticFeedback",feedback("queued-before-end").toString())
+    assertEquals(1,queue().size)
+    assertTrue(GoalCueFence.finish(service,"r"))
+    set("ready",true)
+    service.javaClass.getDeclaredMethod("speakNext").apply { isAccessible=true }.invoke(service)
+    assertTrue(queue().isEmpty());assertNull(get("currentNotice"))
+    call("receiveDiagnosticFeedback",feedback("late-after-end").toString())
+    assertTrue(queue().isEmpty())
+  }
   @Test fun repeatedFailureWarningsCoalesceButSensorFailureRemainsDistinct() {
     call("receiveDiagnosticFeedback",feedback("stop","SENSOR_STOPPED").toString())
     repeat(5) { call("receiveDiagnosticFeedback",feedback("reject$it","MARKER_FAILED").toString()) }
@@ -104,6 +115,12 @@ class DiagnosticVoiceQueueTest {
   @Test fun slowFeedbackBodyIsNotCutOffByAFiveSecondBudget() {
     set("ready",true)
     call("receiveDiagnosticFeedback",feedback("slow").toString())
+    // Suppress Shadow TTS's immediate automatic completion to model a slow engine.
+    (get("tts") as TextToSpeech).setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
+      override fun onStart(id: String?) { }
+      override fun onDone(id: String?) { }
+      override fun onError(id: String?) { }
+    })
     org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(6))
     assertEquals("slow",(get("currentNotice") as JSONObject).getString("id"))
     call("finishUtterance","DONE")
