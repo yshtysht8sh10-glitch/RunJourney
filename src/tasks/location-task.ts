@@ -6,6 +6,7 @@ import { LocationPoint } from '@/types/run';
 import { VoiceAnnouncement } from '@/services/voice-announcement';
 import { isStandaloneTest } from '@/utils/build';
 import { AppState } from 'react-native';
+import { SensorDiagnostics } from '@/services/sensor-diagnostics';
 
 export const LOCATION_TASK_NAME = 'runjourney-background-location';
 
@@ -25,6 +26,7 @@ function toPoint(location: Location.LocationObject): LocationPoint {
 
 /** Both device TaskManager and the isolated PC simulator enter this adapter. */
 export async function ingestLocationBatch(locations: Location.LocationObject[], receivedAt = Date.now(), appState = AppState.currentState ?? 'unknown') {
+    SensorDiagnostics.gps(locations, receivedAt);
 
     const updated = isStandaloneTest()
       ? await RunRepository.appendActiveObservations(locations.map(location => ({ ...toPoint(location),

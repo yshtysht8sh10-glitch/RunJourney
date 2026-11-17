@@ -46,10 +46,12 @@ module.exports = ({ config }) => {
       "expo-sharing",
       "expo-sqlite",
       "./plugins/with-android-build-variants",
+      "./plugins/with-sensor-clock",
+      "./plugins/with-test-diagnostic-alerts",
     ],
     extra: {
       ...config.extra,
-      buildGitHash: `${getGitCommitHash()}+${process.env.RUNJOURNEY_PACE_ISOLATED === '1' ? 'pace-workout' : process.env.RUNJOURNEY_MARKER_POC === '1' ? 'marker-v34' : 'longrun-v32'}`,
+      buildGitHash: `${getGitCommitHash()}+${process.env.RUNJOURNEY_PACE_ISOLATED === '1' ? 'pace-workout' : process.env.RUNJOURNEY_SENSOR_DIAGNOSTICS === '1' ? 'sensors-v36' : process.env.RUNJOURNEY_MARKER_POC === '1' ? 'marker-v34' : 'longrun-v32'}`,
       buildId: process.env.EAS_BUILD_ID || "local",
       persistenceSchema: "sqlite-v2",
       cloudSyncProject,

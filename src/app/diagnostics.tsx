@@ -61,6 +61,7 @@ export default function Diagnostics() {
   return <SafeAreaView style={styles.screen}>
     <View style={{paddingHorizontal:24,paddingTop:8,paddingBottom:12}}>
       <Text style={{color:'#FFFFFF',fontSize:22,fontWeight:'700',marginBottom:8}}>Auto Stop Diagnostics</Text>
+      {isStandaloneTest() && <Pressable style={styles.button} onPress={() => router.push('/sensor-diagnostics')}><Text style={styles.text}>加速度・ジャイロ診断（Test）</Text></Pressable>}
       {isStandaloneTest() && <DetectorJournalControls buildGitHash={String(Constants.expoConfig?.extra?.buildGitHash ?? 'unknown')} />}
       {isStandaloneTest() && <Pressable style={styles.button} onPress={() => router.push('/marker-poc')}><Text style={styles.text}>実停止マーカー（OpenComm2 Test PoC）</Text></Pressable>}
     </View>

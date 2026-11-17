@@ -31,6 +31,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     const val ACTION_START = "app.runjourney.announcer.START"
     const val ACTION_TEST = "app.runjourney.announcer.TEST"
     const val ACTION_WORKOUT = "app.runjourney.announcer.WORKOUT"
+    const val ACTION_DIAGNOSTIC_FEEDBACK = "app.runjourney.announcer.TEST_DIAGNOSTIC_FEEDBACK"
     const val PREFS = "runjourney-announcer"
     private const val CHANNEL = "runjourney-voice"
     private const val TAG = "RunAnnouncer"
@@ -77,11 +78,13 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
             .put("queueSize", messages.size))
         audit(n, "GENERATED")
         val late = (now - preferences.getLong("clockStarted", 0)) % (preferences.getInt("clockMinutes", 10) * 60000L) > 5000
+        val busySpeech = speaking && currentNotice?.let { !diagnostic(it) } != false
+        val busyQueue = messages.any { !diagnostic(it) }
         n.getJSONObject("data").put("clockReason", when {
           late -> "LATE"; batchState != "RUNNING" -> "PAUSED"; !ready -> "TTS_NOT_READY"
-          speaking -> "SPEAKING"; messages.isNotEmpty() -> "QUEUED_AUDIO"; else -> "ELIGIBLE"
+          busySpeech -> "SPEAKING"; busyQueue -> "QUEUED_AUDIO"; else -> "ELIGIBLE"
         })
-        if (late || batchState != "RUNNING" || speaking || messages.isNotEmpty() || !ready) audit(n, "SKIPPED_CLOCK_BUSY_PAUSED_OR_LATE")
+        if (late || batchState != "RUNNING" || busySpeech || busyQueue || !ready) audit(n, "SKIPPED_CLOCK_BUSY_PAUSED_OR_LATE")
         else { messages.add(n); audit(n, "QUEUED"); speakNext() }
       }
       handler.postDelayed(this, 1000)
@@ -218,15 +221,15 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       if (!seen.contains(id)) {
         seen.add(id); while (seen.size > 2048) seen.removeAt(0)
         val type = n.optString("type")
-        if (validInState(n) && n.optInt("priority") >= 80 && messages.size >= 16) {
-          messages.minByOrNull { it.optInt("priority") }?.let { old ->
+        if (validInState(n) && n.optInt("priority") >= 80 && ordinaryQueueSize() >= 16) {
+          messages.filterNot { diagnostic(it) }.minByOrNull { it.optInt("priority") }?.let { old ->
             if (old.optInt("priority") < n.optInt("priority")) { messages.remove(old); audit(old, "EVICTED_FOR_IMPORTANT_NOTICE") }
           }
         }
         val reason = if (initFailed) "INIT_FAILED" else if (!validInState(n) && n.optString("message").isNotBlank()) "STALE_STATE" else VoicePolicy.suppression(type, n.optString("message").isBlank(),
           System.currentTimeMillis(), n.optLong("expiresAt"), paused,
           sorted.any { it.optInt("priority") > 20 && System.currentTimeMillis() <= it.optLong("expiresAt") && it.optString("message").isNotBlank() },
-          messages.any { it.optInt("priority") >= 70 }, messages.size)
+          messages.any { it.optInt("priority") >= 70 }, ordinaryQueueSize())
         if (reason == "QUEUED") n.put("nativeQueuedAt", System.currentTimeMillis())
         audit(n, reason)
         if (reason == "QUEUED") {
@@ -252,6 +255,13 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   }
   private fun validInState(n: JSONObject): Boolean {
     val type = n.optString("type")
+    if (diagnostic(n)) return packageName == "app.runjourney.mobile.test" &&
+      !GoalCueFence.ended(this, n.optJSONObject("data")?.optString("runId") ?: "") &&
+      (n.optJSONObject("data")?.optString("markerSessionId").isNullOrBlank() || n.getJSONObject("data").optString("markerSessionId") == RunMarkerService.lastSessionId()) &&
+      (n.optJSONObject("data")?.optString("feedbackKind") != "SENSOR_STARTED" || SensorDiagnostics.recording()) && DiagnosticFeedbackPolicy.valid(
+      n.optJSONObject("data")?.optString("runId") ?: "", n.optJSONObject("data")?.optString("sensorSessionId") ?: "",
+      SensorDiagnostics.associatedRunId(), SensorDiagnostics.associatedSessionId(), debugPrefs.getString("finishedRun", "") ?: "") &&
+      !(ended && batchRunId == n.optJSONObject("data")?.optString("runId"))
     if ((type == "GOAL_WARNING" || VoicePolicy.goalCue(type)) && n.optJSONObject("data")?.optString("goalRevision") != goalRevision) return false
     val c=cueContext
     if(type=="GOAL_WARNING" && c?.optString("revision")==goalRevision && c.optBoolean("suppressWarning")) return false
@@ -283,7 +293,10 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     }
     currentNotice?.let {
       audit(it, status)
-      if (!ended && validInState(it) && VoicePolicy.information(it.optString("type")) && it.optInt("retry") == 0) {
+      if (diagnostic(it) && DiagnosticFeedbackPolicy.retryInterrupted(it.optInt("diagnosticAttempt"), validInState(it))) {
+        val retry = JSONObject(it.toString()).put("diagnosticAttempt", it.optInt("diagnosticAttempt") + 1)
+        retry.remove("startedAt"); messages.add(0, retry); audit(retry, "REQUEUED_AFTER_INTERRUPTION")
+      } else if (!ended && validInState(it) && VoicePolicy.information(it.optString("type")) && it.optInt("retry") == 0) {
         val retry = JSONObject(it.toString()).put("originalId", it.optString("id")).put("id", it.optString("id") + ":retry").put("retry", 1)
         retry.remove("startedAt"); defer(retry); messages.add(retry)
       } else audit(it, "DISCARDED")
@@ -337,9 +350,11 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    val feedback = intent?.action == ACTION_DIAGNOSTIC_FEEDBACK
+    if (feedback && packageName != "app.runjourney.mobile.test") { stopSelf(); return START_NOT_STICKY }
     val batch = intent?.action == ACTION_BATCH
     val workout = intent?.action == ACTION_WORKOUT
-    val testing = intent?.action == ACTION_TEST || workout || batch
+    val testing = intent?.action == ACTION_TEST || workout || batch || feedback
     if (intent?.action == ACTION_START) {
       val started = intent.getLongExtra("startedAtMs", System.currentTimeMillis())
       val previous = preferences.getLong("startedAtMs", 0)
@@ -365,7 +380,11 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       wakeLock?.let { if (it.isHeld) it.release() }
       wakeLock = (getSystemService(Context.POWER_SERVICE) as PowerManager)
         .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "RunJourney:VoiceAnnouncements")
-        .apply { if (preferences.getBoolean("running", false)) acquire() else acquire(30_000) }
+        .apply { if (preferences.getBoolean("running", false)) acquire() else acquire(if (feedback) 120_000 else 30_000) }
+    }
+    if (feedback) {
+      receiveDiagnosticFeedback(intent?.getStringExtra("payload") ?: "{}")
+      return START_NOT_STICKY
     }
     if (batch) {
       receiveBatch(intent?.getStringExtra("payload") ?: "{}")
@@ -414,6 +433,34 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     speakNext()
   }
 
+  private fun diagnostic(n: JSONObject) = n.optString("type") == DiagnosticFeedbackPolicy.TYPE
+  private fun ordinaryQueueSize() = messages.count { !diagnostic(it) }
+  private fun receiveDiagnosticFeedback(payload: String) {
+    val n = try { JSONObject(payload) } catch (_: Exception) { return }
+    if (!diagnostic(n) || n.optString("message") != DiagnosticFeedbackPolicy.message(n.optJSONObject("data")?.optString("feedbackKind") ?: "") || n.optString("message").isBlank()) return
+    if (n.optJSONObject("data")?.optString("feedbackKind") in listOf("BEGIN_SAVED", "END_SAVED") && n.optJSONObject("data")?.optBoolean("ackPersisted") != true) { audit(n, "REJECTED_NO_SAVED_ACK"); return }
+    n.put("priority", DiagnosticFeedbackPolicy.PRIORITY).put("expiresAt", Long.MAX_VALUE)
+    val id = n.optString("id")
+    if (id.isBlank() || seen.contains(id)) { audit(n, "DUPLICATE_FEEDBACK"); return }
+    seen.add(id); while (seen.size > 2048) seen.removeAt(0)
+    debugPrefs.edit().putString("seen", JSONArray(seen).toString()).apply()
+    if (validInState(n) && n.optJSONObject("data")?.optString("feedbackKind") == "MARKER_FAILED") {
+      val previous = (listOfNotNull(currentNotice) + messages).firstOrNull {
+        diagnostic(it) && it.optJSONObject("data")?.optString("feedbackKind") == "MARKER_FAILED" && validInState(it)
+      }
+      if (previous != null) { n.put("mergedInto", previous.optString("id")); audit(n, "COALESCED_PENDING_MARKER_FAILURE"); return }
+    }
+    val reason = when {
+      !validInState(n) -> "CANCELLED_DIAGNOSTIC_SESSION_OR_RUN"
+      initFailed -> "INIT_FAILED"
+      messages.count { diagnostic(it) } >= DiagnosticFeedbackPolicy.LIMIT -> "FEEDBACK_QUEUE_LIMIT"
+      else -> "QUEUED"
+    }
+    n.put("nativeQueuedAt", System.currentTimeMillis()); audit(n, reason)
+    if (reason == "QUEUED") { messages.add(n); speakNext() }
+    else finishTest()
+  }
+
   private fun deliverWorkout() {
     val pending = pendingWorkout ?: return
     pendingWorkout = null
@@ -459,7 +506,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     // Deferred information follows state feedback, ahead of new periodic items.
     messages.sortByDescending { if (it.optBoolean("deferred")) 75 else it.optInt("priority") }
     val notice = messages.removeAt(0)
-    if (batchMode && !validInState(notice)) {
+    if ((batchMode || diagnostic(notice)) && !validInState(notice)) {
       audit(notice, "STALE_STATE")
       if (messages.isEmpty()) finishTest() else speakNext()
       return
@@ -571,7 +618,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
 
   private fun bodyEligible(notice: JSONObject): Boolean {
     if (currentNotice !== notice) return false
-    if (System.currentTimeMillis() > notice.optLong("expiresAt") || (batchMode && !validInState(notice))) {
+    if (System.currentTimeMillis() > notice.optLong("expiresAt") || ((batchMode || diagnostic(notice)) && !validInState(notice))) {
       tts?.stop(); finishUtterance("EXPIRED_OR_INVALID_BEFORE_BODY"); return false
     }
     return true
