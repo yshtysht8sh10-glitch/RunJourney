@@ -232,8 +232,10 @@ class RunMarkerService : Service() {
           ack = {
             if (failNextAck) { failNextAck = false; throw java.io.IOException("SYNTHETIC_MARKER_ACK_FAILURE") }
             val saved = stamp().put("markerIndex", sessionCount).put("receivedElapsed", data.getLong("elapsed"))
+              .put("timestampMeaning", "ACK_WRITE_STARTED")
             log!!.append("ACK", saved) // append includes fd.sync().
-            data.put("savedAt", saved.getLong("wall")).put("savedElapsed", saved.getLong("elapsed"))
+            data.put("ackRecordAt", saved.getLong("wall"))
+              .put("savedAt", System.currentTimeMillis()).put("savedElapsed", SystemClock.elapsedRealtime())
           },
           saved = {
             val kind = DiagnosticFeedbackPolicy.savedKind(label, true)
