@@ -20,7 +20,7 @@ import java.util.concurrent.atomic.AtomicLong
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 
-/** Diagnostic-only actor. No dependency on detector, SQLite, speech or MediaSession. */
+/** Diagnostic-only actor. Values never enter detector/SQLite/audio; lifecycle feedback is Test-only. */
 internal object SensorDiagnostics : SensorEventListener {
   private const val PACKAGE = "app.runjourney.mobile.test"
   private const val ALIAS = "RunJourney.Test.SensorDiagnostics.v1"
@@ -60,6 +60,7 @@ internal object SensorDiagnostics : SensorEventListener {
       state = "INCOMPLETE"; failure = "PROCESS_RESTARTED"; endReason = failure
       warn("診断の準備・採取状態が再起動で失われました。今回のRUNの採取成立を確認してください。")
       changed(failure)
+      DiagnosticFeedback.emit(c, "SENSOR_STOPPED", "sensor-stopped", runId, session, JSONObject().put("reason", failure))
     } else if (saved.getString("sensorState", "") in listOf("SEALED", "INCOMPLETE", "UNAVAILABLE")) {
       // A stopped/failed capture remains stopped/failed after process recreation.
       // Restore only aggregate state, never restart listeners or load raw samples.
@@ -172,7 +173,11 @@ internal object SensorDiagnostics : SensorEventListener {
       runId = value; audit("RUN_START")
       if (state == "ARMED") begin(c.applicationContext, value, "RUN", 95 * 60_000L)
       else { audit("SENSOR_BEGIN_REJECTED", JSONObject().put("reason", "NOT_ARMED"))
-        if (RunMarkerService.protocolActive()) { state = "INCOMPLETE"; failure = "NOT_ARMED_AT_RUN_START"; endReason = failure; changed(failure); warn("センサー診断が開始できませんでした。5条件マーカーは受付不可です。通常RUNは継続します。") } }
+        if (RunMarkerService.protocolActive()) {
+          state = "INCOMPLETE"; failure = "NOT_ARMED_AT_RUN_START"; endReason = failure; changed(failure)
+          warn("センサー診断が開始できませんでした。5条件マーカーは受付不可です。通常RUNは継続します。")
+          DiagnosticFeedback.emit(c, "SENSOR_STOPPED", "sensor-stopped", runId, session, JSONObject().put("reason", failure))
+        } }
     }; return true }
     // Foreground desk collection, not a RUN and not a screen-OFF guarantee.
     if (action == "bench") {
@@ -266,7 +271,10 @@ internal object SensorDiagnostics : SensorEventListener {
     val received = SystemClock.elapsedRealtimeNanos(); val type = event.sensor.type
     if (type == 1) lastAccelReceived = SystemClock.elapsedRealtime() else if (type == 4) lastGyroReceived = SystemClock.elapsedRealtime()
     if (readiness.receive(type, SystemClock.elapsedRealtime())) audit("FIRST_SENSOR_SAMPLE", JSONObject().put("sensorType", type))
-    if (state == "STARTING" && readiness.ready()) { state = "RECORDING"; changed("ACTUAL_SAMPLES_CONFIRMED") }
+    if (state == "STARTING" && readiness.ready()) {
+      state = "RECORDING"; changed("ACTUAL_SAMPLES_CONFIRMED")
+      if (mode == "RUN") context?.let { DiagnosticFeedback.emit(it, "SENSOR_STARTED", "sensor-started", runId, session) }
+    }
     timings[type]?.observe(event.timestamp, received)
     val buffer = buffers.getOrPut(type) { ByteArrayOutputStream() }
     DataOutputStream(buffer).apply { writeLong(event.timestamp); writeLong(received); writeFloat(event.values[0]); writeFloat(event.values[1]); writeFloat(event.values[2]); writeInt(event.accuracy) }
@@ -391,7 +399,10 @@ internal object SensorDiagnostics : SensorEventListener {
     if (state !in listOf("STARTING", "RECORDING")) return
     state = "CLOSING"; endReason = reason; registered = false; manager?.unregisterListener(this); handler.removeCallbacks(tick)
     changed(reason)
-    if (mode == "RUN" && reason != "RUN_FINISH") warn("センサー診断が終了しました（" + reason + "）。5条件マーカーは受付不可です。通常RUNは継続します。")
+    if (mode == "RUN" && reason != "RUN_FINISH") {
+      warn("センサー診断が終了しました（" + reason + "）。5条件マーカーは受付不可です。通常RUNは継続します。")
+      context?.let { DiagnosticFeedback.emit(it, "SENSOR_STOPPED", "sensor-stopped", runId, session, JSONObject().put("reason", reason)) }
+    }
     for (type in listOf(1, 4)) flush(type)
     val final = snapshot().put("reason", reason).put("complete", complete && missingGpsClock == 0L)
       .put("labelProtocolComplete", labelCount == conditions.size * 2)

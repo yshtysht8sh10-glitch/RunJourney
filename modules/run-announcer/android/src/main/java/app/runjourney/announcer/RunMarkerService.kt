@@ -41,12 +41,20 @@ class RunMarkerService : Service() {
     @Volatile private var ready = false
     @Volatile private var alive = false
     @Volatile private var activeToken = ""
+    @Volatile private var failNextAck = false
     fun protocolActive() = mode == "protocol" && state in listOf("STARTING", "RECORDING")
     fun activeSessionId() = if (active()) activeToken else ""
+    fun lastSessionId() = activeToken
     fun active() = state in listOf("STARTING", "RECORDING", "CLOSING")
     private fun acceptanceReason() = MarkerAcceptance.reason(state, ready, mode == "protocol", SensorDiagnostics.recording(), count)
     private fun test(c: Context) = c.packageName == PACKAGE
     fun control(c: Context, action: String): Boolean {
+      if (test(c) && action == "testAckFailure") {
+        if (!protocolActive() || !ready) return false
+        failNextAck = true
+        DiagnosticAudit.record(c, "TEST_MARKER_ACK_FAILURE_ARMED", SensorDiagnostics.associatedRunId(), activeToken)
+        return true
+      }
       if (!test(c) || action !in listOf("trial", "field", "protocol", "off")) return false
       if (action != "off" && (alive || state in listOf("STARTING", "RECORDING", "CLOSING"))) return false
       val intent = Intent(c, RunMarkerService::class.java).putExtra("action", action)
@@ -93,6 +101,13 @@ class RunMarkerService : Service() {
       data.put("sensorSessionId", SensorDiagnostics.associatedSessionId()), seal)
   }
   private fun owns() = !destroyed && recording == activeToken
+  private fun feedback(kind: String, identity: String, data: JSONObject = JSONObject()) {
+    if (sessionMode != "protocol") return
+    DiagnosticFeedback.emit(applicationContext, kind, "$recording:$identity",
+      data.optString("runId", SensorDiagnostics.associatedRunId()),
+      data.optString("sensorSessionId", SensorDiagnostics.associatedSessionId()),
+      JSONObject(data.toString()).put("markerSessionId", recording))
+  }
   override fun onCreate() { super.onCreate(); alive = true }
   private val routeWatch = object : AudioDeviceCallback() {
     override fun onAudioDevicesRemoved(devices: Array<out AudioDeviceInfo>) {
@@ -112,7 +127,7 @@ class RunMarkerService : Service() {
     mode = intent?.getStringExtra("action") ?: "trial"
     sessionMode = mode
     if (mode !in listOf("trial", "field", "protocol")) { stopSelf(); return START_NOT_STICKY }
-    state = "STARTING"; count = 0; rejected.set(0); received = 0; lastResult = "PREPARING"; lastLabel = ""; lastAt = 0; failure = ""; endReason = ""; ready = false
+    state = "STARTING"; count = 0; rejected.set(0); received = 0; lastResult = "PREPARING"; lastLabel = ""; lastAt = 0; failure = ""; endReason = ""; ready = false; failNextAck = false
     recording = UUID.randomUUID().toString()
     activeToken = recording
     audit("MARKER_START", data = JSONObject().put("mode", mode))
@@ -141,6 +156,7 @@ class RunMarkerService : Service() {
     audit("MARKER_FAILED", data = JSONObject().put("reason", e.javaClass.simpleName))
     failure = e.javaClass.simpleName + ":" + (e.message ?: "")
     SensorDiagnostics.markerFailure(applicationContext, e.javaClass.simpleName)
+    feedback("MARKER_FAILED", "service-failed", JSONObject().put("reason", e.javaClass.simpleName))
     state = "FAILED"; handler.post { if (owns()) stopSelf() }
   }
   private fun activate() {
@@ -192,6 +208,7 @@ class RunMarkerService : Service() {
       rejected.incrementAndGet(); lastResult = "REJECTED:" + reason
       val rejection = JSONObject(data.toString()).put("reason", reason).put("receivedCount", received).put("acceptedCount", count).put("rejectedCount", rejected.get())
       audit("MARKER_REJECTED", data = rejection)
+      if (DiagnosticFeedbackPolicy.rejectedPress(mediaDecision)) feedback("MARKER_FAILED", "press:$received", rejection)
       try { worker.execute { try { log?.append("REJECTED", rejection) } catch (e: Exception) { fail(e) } } } catch (e: Exception) { fail(e) }
       return
     }
@@ -204,13 +221,24 @@ class RunMarkerService : Service() {
           rejected.incrementAndGet(); lastResult = "REJECTED:STATE_CHANGED_BEFORE_SAVE"
           log!!.append("REJECTED", data.put("reason", "STATE_CHANGED_BEFORE_SAVE"))
           audit("MARKER_REJECTED", data = data)
+          feedback("MARKER_FAILED", "press:" + data.getInt("receivedCount"), data)
           return@execute
         }
         val label = if (sessionMode == "trial") "TEST" else if (sessionMode == "protocol") {
           if (sessionCount % 2 == 0) "BEGIN" else "END"
         } else if (sessionCount % 2 == 0) "STOP" else "RESUME"
-        log!!.append("MARKER", data.put("label", label).put("markerIndex", sessionCount).put("labelSource", "USER_BUTTON_NOT_GPS"))
-        log!!.append("ACK", stamp().put("markerIndex", sessionCount).put("receivedElapsed", data.getLong("elapsed")))
+        MarkerAcknowledgement.persist(
+          marker = { log!!.append("MARKER", data.put("label", label).put("markerIndex", sessionCount).put("labelSource", "USER_BUTTON_NOT_GPS")) },
+          ack = {
+            if (failNextAck) { failNextAck = false; throw java.io.IOException("SYNTHETIC_MARKER_ACK_FAILURE") }
+            val saved = stamp().put("markerIndex", sessionCount).put("receivedElapsed", data.getLong("elapsed"))
+            log!!.append("ACK", saved) // append includes fd.sync().
+            data.put("savedAt", saved.getLong("wall")).put("savedElapsed", saved.getLong("elapsed"))
+          },
+          saved = {
+            val kind = DiagnosticFeedbackPolicy.savedKind(label, true)
+            if (kind.isNotEmpty()) feedback(kind, "press:" + data.getInt("receivedCount"), JSONObject(data.toString()).put("ackPersisted", true))
+          })
         if (sessionMode == "protocol") SensorDiagnostics.marker(applicationContext, data)
         sessionCount++
         if (owns()) { count = sessionCount; lastLabel = label; lastAt = data.getLong("wall"); lastResult = "SAVED:" + label }

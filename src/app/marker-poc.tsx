@@ -55,6 +55,7 @@ export default function MarkerPoc() {
     <Text accessibilityLiveRegion="polite" style={styles.status}>状態: {status.state} / 保存: {status.count ?? 0}件 / {status.mode ?? ''}</Text>
     {busy && <Text style={styles.text}>{status.accepting ? 'ボタン受付可能' : `受付不可：${status.acceptanceReason ?? '確認中'}`}</Text>}
     <Text style={styles.text}>直近: {status.lastResult || status.lastLabel || 'なし'} / 拒否{status.rejected ?? 0}件</Text>
+    <Text style={styles.text}>5条件モードでは保存ACK後に「マーカー開始／終了」を読み上げます。音声がない場合は成功と判断せず、警告と記録を確認してください。</Text>
     {!!status.endReason && <Text style={styles.text}>終了理由: {status.endReason}</Text>}
     {!!status.failure && <Text style={styles.error}>{status.failure}</Text>}
     <Pressable disabled={pending || busy} style={[styles.button, busy && styles.disabled]} onPress={() => void control('trial')}><Text style={styles.text}>試し押し（10回で終了）</Text></Pressable>
@@ -63,6 +64,7 @@ export default function MarkerPoc() {
     <Pressable disabled={pending || busy} style={[styles.button, busy && styles.disabled]} onPress={() => void control('protocol')}><Text style={styles.text}>5条件マーカー開始（START前・BEGIN/END）</Text></Pressable>
     <Text style={styles.text}>5条件モードはセンサー診断をARMEDにし、通常START後に受付します。直立→足振り→弾む→歩行→Uターン→Uターン→歩行→弾む→足振り→直立。各区間の開始/終了で1回ずつ。歩行/Uターンで停止する指示ではありません。</Text>
     <Pressable disabled={pending || !busy} style={[styles.button, !busy && styles.disabled]} onPress={() => void control('off')}><Text style={styles.text}>マーカーのみ終了（RUNは継続）</Text></Pressable>
+    <Pressable disabled={pending || status.mode !== 'protocol' || !status.accepting} style={[styles.button, (!status.accepting || status.mode !== 'protocol') && styles.disabled]} onPress={() => Alert.alert('Test限定：ACK保存失敗', '次の押下はMARKERの後、ACKの前で保存失敗を発生させます。成功音声を出さず、通常RUNは継続します。実走では使わないでください。', [{ text: 'キャンセル' }, { text: 'ACK失敗を設定', onPress: () => { if (!bridge()?.markerControl?.('testAckFailure')) Alert.alert('試験を設定できませんでした'); } }])}><Text style={styles.text}>次のマーカーACK保存失敗を試験</Text></Pressable>
     <Text style={styles.text}>{status.mode === 'protocol' ? '5条件モードでは区間の開始/終了をBEGIN/ENDとして記録します。歩行・走行Uターンでは止まらず、決めた順番で押してください。' : '開始音の後、実際に止まったら再生ボタンを1回、走り出すときに1回。STOP/RESUMEを交互に自己申告します。音声通知やGPSの状態でラベルを選びません。'}</Text>
     <Text style={styles.text}>試し押しは実走とは別ファイル。実走開始で件数を0に戻します。RUN開始・終了はラン画面で通常どおり操作し、終了後にここでマーカーも終了してください。</Text>
     <Text style={styles.text}>暗号化して端末内保存。キー時刻が取れない機種は端末受信時刻のみで、実停止の厳密な時刻ではありません。再起動・切断・押し忘れは未検証区間にします。Test限定の受信維持処理による電池増分は未測定です。</Text>

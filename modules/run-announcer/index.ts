@@ -1,7 +1,7 @@
 import { requireNativeModule } from 'expo-modules-core';
 
 type RunAnnouncer = {
-  markerControl?(action: 'trial' | 'field' | 'protocol' | 'off'): boolean;
+  markerControl?(action: 'trial' | 'field' | 'protocol' | 'off' | 'testAckFailure'): boolean;
   sensorControl?(action: string, value: string): boolean;
   sensorStats?(): string;
   sensorNotificationsAllowed?(): boolean;
