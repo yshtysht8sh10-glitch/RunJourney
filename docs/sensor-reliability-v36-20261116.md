@@ -138,3 +138,7 @@ ARMED→RUN_START→開始要求→Native登録→両FIRST_SENSOR_SAMPLE→ACTUA
 5. 通常終了→「履歴に保存しました」→マーカー終了、SEALED/保存数確認→認証回収。警告時は診断試験不成立として、通常RUNを必要に応じ継続する。
 
 これらの受入完了までは5条件×2回の再実走を案内しない。PR #77はDraft、Production配信/マージ/Issue Closeなし。
+
+## 11月17日の追加対応
+
+この資料の結果は5a28b47時点の記録として維持する。承認されたShokz向け保存ACK音声と、その後のTest v36 APK・準備状況は[marker-voice-feedback-v36-20261117.md](marker-voice-feedback-v36-20261117.md)を参照。新しいTest診断の状態/保存結果だけを既存音声経路へ追加し、センサー値を判定・音声へ渡す変更はしていない。
