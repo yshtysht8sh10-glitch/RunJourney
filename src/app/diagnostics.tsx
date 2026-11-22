@@ -17,6 +17,7 @@ import { summarizeFieldRun } from '@/domain/field-summary';
 import { AdaptiveAudio } from '@/services/adaptive-audio';
 import { GoalCues } from '@/services/goal-cues';
 import { DetectorJournalControls, DetectorJournalDetails } from '@/components/detector-journal-controls';
+import { CompactVoiceDiagnostics } from '@/components/compact-voice-diagnostics';
 
 export default function Diagnostics() {
   const { id } = useLocalSearchParams<{ id?: string }>();
@@ -69,6 +70,7 @@ export default function Diagnostics() {
     <Pressable onPress={() => id ? router.replace({ pathname: '/run-detail', params: { id } }) : router.replace('/settings')} style={styles.button}><Text style={styles.text}>‹ 戻る</Text></Pressable>
     {!isStandaloneTest() ? <Text style={styles.text}>Standalone Test版専用です。</Text> : <>
       <DetectorJournalDetails buildGitHash={String(Constants.expoConfig?.extra?.buildGitHash ?? 'unknown')} />
+      <CompactVoiceDiagnostics runId={run?.id} />
       <Pressable accessibilityRole="button" onPress={load} style={styles.button}><Text style={styles.text}>最新情報に更新</Text></Pressable>
       <Text style={styles.text}>音声デバッグログ（端末内・最大20,000イベント / 20MB / 7日）</Text>
       <Pressable accessibilityRole="button" disabled={exportingVoice} style={styles.button} onPress={exportVoice}><Text style={styles.text}>{exportingVoice ? '音声ログを出力中…' : '音声ログ JSONをExport'}</Text></Pressable>
