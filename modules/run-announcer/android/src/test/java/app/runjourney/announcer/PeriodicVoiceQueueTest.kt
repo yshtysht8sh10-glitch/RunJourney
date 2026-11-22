@@ -97,6 +97,27 @@ class PeriodicVoiceQueueTest {
     service.onDestroy();service=Robolectric.buildService(RunAnnouncerService::class.java).create().get();set("ready",false);batch()
     assertTrue(queue().none{it.optString("type")=="CURRENT_TIME"});assertEquals(1,ClockPeriodicLedger(service).snapshot().getInt("unknownCompletionCount"))
   }
+  @Test fun interruptedClockMergedIntoNextBoundaryReleasesInflightAttempt(){
+    batch();val first=clockNotice();seedClock(System.currentTimeMillis(),first,1);set("currentNotice",first);set("speaking",true)
+    val body=service.javaClass.getDeclaredMethod("prepareClockBody",JSONObject::class.java).apply{isAccessible=true}
+    assertEquals(true,body.invoke(service,first))
+    val next=JSONObject(first.toString()).put("id","clock-two")
+    ClockPeriodicLedger(service).receive(2,next);call("restoreClock")
+    service.javaClass.getDeclaredMethod("interrupt",String::class.java).apply{isAccessible=true}.invoke(service,"INTERRUPTED_BY_TRANSITION")
+    assertFalse(ClockPeriodicLedger(service).snapshot().has("inflight"));assertEquals(listOf("clock-two"),queue().map{it.optString("id")})
+    set("currentNotice",next);assertEquals(true,body.invoke(service,next))
+    assertEquals("clock-two",ClockPeriodicLedger(service).snapshot().getJSONObject("inflight").getString("id"))
+  }
+  @Test fun queuedClockSupersededAfterInterruptionRetiresAttemptWithDurableRetry(){
+    batch();val first=clockNotice();seedClock(System.currentTimeMillis(),first,1);set("currentNotice",first);set("speaking",true)
+    service.javaClass.getDeclaredMethod("prepareClockBody",JSONObject::class.java).apply{isAccessible=true}.invoke(service,first)
+    service.javaClass.getDeclaredMethod("interrupt",String::class.java).apply{isAccessible=true}.invoke(service,"INTERRUPTED_BY_TRANSITION")
+    val next=JSONObject(first.toString()).put("id","clock-two");ClockPeriodicLedger(service).receive(2,next)
+    set("clockLedgerOverride",ClockPeriodicLedger(service){false});call("restoreClock")
+    assertTrue(get("clockBlocked") as Boolean);assertNotNull(ClockPeriodicLedger(service).snapshot().optJSONObject("inflight"))
+    set("clockLedgerOverride",null);assertEquals(true,call("flushClock"));call("restoreClock")
+    assertFalse(ClockPeriodicLedger(service).snapshot().has("inflight"));assertEquals(listOf("clock-two"),queue().map{it.optString("id")})
+  }
   @Test fun offPersistenceFailureSuppressesOldSnapshotsUntilDurableRetry(){
     batch(notices=listOf(pace(1)))
     service.getSharedPreferences(RunAnnouncerService.PREFS,0).edit().putBoolean("running",true).commit()

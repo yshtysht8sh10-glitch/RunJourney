@@ -120,7 +120,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   private fun legacyInformation(n: JSONObject) = VoicePolicy.information(n.optString("type")) && !periodic(n)
   private fun requeuePeriodic(n: JSONObject) {
     if (n.optString("type")=="CURRENT_TIME" && messages.any{it.optString("type")=="CURRENT_TIME"}) {
-      audit(n,"MERGED_NEW_CLOCK_BOUNDARY"); return
+      retireClock(n,"MERGED_NEW_CLOCK_BOUNDARY"); return
     }
     n.remove("startedAt"); messages.add(n)
   }
@@ -141,7 +141,8 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   private fun restoreClock() {
     if(clockBlocked)return
     val n=try{clockLedger.pending(batchRunId)}catch(_:Exception){clockFailure("CLOCK_LEDGER_IO_FAILED");return}
-    messages.toList().filter{it.optString("type")=="CURRENT_TIME" && it.optString("id")!=n?.optString("id")}.forEach{messages.remove(it);audit(it,"MERGED_OR_CANCELLED_CLOCK")}
+    messages.toList().filter{it.optString("type")=="CURRENT_TIME" && it.optString("id")!=n?.optString("id")}.forEach{messages.remove(it);retireClock(it,"MERGED_OR_CANCELLED_CLOCK")}
+    if(clockBlocked)return
     if(n!=null && !ended && n.optString("id") !in clockTerminalIds && messages.none{it.optString("id")==n.optString("id")} && currentNotice?.optString("id")!=n.optString("id"))messages.add(n)
   }
   private val defaultClockLedger by lazy{ClockPeriodicLedger(this)}
@@ -155,6 +156,11 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   private var clockPendingEnd:String?=null
   private var clockBody:JSONObject?=null
   private val clockTerminalIds=mutableSetOf<String>()
+  private fun retireClock(notice:JSONObject,reason:String) {
+    val id=notice.optString("id")
+    if(clockBody?.optString("id")==id)clockBody=null
+    clockTerminalIds.add(id);audit(notice,reason);flushClock()
+  }
   private var clockRetry=false
   private var clockFailures=0
   private fun clockFailure(reason:String):Boolean {
