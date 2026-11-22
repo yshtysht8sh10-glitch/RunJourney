@@ -52,7 +52,7 @@ module.exports = ({ config }) => {
     ],
     extra: {
       ...config.extra,
-      buildGitHash: `${getGitCommitHash()}+${process.env.RUNJOURNEY_PACE_ISOLATED === '1' ? 'pace-workout' : process.env.RUNJOURNEY_SENSOR_DIAGNOSTICS === '1' ? 'sensors-v37-integration' : process.env.RUNJOURNEY_MARKER_POC === '1' ? 'marker-v34' : 'longrun-v32'}`,
+      buildGitHash: `${getGitCommitHash()}+${process.env.RUNJOURNEY_PACE_ISOLATED === '1' ? 'pace-workout' : process.env.RUNJOURNEY_SENSOR_DIAGNOSTICS === '1' ? 'sensors-v37-integration-preserved' : process.env.RUNJOURNEY_MARKER_POC === '1' ? 'marker-v34' : 'longrun-v32'}`,
       buildId: process.env.EAS_BUILD_ID || "local",
       persistenceSchema: "sqlite-v2",
       cloudSyncProject,

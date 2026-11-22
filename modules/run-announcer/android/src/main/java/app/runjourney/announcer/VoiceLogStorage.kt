@@ -37,7 +37,7 @@ internal object VoiceLogStorage {
     // Keep all v32/v34/v35 and candidate v36 chunks immutable during the sensor Test release.
     // Queue, speech and retention policy are unchanged; only Test's new destination differs.
     val markerTest = context.packageName == "app.runjourney.mobile.test"
-    val target = File(context.filesDir, if (markerTest) "voice-log-feedback-v36" else "voice-log-v2")
+    val target = File(context.filesDir, if (markerTest) "voice-log-integration-v37" else "voice-log-v2")
     if (!markerTest) VoiceLogJournal.migrateLegacy(target, {
       val old = JSONArray(context.getSharedPreferences("runjourney-voice-debug", 0).getString("entries", "[]"))
       (0 until old.length()).map { i -> val e = old.getJSONObject(i); e.optLong("loggedAt") to e.toString() }
