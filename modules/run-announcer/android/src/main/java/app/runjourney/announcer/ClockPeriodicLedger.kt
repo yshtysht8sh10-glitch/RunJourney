@@ -46,22 +46,29 @@ internal class ClockPeriodicLedger(context:Context,private val writeOverride:((S
     return s.optJSONObject("pending")?.let{JSONObject(it.toString())}
   }
   fun complete(id:String):Boolean {
-    val s=snapshot();if(s.optJSONObject("pending")?.optString("id")!=id)return true
-    s.remove("pending");return save(s)
+    val s=snapshot();var changed=false
+    for(key in listOf("pending","inflight"))if(s.optJSONObject(key)?.optString("id")==id){s.remove(key);changed=true}
+    return !changed || save(s)
   }
   fun end(run:String):Boolean {
     val s=snapshot();if(s.optString("runId")!=run)return true
-    s.remove("pending");return save(s.put("enabled",false).put("cancelReason","RUN_ENDED"))
+    s.remove("pending");s.remove("inflight");return save(s.put("enabled",false).put("cancelReason","RUN_ENDED"))
   }
-  fun bodyRequested(id:String,at:Long):Boolean {
-    val s=snapshot();val p=s.optJSONObject("pending") ?: return true
-    if(p.optString("id")!=id || p.optString("attemptState")=="BODY_REQUESTED")return true
-    p.put("attemptState","BODY_REQUESTED").put("bodyRequestedAt",at);return save(s)
+  fun bodyRequested(id:String,at:Long,notice:JSONObject?=null):Boolean {
+    val s=snapshot()
+    s.optJSONObject("inflight")?.let{return it.optString("id")==id}
+    val p=s.optJSONObject("pending")?.takeIf{it.optString("id")==id}
+      ?: notice?.takeIf{it.optString("id")==id && it.optString("type")=="CURRENT_TIME" && it.optJSONObject("data")?.optString("runId")==s.optString("runId")}
+      ?.let{JSONObject(it.toString())} ?: return false
+    p.put("attemptState","BODY_REQUESTED").put("bodyRequestedAt",at)
+    return save(s.put("inflight",JSONObject(p.toString())))
   }
   fun recoverUnknown():Pair<Boolean,JSONObject?> {
-    val s=snapshot();val p=s.optJSONObject("pending") ?: return true to null
+    val s=snapshot();val p=s.optJSONObject("inflight") ?: s.optJSONObject("pending") ?: return true to null
     if(p.optString("attemptState")!="BODY_REQUESTED")return true to null
-    s.remove("pending");s.put("unknownCompletionCount",s.optLong("unknownCompletionCount")+1).put("lastUnknownId",p.optString("id"))
+    s.remove("inflight")
+    if(s.optJSONObject("pending")?.optString("id")==p.optString("id"))s.remove("pending")
+    s.put("unknownCompletionCount",s.optLong("unknownCompletionCount")+1).put("lastUnknownId",p.optString("id"))
     return if(save(s))true to p else false to null
   }
 }

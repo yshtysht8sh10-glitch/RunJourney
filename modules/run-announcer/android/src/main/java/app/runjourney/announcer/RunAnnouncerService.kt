@@ -153,7 +153,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   private var clockCancellationConfig:Pair<String,JSONObject>?=null
   private var clockReceipt:Pair<Long,JSONObject>?=null
   private var clockPendingEnd:String?=null
-  private var clockBody:String?=null
+  private var clockBody:JSONObject?=null
   private val clockTerminalIds=mutableSetOf<String>()
   private var clockRetry=false
   private var clockFailures=0
@@ -171,14 +171,14 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       clockDesiredConfig?.let{if(!clockLedger.configure(it.first,it.second,System.currentTimeMillis()))return clockFailure("CLOCK_CONFIG_PERSIST_FAILED")};clockDesiredConfig=null
       clockPendingEnd?.let{if(!clockLedger.end(it))return clockFailure("CLOCK_CANCEL_PERSIST_FAILED")};clockPendingEnd=null
       clockReceipt?.let{if(!clockLedger.receive(it.first,it.second))return clockFailure("CLOCK_RECEIPT_PERSIST_FAILED")};clockReceipt=null
-      clockBody?.let{if(!clockLedger.bodyRequested(it,System.currentTimeMillis()))return clockFailure("CLOCK_BODY_PERSIST_FAILED")};clockBody=null
+      clockBody?.let{if(!clockLedger.bodyRequested(it.optString("id"),System.currentTimeMillis(),it))return clockFailure("CLOCK_BODY_PERSIST_FAILED")};clockBody=null
       for(id in clockTerminalIds.toList()){if(!clockLedger.complete(id))return clockFailure("CLOCK_TERMINAL_PERSIST_FAILED");clockTerminalIds.remove(id)}
       clockBlocked=false;clockFailures=0;return true
     }catch(_:Exception){return clockFailure("CLOCK_LEDGER_IO_FAILED")}
   }
   private fun prepareClockBody(notice:JSONObject):Boolean {
     if(notice.optString("type")!="CURRENT_TIME")return true
-    clockBody=notice.optString("id")
+    clockBody=JSONObject(notice.toString())
     if(flushClock())return true
     requeuePeriodic(notice);tts?.stop();clearAdaptive();currentNotice=null;speaking=false;releaseFocus();return false
   }

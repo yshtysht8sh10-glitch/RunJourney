@@ -31,4 +31,23 @@ class ClockPeriodicLedgerTest {
     val next=ClockPeriodicLedger(context);val recovery=next.recoverUnknown();assertTrue(recovery.first);assertEquals("one",recovery.second!!.getString("id"))
     assertNull(next.pending("r"));assertEquals(1,next.snapshot().getInt("unknownCompletionCount"));assertEquals(1,next.snapshot().getInt("boundary"))
   }
+  @Test fun nextBoundaryCannotEraseInflightAttemptOrItsUnknownRecovery(){
+    ledger.configure("r",config(),1001);ledger.receive(1,notice("one"));assertTrue(ledger.bodyRequested("one",610000))
+    assertTrue(ledger.receive(2,notice("two")))
+    val next=ClockPeriodicLedger(context);val recovery=next.recoverUnknown()
+    assertTrue(recovery.first);assertEquals("one",recovery.second!!.getString("id"))
+    assertEquals("two",next.pending("r")!!.getString("id"));assertEquals(2,next.snapshot().getInt("boundary"))
+    assertEquals(1,next.snapshot().getInt("unknownCompletionCount"));assertNull(next.recoverUnknown().second)
+  }
+  @Test fun completingInflightKeepsTheNextPendingBoundary(){
+    ledger.configure("r",config(),1001);ledger.receive(1,notice("one"));ledger.bodyRequested("one",610000);ledger.receive(2,notice("two"))
+    assertTrue(ledger.complete("one"));assertEquals("two",ledger.pending("r")!!.getString("id"))
+    assertNull(ClockPeriodicLedger(context).recoverUnknown().second)
+  }
+  @Test fun boundaryDuringChimeStillTracksActualBodyRequestedNotice(){
+    ledger.configure("r",config(),1001);val first=notice("one");ledger.receive(1,first);ledger.receive(2,notice("two"))
+    assertTrue(ledger.bodyRequested("one",610000,first))
+    val next=ClockPeriodicLedger(context);assertEquals("one",next.recoverUnknown().second!!.getString("id"))
+    assertEquals("two",next.pending("r")!!.getString("id"))
+  }
 }
