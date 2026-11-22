@@ -3,8 +3,12 @@ package app.runjourney.legacy
 import android.content.Context
 import android.content.ContextWrapper
 import android.database.sqlite.SQLiteDatabase
+import android.os.Build
+import androidx.sqlite.driver.bundled.BundledSQLiteDriver
+import androidx.sqlite.driver.bundled.SQLITE_OPEN_READONLY
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.BeforeClass
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
@@ -12,10 +16,21 @@ import org.robolectric.annotation.Config
 import java.io.File
 import java.nio.file.Files
 import java.security.MessageDigest
+import java.nio.file.StandardCopyOption
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35])
+@Config(sdk = [28, 33, 35])
 class LegacyStorageReaderTest {
+  companion object {
+    @JvmStatic @BeforeClass fun isolateHostNativeLibraryForRobolectricSandbox() {
+      // JNI libraries belong to one classloader. Robolectric uses a separate
+      // sandbox per SDK; use an identical binary at a distinct test-only path.
+      val source = File(requireNotNull(System.getProperty("legacy.sqlite.host.source")))
+      val directory = File(source.parentFile, "sandbox-api-${Build.VERSION.SDK_INT}").apply { mkdirs() }
+      Files.copy(source.toPath(), File(directory, source.name).toPath(), StandardCopyOption.REPLACE_EXISTING)
+      System.setProperty("androidx.sqlite.driver.bundled.path", directory.absolutePath)
+    }
+  }
   private fun temporary(block: (Context, File) -> Unit) {
     val root = Files.createTempDirectory("synthetic-legacy-storage").toFile()
     val context = object : ContextWrapper(RuntimeEnvironment.getApplication()) {
@@ -24,10 +39,38 @@ class LegacyStorageReaderTest {
     try { block(context, File(root, "RKStorage")) } finally { root.deleteRecursively() }
   }
   private fun fixture(file: File): SQLiteDatabase = SQLiteDatabase.openOrCreateDatabase(file, null).also {
+    it.disableWriteAheadLogging()
     it.execSQL("CREATE TABLE catalystLocalStorage (key TEXT PRIMARY KEY, value TEXT)")
   }
   private fun sha(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it.toInt() and 255) }
-  private fun digestFiles(file: File) = listOf("", "-wal", "-shm").associateWith { suffix -> File(file.path + suffix).takeIf { it.exists() }?.readBytes()?.let(::sha) }
+  private fun digestFiles(file: File) = listOf("", "-wal", "-shm").associateWith { suffix -> File(file.path + suffix).takeIf { it.isFile }?.readBytes()?.let(::sha) }
+  private fun assertSourceContentsUnchanged(before: Map<String, String?>, file: File) {
+    val after = digestFiles(file)
+    assertEquals(before[""], after[""])
+    if (before["-wal"] != null) assertEquals(before["-wal"], after["-wal"])
+    else assertTrue(!File(file.path + "-wal").exists() || File(file.path + "-wal").length() == 0L)
+  }
+  /** Synthetic fixtures only: snapshot a committed WAL before the fixture
+   * writer closes/checkpoints. The production reader never copies any files. */
+  private fun walFixtureWithoutIndex(file: File, uncommittedTail: Boolean = false) {
+    val source = File(file.parentFile, "synthetic-writer.sqlite")
+    fixture(source).use { writer ->
+      assertTrue(writer.enableWriteAheadLogging())
+      writer.execSQL("INSERT INTO catalystLocalStorage VALUES ('@runjourney/value','committed')")
+      if (uncommittedTail) {
+        writer.execSQL("PRAGMA cache_size=2")
+        writer.beginTransaction()
+        writer.execSQL("UPDATE catalystLocalStorage SET value='uncommitted' WHERE key='@runjourney/value'")
+        writer.execSQL("INSERT INTO catalystLocalStorage VALUES ('@runjourney/uncommitted', replace(hex(zeroblob(100000)), '0', 'x'))")
+      }
+      try {
+        Files.copy(source.toPath(), file.toPath())
+        Files.copy(File(source.path + "-wal").toPath(), File(file.path + "-wal").toPath())
+      } finally { if (uncommittedTail) writer.endTransaction() }
+    }
+    assertTrue(File(file.path + "-wal").length() > 0)
+    assertFalse(File(file.path + "-shm").exists())
+  }
   private fun reject(block: () -> Unit) { try { block(); fail("Expected closed failure") } catch (_: Exception) { } }
   @Suppress("UNCHECKED_CAST")
   private fun entries(opened: Map<String, Any?>) = opened["entries"] as List<Map<String, Any>>
@@ -77,7 +120,7 @@ class LegacyStorageReaderTest {
 
   @Test fun sourceValuesMustBeTextAndWithinNamespaceAndSizeLimits() = temporary { context, file ->
     fixture(file).use { it.execSQL("INSERT INTO catalystLocalStorage VALUES (?,?)", arrayOf("@runjourney/bad", byteArrayOf(1, 2))) }
-    val before = digestFiles(file); reject { LegacyStorageReader(context).open() }; assertEquals(before, digestFiles(file))
+    val before = digestFiles(file); reject { LegacyStorageReader(context).open() }; assertSourceContentsUnchanged(before, file)
   }
 
   @Test fun tooManyKeysAreRejectedBeforeAnyFullValuesAreRead() = temporary { context, file ->
@@ -86,7 +129,7 @@ class LegacyStorageReaderTest {
       try { repeat(513) { db.execSQL("INSERT INTO catalystLocalStorage VALUES (?,?)", arrayOf("@runjourney/key$it", "x")) }; db.setTransactionSuccessful() }
       finally { db.endTransaction() }
     }
-    val before = digestFiles(file); reject { LegacyStorageReader(context).open() }; assertEquals(before, digestFiles(file))
+    val before = digestFiles(file); reject { LegacyStorageReader(context).open() }; assertSourceContentsUnchanged(before, file)
   }
 
   @Test fun overlongKeyNulAndOversizeValueFailClosed() = temporary { context, file ->
@@ -95,7 +138,7 @@ class LegacyStorageReaderTest {
     SQLiteDatabase.openDatabase(file.path, null, 0).use { it.execSQL("DELETE FROM catalystLocalStorage"); it.execSQL("INSERT INTO catalystLocalStorage VALUES (?,?)", arrayOf("@runjourney/nul", "x\u0000y")) }
     reject { LegacyStorageReader(context).open() }
     SQLiteDatabase.openDatabase(file.path, null, 0).use { it.execSQL("DELETE FROM catalystLocalStorage"); it.execSQL("INSERT INTO catalystLocalStorage VALUES ('@runjourney/big', replace(hex(zeroblob(16777217)), '0', 'x'))") }
-    val before = digestFiles(file); reject { LegacyStorageReader(context).open() }; assertEquals(before, digestFiles(file))
+    val before = digestFiles(file); reject { LegacyStorageReader(context).open() }; assertSourceContentsUnchanged(before, file)
   }
 
   @Test fun tokenKeyOffsetSingleSessionAndExpiryAreEnforced() = temporary { context, file ->
@@ -130,11 +173,12 @@ class LegacyStorageReaderTest {
     }
   }
 
-  @Test @Config(sdk = [28]) fun olderAndroidFailsClosedWithoutChangingSourceOrPretendingEmpty() = temporary { context, file ->
+  @Test fun olderAndroidReadsSameSnapshotWithoutChangingSource() = temporary { context, file ->
     fixture(file).use { it.execSQL("INSERT INTO catalystLocalStorage VALUES ('@runjourney/value','legacy')") }
     val before = digestFiles(file)
-    try { LegacyStorageReader(context).open(); fail("Expected unsupported transaction") }
-    catch (error: IllegalStateException) { assertEquals("LEGACY_READ_TRANSACTION_UNSUPPORTED", error.message) }
+    val reader = LegacyStorageReader(context); val token = reader.open()["token"] as String
+    assertEquals("legacy", reader.read(token, "@runjourney/value", 0)["text"])
+    reader.close(token)
     assertEquals(before, digestFiles(file))
   }
 
@@ -143,11 +187,72 @@ class LegacyStorageReaderTest {
     val before = digestFiles(file); reject { LegacyStorageReader(context).open() }; assertEquals(before, digestFiles(file))
   }
 
-  @Test fun missingWalIndexFailsWithoutCreatingSharedMemoryFile() = temporary { context, file ->
-    fixture(file).close()
-    val wal = File(file.path + "-wal"); wal.writeText("synthetic incomplete WAL")
+  @Test fun committedWalWithoutIndexIsReadWithoutChangingExistingMainOrWal() = temporary { context, file ->
+    walFixtureWithoutIndex(file)
+    val before = digestFiles(file)
+    val reader = LegacyStorageReader(context); val token = reader.open()["token"] as String
+    assertEquals("committed", reader.read(token, "@runjourney/value", 0)["text"])
+    reader.close(token)
+    val after = digestFiles(file)
+    assertEquals(before[""], after[""]); assertEquals(before["-wal"], after["-wal"])
+  }
+
+  @Test fun driverReadOnlyFlagRejectsActualWritesAndDoesNotModifySource() = temporary { _, file ->
+    fixture(file).use { it.execSQL("INSERT INTO catalystLocalStorage VALUES ('@runjourney/value','original')") }
+    val before = digestFiles(file)
+    BundledSQLiteDriver().open(file.path, SQLITE_OPEN_READONLY).use { connection ->
+      connection.prepare("BEGIN DEFERRED").use { it.step() }
+      reject { connection.prepare("UPDATE catalystLocalStorage SET value='forbidden'").use { it.step() } }
+      connection.prepare("ROLLBACK").use { it.step() }
+    }
+    assertEquals(before, digestFiles(file))
+  }
+
+  @Test fun closedCleanWalHeaderWithoutSidecarsIsReadAndOnlyEngineRuntimeFilesMayAppear() = temporary { context, file ->
+    fixture(file).use { db ->
+      assertTrue(db.enableWriteAheadLogging())
+      db.execSQL("INSERT INTO catalystLocalStorage VALUES ('@runjourney/value','closed-wal')")
+    }
+    assertFalse(File(file.path + "-wal").exists()); assertFalse(File(file.path + "-shm").exists())
+    val before = digestFiles(file)
+    val reader = LegacyStorageReader(context); val token = reader.open()["token"] as String
+    assertEquals("closed-wal", reader.read(token, "@runjourney/value", 0)["text"])
+    reader.close(token)
+    val after = digestFiles(file)
+    assertEquals(before[""], after[""])
+    assertTrue(!File(file.path + "-wal").exists() || File(file.path + "-wal").length() == 0L)
+  }
+
+  @Test fun crashLikeUncommittedWalTailDoesNotBecomeVisibleOrGetRepaired() = temporary { context, file ->
+    walFixtureWithoutIndex(file, uncommittedTail = true)
+    val before = digestFiles(file)
+    val reader = LegacyStorageReader(context); val opened = reader.open(); val token = opened["token"] as String
+    assertEquals("@runjourney/value", entries(opened).single()["key"])
+    assertEquals("committed", reader.read(token, "@runjourney/value", 0)["text"])
+    reader.close(token)
+    val after = digestFiles(file)
+    assertEquals(before[""], after[""]); assertEquals(before["-wal"], after["-wal"])
+  }
+
+  @Test fun unavailableShmCreationFailsClosedAndDoesNotChangeExistingMainOrWal() = temporary { context, file ->
+    walFixtureWithoutIndex(file)
+    assertTrue(File(file.path + "-shm").mkdir()) // Synthetic filesystem creation failure.
     val before = digestFiles(file)
     reject { LegacyStorageReader(context).open() }
-    assertEquals(before, digestFiles(file)); assertFalse(File(file.path + "-shm").exists())
+    val after = digestFiles(file)
+    assertEquals(before[""], after[""]); assertEquals(before["-wal"], after["-wal"])
+    assertTrue(File(file.path + "-shm").isDirectory)
+  }
+
+  @Test fun unavailableWalCreationFailsClosedWithoutChangingMainData() = temporary { context, file ->
+    fixture(file).use { db ->
+      assertTrue(db.enableWriteAheadLogging())
+      db.execSQL("INSERT INTO catalystLocalStorage VALUES ('@runjourney/value','unavailable-sidecar')")
+    }
+    assertTrue(File(file.path + "-wal").mkdir()) // Synthetic creation/write failure.
+    val before = digestFiles(file)
+    reject { LegacyStorageReader(context).open() }
+    assertEquals(before[""], digestFiles(file)[""])
+    assertTrue(File(file.path + "-wal").isDirectory)
   }
 }

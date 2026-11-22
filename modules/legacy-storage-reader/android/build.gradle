@@ -13,6 +13,28 @@ android {
 }
 
 dependencies {
+  implementation 'androidx.sqlite:sqlite-bundled:2.6.2'
   testImplementation 'junit:junit:4.13.2'
   testImplementation 'org.robolectric:robolectric:4.17'
+}
+
+// Host-native SQLite is used only by Robolectric. Do not package desktop
+// binaries/classes in the Android application or replace the Android driver.
+configurations { legacySqliteHost }
+dependencies { legacySqliteHost('androidx.sqlite:sqlite-bundled-jvm:2.6.2') { transitive = false } }
+def hostSqlite = tasks.register('extractLegacySqliteHost', Copy) {
+  from { configurations.legacySqliteHost.collect { zipTree(it) } }
+  include 'natives/**'
+  into layout.buildDirectory.dir('legacy-sqlite-host')
+}
+tasks.withType(Test).configureEach {
+  dependsOn hostSqlite
+  def os = System.getProperty('os.name').toLowerCase(Locale.ROOT)
+  def arch = System.getProperty('os.arch').toLowerCase(Locale.ROOT)
+  def platform = os.contains('windows') ? 'windows' : os.contains('mac') ? 'osx' : 'linux'
+  def architecture = arch == 'aarch64' || arch == 'arm64' ? 'arm64' : 'x64'
+  def library = platform == 'windows' ? 'sqliteJni.dll' : platform == 'osx' ? 'libsqliteJni.dylib' : 'libsqliteJni.so'
+  systemProperty 'androidx.sqlite.driver.bundled.path', layout.buildDirectory.dir("legacy-sqlite-host/natives/${platform}_${architecture}").get().asFile.absolutePath
+  systemProperty 'androidx.sqlite.driver.bundled.name', library
+  systemProperty 'legacy.sqlite.host.source', layout.buildDirectory.file("legacy-sqlite-host/natives/${platform}_${architecture}/${library}").get().asFile.absolutePath
 }

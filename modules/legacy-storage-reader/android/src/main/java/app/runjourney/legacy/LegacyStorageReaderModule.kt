@@ -20,6 +20,10 @@ class LegacyStorageReaderModule : Module() {
         val reason = error.message?.takeIf { it.matches(Regex("LEGACY_[A-Z_]+")) }
           ?: "LEGACY_SQLITE_READ_FAILED"
         promise.reject("ERR_LEGACY_STORAGE_READ", reason, null)
+      } catch (_: LinkageError) {
+        // A missing/unsupported packaged JNI library is a read failure too,
+        // not a hung Promise and never an empty legacy store.
+        promise.reject("ERR_LEGACY_STORAGE_READ", "LEGACY_DRIVER_UNAVAILABLE", null)
       }
     }
   }
