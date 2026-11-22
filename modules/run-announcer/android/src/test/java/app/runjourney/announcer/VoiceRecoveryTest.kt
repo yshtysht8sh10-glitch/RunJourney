@@ -214,28 +214,29 @@ class VoiceRecoveryTest {
     shadowOf(next).invokeErrorListener(1,0);shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(181))
     assertEquals("test",shadowOf(get("tts") as TextToSpeech).lastSpokenText)
   }
-  @Test fun currentClockConsumesPausedOrBusyBoundariesWithoutReplay() {
+  @Test fun currentClockKeepsPausedOrBusyBoundariesForDelayedPlayback() {
     val prefs = service.getSharedPreferences(RunAnnouncerService.PREFS, 0)
     batch("AUTO_STOP")
     prefs.edit().putBoolean("clockEnabled", true).putLong("clockStarted", System.currentTimeMillis()-600000).putInt("clockMinutes",10).putLong("clockBoundary",0).commit()
     (get("clockTick") as Runnable).run()
-    assertEquals(1L,prefs.getLong("clockBoundary",0)); assertTrue(queue().isEmpty())
-    batch("RUNNING"); (get("clockTick") as Runnable).run(); assertTrue(queue().isEmpty())
+    assertEquals(1L,prefs.getLong("clockBoundary",0)); assertEquals(1,queue().size)
+    batch("RUNNING"); (get("clockTick") as Runnable).run(); assertEquals(1,queue().size)
     prefs.edit().putLong("clockStarted",System.currentTimeMillis()-1200000).commit()
     set("speaking",true); (get("clockTick") as Runnable).run()
-    assertEquals(2L,prefs.getLong("clockBoundary",0)); assertTrue(queue().isEmpty())
-    set("speaking",false); (get("clockTick") as Runnable).run(); assertTrue(queue().isEmpty())
+    assertEquals(2L,prefs.getLong("clockBoundary",0)); assertEquals(1,queue().size)
+    set("speaking",false); (get("clockTick") as Runnable).run(); assertEquals(1,queue().size)
   }
-  @Test fun currentClockIsDiscardedOnStopRatherThanDeferredOrRetried() {
+  @Test fun currentClockIsHeldOnStopAndRetriedAfterImportantStateFeedback() {
     batch("RUNNING",notice("CURRENT_TIME"))
     assertEquals(1,queue().size)
-    batch("AUTO_STOP"); assertTrue(queue().isEmpty())
+    batch("AUTO_STOP"); assertEquals(1,queue().size)
     batch("RUNNING"); set("currentNotice",notice("CURRENT_TIME")); set("speaking",true)
     batch("AUTO_STOP",notice("AUTO_STOP_CONFIRMED"))
-    assertFalse(queue().any { it.optString("type")=="CURRENT_TIME" })
+    assertTrue(queue().any { it.optString("type")=="CURRENT_TIME" })
   }
   @Test fun interruptedFiveMinuteKilometerAndSavingsAreRetainedOnce() {
     for (type in listOf("FIVE_MINUTES", "KILOMETER_LAP", "PACE_WARNING")) {
+      set("latestEventIndex",-1) // Independent run-state sequence for each type.
       queue().clear(); set("currentNotice", notice(type)); set("speaking", true)
       batch("AUTO_STOP", notice("AUTO_STOP_CONFIRMED", "stop-$type"))
       val deferred = queue().single { it.optString("type") == type }

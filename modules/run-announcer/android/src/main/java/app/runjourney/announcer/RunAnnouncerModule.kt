@@ -13,6 +13,10 @@ import expo.modules.kotlin.modules.ModuleDefinition
 class RunAnnouncerModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("RunAnnouncer")
+    Function("pacePeriodicVersion") { 1 }
+    Function("pacePeriodicState") { runId: String, configKey: String ->
+      PacePeriodicLedger(requireNotNull(appContext.reactContext)).state(runId, configKey)
+    }
     Function("sensorControl") { action: String, value: String -> SensorDiagnostics.control(requireNotNull(appContext.reactContext), action, value) }
     Function("sensorNotificationsAllowed") {
       val c = requireNotNull(appContext.reactContext)

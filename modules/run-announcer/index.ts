@@ -1,6 +1,8 @@
 import { requireNativeModule } from 'expo-modules-core';
 
 type RunAnnouncer = {
+  pacePeriodicVersion?(): number;
+  pacePeriodicState?(runId: string, configKey: string): string;
   markerControl?(action: 'trial' | 'field' | 'protocol' | 'off' | 'testAckFailure'): boolean;
   sensorControl?(action: string, value: string): boolean;
   sensorStats?(): string;
