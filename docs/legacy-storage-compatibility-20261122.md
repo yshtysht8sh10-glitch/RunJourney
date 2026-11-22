@@ -10,15 +10,15 @@ The new compatibility gate applies only to Android `app.runjourney.mobile`. Exis
 
 ## Reader
 
-`modules/legacy-storage-reader` opens only the application's fixed `RKStorage`, read-only, on one worker. It uses an explicit throw-only corruption handler because Android's default corruption handler can delete a corrupt database. It does not copy, checkpoint, repair or delete the old DB/WAL.
+`modules/legacy-storage-reader` opens only the application's fixed `RKStorage`, read-only, on one worker. It uses AndroidX BundledSQLiteDriver 2.6.2 with SQLITE_OPEN_READONLY and BEGIN DEFERRED; no Android framework corruption handler can delete the source. It does not copy, checkpoint, repair or delete the old DB/WAL.
 
 One bounded read-only transaction covers the manifest and every chunk. Raw UTF-8 BLOB slices of 16KiB form SHA-256; returned TEXT slices contain at most 16,384 Unicode codepoints. JS checks offsets, lengths, terminal flags and the original UTF-8 hash. Unknown `@runjourney/` settings are retained verbatim.
 
 Limits: 512 keys, 256 codepoints per key, 32MiB total Native raw UTF-8, one session, five-minute timeout. JS separately limits the source to 8Mi codepoints to bound JSON expansion. Exceeding a limit is an explicit failure, never a report of empty history. Values with embedded NUL, unsupported types, malformed keys or corruption fail closed.
 
-**Android API below 35:** the public read-only transaction API is unavailable, and the attempted older transaction API rejects an OPEN_READONLY handle. Existing legacy data therefore produces `LEGACY_READ_TRANSACTION_UNSUPPORTED` without opening the file. No hidden-API or unsafe writable fallback is used. The connected Test device reports API 33, so it cannot establish this Production migration path. This is an unresolved compatibility blocker; the Production guard cannot be removed.
+**Android API 28/33/35:** the first framework-based candidate could not establish a safe read-only transaction below API35. The follow-up uses AndroidX's public bundled driver and verifies the same transaction on all three API levels. There is no hidden-API, SQL-parser, writable or immutable fallback. The connected Test phone reports API33; its actual driver loading and upgrade regression are still unverified.
 
-WAL with missing SHM is rejected before opening to avoid creating an index file. Existing SHM read marks are SQLite-managed; byte-for-byte immutability of SHM is not claimed. Synthetic tests verify main DB and WAL bytes remain unchanged.
+Read-only SQLite may create missing WAL/SHM runtime sidecars. This is permitted by SQLite's read-only WAL specification and is distinguished from writing original records. The application does not create, remove, truncate, repair or checkpoint them. Existing SHM read marks are SQLite-managed; synthetic tests verify original main DB and existing WAL contents remain unchanged. Closed clean WAL-mode sources, missing SHM and uncommitted WAL tails are covered; inability to create required sidecars fails closed.
 
 ## Gate and explicit copy
 
@@ -34,12 +34,12 @@ No lifecycle purge, automatic ended-draft finalization, old-data deletion, real-
 
 ## Validation
 
-- Native Robolectric: 11 tests, zero failures/skips. Includes API35 transaction snapshot under concurrent writer, >4MB emoji value, UTF-8 hash/chunks, source corruption preservation, invalid types/NUL, limits, expiry and offsets; API28 is tested as a non-destructive unsupported case.
+- Native Robolectric final driver: 48 tests, zero failures/skips (16 each on API28/33/35). Includes >4MB emoji, original UTF-8 SHA-256, bounded chunks, malformed schema/types/limits/expiry, closed WAL/missing SHM/uncommitted WAL tail/concurrent writer snapshots, actual UPDATE rejection and original DB/WAL preservation. Sidecar creation failure uses obstructing directory fixtures, not an actual full disk or OS permission revocation. See the module README for ABI/16KiB ELF and size measurements.
 - Migration and coordinator tests: 18 pass using the production SQL against PC native SQLite, not a KV-only mock. Covers exact values/order/expired trash/ended draft/settings, collisions, nonempty targets, chunks/hash corruption, serializer loss detection, disk/receipt failure rollback and restart retry, explicit gate, Test bypass and source-change rejection.
-- Full JS/SQLite regression before final connection-lifecycle adjustment: 76 suites / 577 tests pass. Final full regression and 95-minute GPS simulator are recorded in the PR after execution.
+- Full JS/SQLite regression after the connection-lifecycle adjustment: 76 suites / 577 tests pass. The separate 95-minute GPS simulator (seed49) passes both cases, including the normal device adapter/repository/detector/SQL path under synthetic six-second disk stalls.
 - Typecheck and Expo Lint: pass. No new lint warnings.
 - Physical Android update, actual legacy Production migration, Bluetooth, screen-off and real-data preservation before/after an APK update: **not performed by this change**.
 
 ## Remaining gates
 
-An independent fixed-SHA review is required. Safe compatibility for API33 and other pre35 devices, iOS/Web legacy storage, synthetic Android update fixtures, actual Test APK regression and existing-data comparison remain open. This candidate is not permission to merge all 145 development commits, close a feature Issue, or start cycling development.
+An independent fixed-SHA review is required. Actual API33 driver loading, iOS/Web legacy storage, synthetic Android update fixtures, actual Test APK regression and existing-data comparison remain open. This candidate is not permission to merge all 145 development commits, close a feature Issue, or start cycling development.
