@@ -281,7 +281,8 @@ export class SqliteStore {
   }
   getSetting(key: string) { return this.atomic(s => s.readSetting(key)); }
   setSetting(key: string, value: string | null) { return this.atomic(s => s.writeSetting(key, value)); }
-  snapshot(): Promise<SqlSnapshot> { return this.atomic(async s => {
+  private async snapshotInside(): Promise<SqlSnapshot> {
+    const s = this;
     const ids = await s.db.getAllAsync<{ id: string }>("SELECT id FROM runs WHERE status='completed' ORDER BY position");
     const runs: RunRecord[] = []; for (const row of ids) runs.push((await s.readRun(row.id)) as RunRecord);
     const active = await s.db.getAllAsync<{ run_id: string }>('SELECT run_id FROM active_run');
@@ -289,6 +290,32 @@ export class SqliteStore {
     const settings: Record<string, string> = {}; for (const row of keys) settings[row.key] = (await s.readSetting(row.key))!;
     const protectedRows = await s.db.getAllAsync<{ id: string }>('SELECT id FROM runs WHERE protected=1 ORDER BY position');
     return { runs, draft: active.length ? await s.readRun(active[0].run_id) : null, settings, protectedIds: protectedRows.map(row => row.id) };
+  }
+  snapshot(): Promise<SqlSnapshot> { return this.atomic(s => s.snapshotInside()); }
+  /** Initial legacy copy only. Never merge, skip, purge, auto-complete or rewrite the source. */
+  migrateLegacyEmpty(snapshot: SqlSnapshot, source: string, fingerprint: string, keys: number) { return this.atomic(async s => {
+    const tables = ['runs', 'active_run', 'settings', 'migration_log', 'gps_points', 'gps_order', 'run_events', 'run_metadata', 'run_operations', 'run_diagnostics', 'run_row_hash', 'run_stream_state'];
+    const occupied = await s.db.getAllAsync<{ total: number }>(`SELECT ${tables.map(table => `(SELECT count(*) FROM ${table})`).join('+')} AS total`);
+    if (occupied[0].total !== 0) throw Error('移行先SQLiteは空ではありません。既存データを変更せず停止します');
+    const expected: SqlSnapshot = { ...snapshot, protectedIds: [...snapshot.runs.map(run => run.id), ...(snapshot.draft ? [snapshot.draft.id] : [])] };
+    for (const run of snapshot.runs) await s.writeRun(run, 'completed', true);
+    if (snapshot.draft) {
+      await s.writeRun(snapshot.draft, 'draft', true);
+      await s.db.runAsync('INSERT INTO active_run(slot,run_id) VALUES(1,?)', snapshot.draft.id);
+    }
+    for (const [key, value] of Object.entries(snapshot.settings)) await s.writeSetting(key, value);
+    for (const id of expected.protectedIds!) await s.db.runAsync('UPDATE runs SET protected=1 WHERE id=?', id);
+    const actual = await s.snapshotInside();
+    // A serializer that removes unsupported extension data must roll back, not silently migrate.
+    if (canonical(actual) !== canonical(expected)) throw Error('旧データとSQLiteの読戻し結果が一致しません。移行を取り消しました');
+    const report = { version: 1, fingerprint, keys, runs: snapshot.runs.length, draft: snapshot.draft !== null,
+      settings: Object.keys(snapshot.settings).length, digest: hashText(canonical(actual)), rule: 'empty-only-exact-copy-protected-no-purge' };
+    await s.db.runAsync('INSERT INTO migration_log(source,report) VALUES(?,?)', source, canonical(report));
+    return report;
+  }); }
+  legacyMigrationReport(source: string) { return this.atomic(async s => {
+    const rows = await s.db.getAllAsync<{ report: string }>('SELECT report FROM migration_log WHERE source=?', source);
+    return rows.length ? rows[0].report : null;
   }); }
   restore(snapshot: SqlSnapshot, source?: string) { return this.atomic(async s => {
     let added = 0, skipped = 0;

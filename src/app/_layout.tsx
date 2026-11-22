@@ -1,12 +1,13 @@
 import { Tabs } from 'expo-router';
 import { paceEditorDirty, requestPaceLeave } from '@/services/pace-edit-guard';
 import { StatusBar } from 'expo-status-bar';
+import { StorageCompatibilityGate } from '@/components/storage-compatibility-gate';
 
 import '@/tasks/location-task';
 
 export default function TabLayout() {
   return (
-    <>
+    <StorageCompatibilityGate>
       <StatusBar style="light" />
       <Tabs
         screenListeners={({ navigation, route }) => ({ tabPress: event => {
@@ -32,6 +33,6 @@ export default function TabLayout() {
         <Tabs.Screen name="sensor-diagnostics" options={{ href: null }} />
         <Tabs.Screen name="cloud-sync" options={{ href: null }} />
       </Tabs>
-    </>
+    </StorageCompatibilityGate>
   );
 }
