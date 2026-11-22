@@ -109,9 +109,19 @@ class RunMarkerService : Service() {
       JSONObject(data.toString()).put("markerSessionId", recording))
   }
   override fun onCreate() { super.onCreate(); alive = true }
+  private fun bluetoothOutput(device: AudioDeviceInfo) = device.isSink && device.type in listOf(
+    AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, AudioDeviceInfo.TYPE_BLUETOOTH_SCO, AudioDeviceInfo.TYPE_BLE_HEADSET)
+  private val routeMonitor by lazy { MarkerRouteMonitor(
+    { task, delay -> handler.postDelayed(task, delay); Unit }, { handler.removeCallbacks(it) },
+    { owns() && state in listOf("STARTING", "RECORDING") },
+    { getSystemService(AudioManager::class.java).getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { bluetoothOutput(it) } },
+    { reason ->
+      audit("MARKER_ROUTE_CHECK", JSONObject().put("reason", reason))
+      if (reason != "BLUETOOTH_OUTPUT_REMAINS") close(reason)
+    }) }
   private val routeWatch = object : AudioDeviceCallback() {
     override fun onAudioDevicesRemoved(devices: Array<out AudioDeviceInfo>) {
-      if (devices.any { it.type in listOf(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, AudioDeviceInfo.TYPE_BLUETOOTH_SCO, AudioDeviceInfo.TYPE_BLE_HEADSET) }) close("HEADSET_ROUTE_REMOVED")
+      routeMonitor.removed(devices.any { bluetoothOutput(it) })
     }
   }
   private fun stamp() = JSONObject().put("wall", System.currentTimeMillis()).put("elapsed", SystemClock.elapsedRealtime())
@@ -267,6 +277,7 @@ class RunMarkerService : Service() {
   }
   override fun onDestroy() {
     destroyed = true
+    routeMonitor.stop()
     handler.removeCallbacksAndMessages(null)
     if (activeToken == recording) { ready = false; alive = false }
     session?.isActive = false; session?.release(); session = null
