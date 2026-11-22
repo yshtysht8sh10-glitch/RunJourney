@@ -1,0 +1,26 @@
+import { createElement } from 'react';
+import { act, create } from 'react-test-renderer';
+import { Alert, TextInput, Switch } from 'react-native';
+import { RunGoalEditor } from '@/components/run-goal-editor';
+import { RunService } from '@/services/run-service';
+import type { ActiveRun } from '@/types/run';
+jest.mock('@/services/run-service',()=>({RunService:{updateFinishGoal:jest.fn()}}));
+test('edits require confirmation; successful durable apply and failed apply are distinct',async()=>{
+ const run:ActiveRun={id:'editor',startedAt:new Date(0).toISOString(),createdAt:'',updatedAt:'',distanceMeters:0,points:[],finishGoal:{kind:'distance',meters:7000}};
+ const onSaved=jest.fn(), alert=jest.spyOn(Alert,'alert').mockImplementation(()=>{});
+ let tree!: ReturnType<typeof create>;
+ await act(async()=>{tree=create(createElement(RunGoalEditor,{run,onSaved}));});
+ await act(async()=>tree.root.findAll(n=>typeof n.props.onPress==='function')[0].props.onPress());
+ await act(async()=>tree.root.findByType(TextInput).props.onChangeText('12'));
+ await act(async()=>tree.root.findByType(Switch).props.onValueChange(false));
+ const confirm=()=>tree.root.findAll(n=>typeof n.props.onPress==='function' && n.findAll(t=>t.props.children==='変更内容を確認').length>0)[0].props.onPress();
+ await act(async()=>confirm()); expect(RunService.updateFinishGoal).not.toHaveBeenCalled();
+ jest.mocked(RunService.updateFinishGoal).mockRejectedValueOnce(Error('disk full'));
+ await act(async()=>alert.mock.calls.at(-1)![2]!.find(b=>b.text==='保存して適用')!.onPress!());
+ expect(onSaved).not.toHaveBeenCalled();expect(JSON.stringify(tree.toJSON())).toContain('disk full');
+ await act(async()=>confirm());jest.mocked(RunService.updateFinishGoal).mockResolvedValueOnce({...run,finishGoal:{kind:'distance',meters:12000},finishAutoEnabled:false});
+ await act(async()=>alert.mock.calls.at(-1)![2]!.find(b=>b.text==='保存して適用')!.onPress!());
+ expect(RunService.updateFinishGoal).toHaveBeenLastCalledWith('editor',{kind:'distance',meters:12000},false);
+ expect(onSaved).toHaveBeenCalledTimes(1);expect(JSON.stringify(tree.toJSON())).toContain('保存・適用しました');
+ await act(async()=>tree.unmount());alert.mockRestore();
+});

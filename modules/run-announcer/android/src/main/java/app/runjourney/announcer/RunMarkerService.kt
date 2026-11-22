@@ -1,0 +1,292 @@
+package app.runjourney.announcer
+
+import android.app.*
+import android.content.Context
+import android.content.Intent
+import android.media.*
+import android.media.session.MediaSession
+import android.media.session.PlaybackState
+import android.os.*
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.view.KeyEvent
+import app.runjourney.markerprobe.MarkerKeys
+import org.json.JSONObject
+import java.io.File
+import java.security.KeyStore
+import java.util.UUID
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import expo.modules.kotlin.Promise
+
+/** Explicit Test-only sidecar, started/stopped by the user, never by GPS/detector state. */
+class RunMarkerService : Service() {
+  companion object {
+    private const val PACKAGE = "app.runjourney.mobile.test"
+    private const val ALIAS = "RunJourney.Test.RunMarkers.v1"
+    private val worker = ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS, ArrayBlockingQueue(64))
+    @Volatile private var state = "OFF"
+    @Volatile private var count = 0
+    private val rejected = java.util.concurrent.atomic.AtomicInteger()
+    @Volatile private var received = 0
+    @Volatile private var lastResult = "NONE"
+    @Volatile private var mode = ""
+    @Volatile private var lastLabel = ""
+    @Volatile private var lastAt = 0L
+    @Volatile private var failure = ""
+    @Volatile private var endReason = ""
+    @Volatile private var ready = false
+    @Volatile private var alive = false
+    @Volatile private var activeToken = ""
+    @Volatile private var failNextAck = false
+    fun protocolActive() = mode == "protocol" && state in listOf("STARTING", "RECORDING")
+    fun activeSessionId() = if (active()) activeToken else ""
+    fun lastSessionId() = activeToken
+    fun active() = state in listOf("STARTING", "RECORDING", "CLOSING")
+    private fun acceptanceReason() = MarkerAcceptance.reason(state, ready, mode == "protocol", SensorDiagnostics.recording(), count)
+    private fun test(c: Context) = c.packageName == PACKAGE
+    fun control(c: Context, action: String): Boolean {
+      if (test(c) && action == "testAckFailure") {
+        if (!protocolActive() || !ready) return false
+        failNextAck = true
+        DiagnosticAudit.record(c, "TEST_MARKER_ACK_FAILURE_ARMED", SensorDiagnostics.associatedRunId(), activeToken)
+        return true
+      }
+      if (!test(c) || action !in listOf("trial", "field", "protocol", "off")) return false
+      if (action != "off" && (alive || state in listOf("STARTING", "RECORDING", "CLOSING"))) return false
+      val intent = Intent(c, RunMarkerService::class.java).putExtra("action", action)
+      if (action == "off" && state !in listOf("STARTING", "RECORDING")) return true
+      c.startForegroundService(intent); return true
+    }
+    fun stats(c: Context): String = if (!test(c)) JSONObject().put("state", "UNAVAILABLE").toString() else JSONObject()
+      .put("state", state).put("count", count).put("mode", mode).put("lastLabel", lastLabel)
+      .put("received", received).put("rejected", rejected.get()).put("lastResult", lastResult)
+      .put("accepting", acceptanceReason() == "ACCEPTING").put("acceptanceReason", acceptanceReason()).put("sessionId", activeToken)
+      .put("lastReceivedAt", lastAt).put("failure", failure).put("endReason", endReason).put("ready", ready).put("physicalPressTimeMeasured", false).toString()
+    private fun key(): SecretKey {
+      val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+      (store.getKey(ALIAS, null) as? SecretKey)?.let { return it }
+      return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
+        init(KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+          .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+          .setRandomizedEncryptionRequired(true).build())
+      }.generateKey()
+    }
+    fun read(c: Context, promise: Promise) {
+      if (!test(c)) { promise.reject("TEST_ONLY", "Test only", null); return }
+      try { worker.execute {
+        try {
+          val name = c.getSharedPreferences("runjourney-markers", 0).getString("last", "") ?: ""
+          check(name.matches(Regex("[0-9a-f-]{36}\\.jsonl"))) { "No marker recording" }
+          promise.resolve(MarkerLog.read(File(c.noBackupFilesDir, "run-markers-v1/$name"), key()).toString())
+        } catch (e: Exception) { promise.reject("MARKER_READ", e.message, e) }
+      } } catch (e: Exception) { promise.reject("MARKER_BUSY", e.message, e) }
+    }
+  }
+  private val handler = Handler(Looper.getMainLooper())
+  private val keys = MarkerKeys()
+  private var session: MediaSession? = null
+  private var player: MediaPlayer? = null
+  private var lock: PowerManager.WakeLock? = null
+  private var log: MarkerLog? = null
+  private var recording = ""
+  private var sessionMode = ""
+  private var sessionCount = 0
+  @Volatile private var destroyed = false
+  private fun audit(event: String, data: JSONObject = JSONObject(), seal: Boolean = false) {
+    DiagnosticAudit.record(applicationContext, event, if (event == "MARKER_START") "" else SensorDiagnostics.associatedRunId(), recording,
+      data.put("sensorSessionId", SensorDiagnostics.associatedSessionId()), seal)
+  }
+  private fun owns() = !destroyed && recording == activeToken
+  private fun feedback(kind: String, identity: String, data: JSONObject = JSONObject()) {
+    if (sessionMode != "protocol") return
+    DiagnosticFeedback.emit(applicationContext, kind, "$recording:$identity",
+      data.optString("runId", SensorDiagnostics.associatedRunId()),
+      data.optString("sensorSessionId", SensorDiagnostics.associatedSessionId()),
+      JSONObject(data.toString()).put("markerSessionId", recording))
+  }
+  override fun onCreate() { super.onCreate(); alive = true }
+  private fun bluetoothOutput(device: AudioDeviceInfo) = device.isSink && device.type in listOf(
+    AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, AudioDeviceInfo.TYPE_BLUETOOTH_SCO, AudioDeviceInfo.TYPE_BLE_HEADSET)
+  private val routeMonitor by lazy { MarkerRouteMonitor(
+    { task, delay -> handler.postDelayed(task, delay); Unit }, { handler.removeCallbacks(it) },
+    { owns() && state in listOf("STARTING", "RECORDING") },
+    { getSystemService(AudioManager::class.java).getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { bluetoothOutput(it) } },
+    { reason ->
+      audit("MARKER_ROUTE_CHECK", JSONObject().put("reason", reason))
+      if (reason != "BLUETOOTH_OUTPUT_REMAINS") close(reason)
+    }) }
+  private val routeWatch = object : AudioDeviceCallback() {
+    override fun onAudioDevicesRemoved(devices: Array<out AudioDeviceInfo>) {
+      routeMonitor.removed(devices.any { bluetoothOutput(it) })
+    }
+  }
+  private fun stamp() = JSONObject().put("wall", System.currentTimeMillis()).put("elapsed", SystemClock.elapsedRealtime())
+    .put("uptime", SystemClock.uptimeMillis())
+  override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    if (!test(this)) { stopSelf(); return START_NOT_STICKY }
+    getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel("run-markers", "実停止マーカー（Test）", NotificationManager.IMPORTANCE_LOW))
+    startForeground(6073, Notification.Builder(this, "run-markers").setSmallIcon(applicationInfo.icon)
+      .setContentTitle(if (intent?.getStringExtra("action") == "protocol") "試験区間マーカーを記録中" else "実停止マーカーを記録中")
+      .setContentText(if (intent?.getStringExtra("action") == "protocol") "区間の開始/終了を記録。歩行・Uターンでは止まりません" else "ボタン1回で停止/再開を交互に記録。RUNのタイマーは変更しません").setOngoing(true).build())
+    if (intent?.getStringExtra("action") == "off") { close("USER_ENDED"); return START_NOT_STICKY }
+    if (recording.isNotEmpty()) return START_NOT_STICKY
+    mode = intent?.getStringExtra("action") ?: "trial"
+    sessionMode = mode
+    if (mode !in listOf("trial", "field", "protocol")) { stopSelf(); return START_NOT_STICKY }
+    state = "STARTING"; count = 0; rejected.set(0); received = 0; lastResult = "PREPARING"; lastLabel = ""; lastAt = 0; failure = ""; endReason = ""; ready = false; failNextAck = false
+    recording = UUID.randomUUID().toString()
+    activeToken = recording
+    audit("MARKER_START", data = JSONObject().put("mode", mode))
+    val token = recording
+    lock = getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "RunJourney:MarkerPoC")
+      .apply { acquire(if (mode == "trial") 910000 else 10810000) }
+    try { worker.execute {
+      try {
+        val root = File(noBackupFilesDir, "run-markers-v1")
+        check((root.listFiles()?.sumOf { it.length() } ?: 0) < 10_000_000) { "Marker total capacity" }
+        val file = File(root, "$token.jsonl")
+        log = MarkerLog(file, key()).also { it.append("START", stamp().put("mode", sessionMode).put("simulation", sessionMode == "trial")
+          .put("association", "independent session; match to RUN by time after recording")
+          .put("labelSource", "USER_BUTTON_NOT_GPS").put("physicalPressTimeMeasured", false)) }
+        getSharedPreferences("runjourney-markers", 0).edit().putString("last", file.name).commit()
+        handler.post { if (owns() && recording == token && state == "STARTING") { state = "RECORDING"; activate() } }
+      } catch (e: Exception) { fail(e) }
+    } } catch (e: Exception) { fail(e) }
+    handler.postDelayed({ if (recording == token) close(if (mode == "trial") "TRIAL_TIMEOUT" else "LIMIT_3_HOURS") },
+      if (mode == "trial") 900000 else 10800000)
+    return START_NOT_STICKY
+  }
+  private fun fail(e: Exception) {
+    if (activeToken != recording) return
+    lastResult = "SAVE_OR_SERVICE_FAILED"
+    audit("MARKER_FAILED", data = JSONObject().put("reason", e.javaClass.simpleName))
+    failure = e.javaClass.simpleName + ":" + (e.message ?: "")
+    SensorDiagnostics.markerFailure(applicationContext, e.javaClass.simpleName)
+    feedback("MARKER_FAILED", "service-failed", JSONObject().put("reason", e.javaClass.simpleName))
+    state = "FAILED"; handler.post { if (owns()) stopSelf() }
+  }
+  private fun activate() {
+    getSystemService(AudioManager::class.java).registerAudioDeviceCallback(routeWatch, handler)
+    session = MediaSession(this, "RunJourney-Test-Field-Markers").apply {
+      setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS or MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS)
+      setCallback(object : MediaSession.Callback() {
+        override fun onMediaButtonEvent(intent: Intent): Boolean {
+          @Suppress("DEPRECATION") val event = intent.getParcelableExtra<KeyEvent>(Intent.EXTRA_KEY_EVENT) ?: return false
+          val relevant = event.keyCode in listOf(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE, KeyEvent.KEYCODE_HEADSETHOOK)
+          val decision = keys.admit(relevant, event.action, event.repeatCount, event.deviceId, event.downTime)
+          val data = stamp().put("source", "KEY").put("keyCode", event.keyCode).put("action", event.action)
+            .put("mediaSessionResult", decision).put("mediaSessionHandled", relevant)
+            .put("keyEventTimeAvailable", event.eventTime > 0).put("keyEventUptime", if (event.eventTime > 0) event.eventTime else JSONObject.NULL)
+          audit("MEDIA_SESSION_EVENT", data = data)
+          if (event.action == KeyEvent.ACTION_DOWN) marker(data, decision)
+          return relevant
+        }
+        override fun onPlay() { marker(stamp().put("source", "TRANSPORT_PLAY").put("keyEventTimeAvailable", false)) }
+        override fun onPause() { marker(stamp().put("source", "TRANSPORT_PAUSE").put("keyEventTimeAvailable", false)) }
+      }, handler)
+      setPlaybackState(PlaybackState.Builder().setActions(PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE)
+        .setState(PlaybackState.STATE_PAUSED, 0, 0f).build()); isActive = true
+    }
+    // A single real activation cue establishes the normal local playback session.
+    // No audio focus, silent track or permanent fake PLAYING state.
+    try {
+      player = MediaPlayer().also { p ->
+        p.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+        resources.openRawResourceFd(R.raw.run_notice).use { fd -> p.setDataSource(fd.fileDescriptor, fd.startOffset, fd.length) }
+        fun completed(success: Boolean) { if (player === p) { p.release(); player = null; session?.setPlaybackState(PlaybackState.Builder()
+          .setActions(PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE).setState(PlaybackState.STATE_PAUSED, 0, 0f).build())
+          if (success) ready = true else fail(IllegalStateException("ACTIVATION_CUE_FAILED")) } }
+        p.setOnCompletionListener { completed(true) }; p.setOnErrorListener { _, _, _ -> completed(false); true }
+        p.prepare(); p.start()
+        session?.setPlaybackState(PlaybackState.Builder().setActions(PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE)
+          .setState(PlaybackState.STATE_PLAYING, 0, 1f).build())
+        handler.postDelayed({ completed(false) }, 2000)
+      }
+    } catch (e: Exception) { fail(e) }
+  }
+  private fun marker(data: JSONObject, mediaDecision: String = "ACCEPTED") {
+    received++; lastAt = data.getLong("wall")
+    data.put("runId", SensorDiagnostics.associatedRunId()).put("sensorSessionId", SensorDiagnostics.associatedSessionId())
+      .put("markerSessionId", recording).put("receivedCount", received)
+      .put("mediaSessionResult", data.optString("mediaSessionResult", "TRANSPORT_CALLBACK"))
+    val reason = if (mediaDecision != "ACCEPTED") mediaDecision else acceptanceReason()
+    if (!owns() || reason != "ACCEPTING") {
+      rejected.incrementAndGet(); lastResult = "REJECTED:" + reason
+      val rejection = JSONObject(data.toString()).put("reason", reason).put("receivedCount", received).put("acceptedCount", count).put("rejectedCount", rejected.get())
+      audit("MARKER_REJECTED", data = rejection)
+      if (DiagnosticFeedbackPolicy.rejectedPress(mediaDecision)) feedback("MARKER_FAILED", "press:$received", rejection)
+      try { worker.execute { try { log?.append("REJECTED", rejection) } catch (e: Exception) { fail(e) } } } catch (e: Exception) { fail(e) }
+      return
+    }
+    audit("MARKER_ACCEPT_REQUEST", data = data)
+
+    try { worker.execute {
+      try {
+        // Recheck after queue wait; a stopped sensor cannot silently advance the protocol.
+        if (sessionMode == "protocol" && (!SensorDiagnostics.recording() || sessionCount >= 20)) {
+          rejected.incrementAndGet(); lastResult = "REJECTED:STATE_CHANGED_BEFORE_SAVE"
+          log!!.append("REJECTED", data.put("reason", "STATE_CHANGED_BEFORE_SAVE"))
+          audit("MARKER_REJECTED", data = data)
+          feedback("MARKER_FAILED", "press:" + data.getInt("receivedCount"), data)
+          return@execute
+        }
+        val label = if (sessionMode == "trial") "TEST" else if (sessionMode == "protocol") {
+          if (sessionCount % 2 == 0) "BEGIN" else "END"
+        } else if (sessionCount % 2 == 0) "STOP" else "RESUME"
+        MarkerAcknowledgement.persist(
+          marker = { log!!.append("MARKER", data.put("label", label).put("markerIndex", sessionCount).put("labelSource", "USER_BUTTON_NOT_GPS")) },
+          ack = {
+            if (failNextAck) { failNextAck = false; throw java.io.IOException("SYNTHETIC_MARKER_ACK_FAILURE") }
+            val saved = stamp().put("markerIndex", sessionCount).put("receivedElapsed", data.getLong("elapsed"))
+              .put("timestampMeaning", "ACK_WRITE_STARTED")
+            log!!.append("ACK", saved) // append includes fd.sync().
+            data.put("ackRecordAt", saved.getLong("wall"))
+              .put("savedAt", System.currentTimeMillis()).put("savedElapsed", SystemClock.elapsedRealtime())
+          },
+          saved = {
+            val kind = DiagnosticFeedbackPolicy.savedKind(label, true)
+            if (kind.isNotEmpty()) feedback(kind, "press:" + data.getInt("receivedCount"), JSONObject(data.toString()).put("ackPersisted", true))
+          })
+        if (sessionMode == "protocol") SensorDiagnostics.marker(applicationContext, data)
+        sessionCount++
+        if (owns()) { count = sessionCount; lastLabel = label; lastAt = data.getLong("wall"); lastResult = "SAVED:" + label }
+        audit("MARKER_SAVED",
+          data = JSONObject(data.toString()).put("acceptedCount", sessionCount).put("saveResult", "ACK_PERSISTED"))
+        if (sessionMode == "trial" && sessionCount == 10) handler.post { if (owns()) close("TRIAL_COMPLETED") }
+      } catch (e: Exception) { fail(e) }
+    } } catch (e: Exception) { fail(e) }
+  }
+  private fun close(reason: String) {
+    if (state !in listOf("STARTING", "RECORDING")) { stopSelf(); return }
+    state = "CLOSING"; endReason = reason;
+    audit("MARKER_END_REQUEST", data = JSONObject().put("reason", reason)); ready = false; session?.isActive = false
+    try { worker.execute {
+      try {
+        log?.append("END", stamp().put("reason", reason).put("markerCount", sessionCount)
+          .put("receivedCount", received).put("rejectedCount", rejected.get())
+          .put("complete", reason in listOf("USER_ENDED", "TRIAL_COMPLETED")))
+        audit("MARKER_END", data = JSONObject().put("reason", reason).put("saved", sessionCount), seal = true)
+        if (activeToken == recording) state = if (reason in listOf("USER_ENDED", "TRIAL_COMPLETED")) "SEALED" else "INCOMPLETE"
+        handler.post { if (owns()) stopSelf() }
+      } catch (e: Exception) { fail(e) }
+    } } catch (e: Exception) { fail(e) }
+  }
+  override fun onDestroy() {
+    destroyed = true
+    routeMonitor.stop()
+    handler.removeCallbacksAndMessages(null)
+    if (activeToken == recording) { ready = false; alive = false }
+    session?.isActive = false; session?.release(); session = null
+    player?.release(); player = null
+    getSystemService(AudioManager::class.java).unregisterAudioDeviceCallback(routeWatch)
+    lock?.let { if (it.isHeld) it.release() }
+    if (activeToken == recording && state in listOf("RECORDING", "STARTING")) { state = "INTERRUPTED"; failure = "SERVICE_DESTROYED_NO_END" }
+    audit("MARKER_SERVICE_DESTROYED", data = JSONObject().put("state", state), seal = true)
+    super.onDestroy()
+  }
+  override fun onBind(intent: Intent?): IBinder? = null
+}

@@ -1,8 +1,57 @@
 {
-  "cli": { "version": ">= 16.0.0" },
+  "cli": {
+    "version": ">= 16.0.0"
+  },
   "build": {
-    "development": { "developmentClient": true, "distribution": "internal" },
-    "preview": { "distribution": "internal", "android": { "buildType": "apk" } },
-    "production": {}
+    "sensorTest": {
+      "extends": "sqliteTest",
+      "env": {
+        "RUNJOURNEY_SENSOR_DIAGNOSTICS": "1"
+      },
+      "android": {
+        "gradleCommand": ":app:assembleStandaloneTest -PreactNativeArchitectures=arm64-v8a"
+      }
+    },
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal"
+    },
+    "preview": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "production": {},
+    "paceWorkout": {
+      "extends": "sqliteTest",
+      "env": {
+        "RUNJOURNEY_PACE_ISOLATED": "1"
+      },
+      "android": {
+        "withoutCredentials": true,
+        "gradleCommand": ":app:assemblePaceWorkout",
+        "applicationArchivePath": "android/app/build/outputs/apk/paceWorkout/*.apk"
+      }
+    },
+    "cloudSyncTest": {
+      "extends": "sqliteTest",
+      "env": {
+        "RUNJOURNEY_REQUIRE_CLOUD": "1"
+      }
+    },
+    "sqliteTest": {
+      "env": {
+        "RUNJOURNEY_MARKER_POC": "1"
+      },
+      "distribution": "internal",
+      "environment": "preview",
+      "node": "22.13.1",
+      "android": {
+        "withoutCredentials": true,
+        "gradleCommand": ":app:assembleStandaloneTest",
+        "applicationArchivePath": "android/app/build/outputs/apk/standaloneTest/*.apk"
+      }
+    }
   }
 }

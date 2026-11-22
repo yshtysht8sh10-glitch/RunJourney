@@ -1,0 +1,43 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function owner(uid) { return request.auth != null && request.auth.uid == uid; }
+    match /runjourney/{uid}/pagedRuns/{runId} {
+      allow read: if owner(uid);
+      allow create: if owner(uid) && request.resource.data.keys().hasOnly(['schemaVersion','revision','ownerUid','id','hash','complete','summary'])
+        && request.resource.data.ownerUid == uid && request.resource.data.schemaVersion == 2 && request.resource.data.revision == 1
+        && request.resource.data.id is string && request.resource.data.id.size() > 0 && request.resource.data.id.size() <= 256
+        && request.resource.data.hash.matches('^[0-9a-f]{64}$') && request.resource.data.complete == true
+        && request.resource.data.summary.kind == 'run-summary' && request.resource.data.summary.id == request.resource.data.id
+        && request.resource.data.summary.pointCount is int && request.resource.data.summary.pointCount >= 0;
+      allow update, delete: if false;
+    }
+    match /runjourney/{uid}/pageBlobs/{hash} {
+      allow read: if owner(uid);
+      allow create: if owner(uid) && request.resource.data.keys().hasOnly(['ownerUid','hash','data'])
+        && request.resource.data.ownerUid == uid && request.resource.data.hash == hash && hash.matches('^[0-9a-f]{64}$')
+        && request.resource.data.data is string && request.resource.data.data.size() <= 600000;
+      allow update, delete: if false;
+    }
+    match /runjourney/{uid}/runs/{runId} {
+      allow read: if owner(uid);
+      allow create: if owner(uid)
+        && request.resource.data.keys().hasOnly(['schemaVersion','revision','id','ownerUid','hash','pointCount','chunkCount','complete'])
+        && request.resource.data.ownerUid == uid
+        && request.resource.data.id is string && request.resource.data.id.size() > 0 && request.resource.data.id.size() <= 256
+        && request.resource.data.schemaVersion == 1 && request.resource.data.revision == 1
+        && request.resource.data.hash.matches('^[0-9a-f]{64}$')
+        && request.resource.data.pointCount is int && request.resource.data.pointCount >= 0
+        && request.resource.data.chunkCount is int && request.resource.data.chunkCount > 0 && request.resource.data.chunkCount <= 820
+        && request.resource.data.complete == true;
+      allow update, delete: if false;
+    }
+    match /runjourney/{uid}/payloads/{chunkId} {
+      allow read: if owner(uid);
+      allow create: if owner(uid) && request.resource.data.keys().hasOnly(['ownerUid', 'data'])
+        && request.resource.data.ownerUid == uid && request.resource.data.data is string
+        && request.resource.data.data.size() <= 256000;
+      allow update, delete: if false;
+    }
+  }
+}

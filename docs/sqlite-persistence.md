@@ -1,0 +1,60 @@
+# SQLite正式基盤：設計と導入ゲート
+
+v16の独立ファイル方式は撤回し、実機導入禁止。救出専用v15とPC原本は変更しない。
+
+## 現行意味論
+
+RunRecordのpointsは保存されたGPS、eventsはsensor/userのRUNNING/AUTO_STOP/BREAK。confirmedAtは検知確定時刻、timestampは有効開始時刻であり両方を保持する。取得観測すべてではなく既存GPSゲートを通過したpointsが従来のRaw GPS正本。受信頻度やゲートは変更しない。distanceMetersは従来保存値で、Effective Runは元points/events、stopOverrides、recoveryから既存純粋関数で導出する。recoveryは元eventsを置き換えない。BREAKはuserイベントでありGPSから推測しない。createdAt/updatedAtの空文字・任意拡張フィールドも保持する。
+
+旧run_operationsテーブルは存在せず、stopOverridesとrecoveryがRunRecord内にある。SQLiteではこれをrun_operationsとして独立管理する。trashはtrashedAt、終了済みdraftはendedAtを持つ保存待ちActiveRunである。通常STARTはdraftを先に保存し、STOPはendedAtを凍結後に確定する。START後のGPS/音声起動失敗では、既に保存したdraftを削除せず再開可能にする。GPS/イベント検知はRepository経由。画面の一覧・詳細、補正、バックアップは従来全履歴JSONへアクセスしていた。
+
+## スキーマv1
+
+新DBはrunjourney.sqlite。RKStorageもv16ファイルも開かない。runsにID、startedAt、endedAt、distance、trash、draft/completed、一覧用Effective値。GPSはgps_points（不変payload）、表示順はgps_order、元イベントはrun_events、補正はrun_operations、未知メタデータはrun_metadata、Diagnosticsはrun_diagnosticsに分離。大きいメタデータ・操作・Diagnosticsは8192文字単位のチャンクで保存し、GPS/元イベントの単一行にもサイズ上限を設ける。巨大な全履歴単一行を作らない。
+
+GPS更新/直接削除は禁止トリガー。走行の明示的完全削除のみ関連行を削除できる。救出移行した23件とdraftにはprotectedフラグを付け、自動trash期限削除から保護する。形式v2バックアップでもprotectedIdsを保持する。既存GPS値の変更・欠落は保存を拒否する。取得後の順序変更はGPS payload変更と分離する。保存確定後の元イベントも書き換えない。補正操作は元イベントへ混在させない。
+
+DBアクセスは永続化層へ集約。全操作を単一キューで直列化し、複合書き込みはBEGIN IMMEDIATE/COMMIT、失敗時ROLLBACK。foreign_keys、WAL、synchronous=FULL。user_versionの未来版は書かず拒否、初期DDLとuser_versionを同じトランザクションで確定する。既存DBの自動削除・修復は行わない。
+
+STARTはdraft作成を確定してからGPS起動。STOPの保存待ちendedAtは先に永続化し、その後completed化とdraftポインタ解除を一つのトランザクションにする。履歴追加時に全履歴は読まない。同IDの再試行は既存確定値を優先。Import/Restoreは新IDのみ追加し、既存IDを上書きしない。複数走行の復元は一括トランザクションでロールバック可能にする。
+
+## 救出移行ルール
+
+原本値・manifestのハッシュを確認し、PCの新規DBだけへ移行する。23履歴のtrashを含む全状態を保持する。終了済みdraftは自動確定しない。historyのIDと一致しなければended-draftとして保持し、後日の明示操作で従来STOP確定経路を使用できる。IDが一致する場合は値の一致を検証し、衝突なら停止。距離・終了時刻の再計算や推測補完をしない。
+
+## Diagnostics
+
+コアデータと別テーブル。新規計測は既存上限（entries720/trace4096）を継続し、保存バイト上限4MiB/走行を設ける。通常の上限超過は件数警告マーカーへ置換する。コア保存後に別トランザクションでDiagnosticsを保存し、失敗は警告として扱いコアを巻き戻さない。移行・Importは原値を保持し超過をエラーとして報告する。completedのDiagnosticsは任意の手動maintenanceで30日超を削除でき、Raw GPS/events/operations/resultsは残す。起動時に自動削除しない。データ容量・削除件数を返す。
+
+## バックアップと実機ゲート
+
+整合したDBトランザクションの論理スナップショットを形式v2として取得し、履歴・draft・設定を含むcanonical JSONのSHA-256を付す。生DBファイルだけのコピーをしないのでWALの未checkpointコミットも読める。復元前のハッシュ・全値検証、既存ID衝突確認を行い、原本/既存記録は上書きしない。旧v1 Export互換は明示Importのみとする。救出データの実機復元は承認まで実装済みでも実行禁止。
+
+導入時はPC原本再照合→新APK署名/ID/version照合→新SQLiteを別名で配置/復元（追加承認）→短い計測/保存/再起動→原旧DB不変確認。失敗時はRUNを開始せず停止し、新DBとログを別保存する。アンインストール/データ消去/旧DB書き戻しは禁止。Androidのversion downgradeを前提にしない。救出画面へ戻す必要がある場合は同署名・より大きいversionCodeの救出APKを別承認で準備する。
+
+
+## 最終PC検証と旅行前の最小構成
+
+Jest 27スイート240件、ネイティブSQLite 13件が成功。ネイティブ試験はNode22のsqlite3を使い、アプリと同じTypeScript SQLコードを実行した。1/100/1000/10000履歴、50000GPS、大容量拡張メタデータ、GPS不変トリガー、START/RUN/STOP途中の実プロセス強制終了、SQLITE_FULL、query_only書き込み失敗、schema失敗ロールバック、未来version拒否、更新版起動失敗、WALを含む論理バックアップ、checksum拒否、復元途中失敗、再復元、既存ID優先、個別破損の隔離、Diagnostics削除/書き込み失敗を確認。AndroidのPackageManagerによるAPK更新失敗そのものは実機未実施であり、PCでの更新版初期化失敗とは区別する。
+
+実際の救出23件＋終了済みdraftをネイティブSQLiteへ移行し、全値とEffective距離/時間を照合した。保存済みGPS4607点/イベント41件、draftGPS17点/イベント2件を保持。旧Export19件の全GPS/元イベントは一致し、17件は全フィールド一致、残り2件は救出時点のtrash/recovery情報の差。移行による新規差分はない。終了済みdraftを明示確定するPC試験も成功し、元23件とdraftのGPS/イベント/距離/終了日時を保持して24履歴になり、新規STARTが可能になった。実機でのこの確定は自動実行せず別途承認が必要。
+
+Expo lint/TypeScript typecheckとAndroid JS/Hermesバンドル生成、prebuildが成功。Expo SDK57の[SQLite資料](https://docs.expo.dev/versions/v57.0.0/sdk/sqlite/)に対応するexpo-sqliteを使用。Android Autolinkingはexpo-sqliteを含み、AsyncStorageと旧v16保存モジュールを含まない。expo-sqliteのAndroid実装はNativeDatabaseBindingのsqlite3_open/step/column呼び出しであり、AsyncStorageのCursorWindow経路を使わない。さらにpayloadを32KiB以内に制限している。共有ファイルAPIはSDK57にインストールされたFile.types.tsのoverwriteオプションと型チェックで確認（公式FileSystemページの取得はツールエラー/403）。
+
+Standalone TestビルドはEAS sqliteTestプロファイル、versionCode17。同署名を生成済みdebug.keystoreから使用する構成で、完成APKのID/version/cert/DEX/ハッシュを別途検証する。実機導入・復元・新規RUNはこの作業では行わない。
+
+スマホ単体のバックアップは「Export / Import」のBackup JSON Exportから形式v2を共有/保存する。履歴・trash・draft・設定・保護フラグを含み、SHA-256を検証できる。ファイル名にはUUIDを付け、既存cache Exportを上書きしない。共有先のアプリと保存先はユーザーが選ぶ。原本DBのファイルコピーではないのでWALのcheckpointは不要。作成時は全データをメモリでシリアライズするため、大量データでのメモリ制約が残る。現在のImport画面は50MiBを超えるファイルを拒否する。今回の移行バックアップは約2.18MiBでこの範囲内。より大きいバックアップのストリーム方式は将来の改善対象であり、無制限の復元能力を保証しない。
+
+## 実機導入チェックリスト（全操作は承認後）
+
+1. 対象SO-51B/QV782FZB8R、Test v15、RUN停止、容量、PC原本ハッシュを再確認。Productionは操作しない。
+2. APKのSHA-256、app.runjourney.mobile.test、versionCode17、証明書fa:c6:...:3b:9cを照合。install -rのみを使い、失敗時に他の方法へ切り替えない。
+3. 通常アプリを起動。旧RKStorageにアクセスせず新runjourney.sqliteを作る。自動移行はしない。
+4. この作業で生成・照合済みのsqlite-backup-v2.jsonだけを新規の端末共有領域へ転送（別承認）。旧19件Exportは使わない。
+5. Import Previewで23履歴＋draft1件、SHA-256検証済みであることを確認して明示復元（別承認）。ID衝突時は停止。旧DBは触らない。
+6. 端末から形式v2バックアップを書き出し、PCで全24対象（23履歴＋保存待ちdraft）の意味・値を照合する。復元/初期化を独断で再試行しない。
+7. 終了済みdraftの確定を別承認で実施し、元23件とdraftのRaw GPS/イベントが不変、履歴24件/draft0件を検証。
+8. 短い実機RUN/STOP、再起動後の保存履歴復元、再バックアップ、Raw GPSとID/重複を確認（別承認）。GPS/画面OFF/音声/権限も実機確認が必要。
+9. 合格後に旅行中の運用可否を判断。スマホの共有先と外部保管先を事前に確認し、計測後に手動バックアップを取れる状態にする。
+
+異常時はRUNを止め、追加書き込み・復元・修復・削除を実施せず、新SQLiteとログを別領域へ保全して報告。PC原本と旧RKStorageへ戻し書きしない。SQLiteの元DBを消すことで救出画面へ戻る方法は使わない。UI救出が必要なら同署名・より高versionCodeの救出専用APKを別承認で準備する。未保存RAMや実機固有のI/O/OS挙動、電源断、将来のOS更新はPC試験では保証できない。

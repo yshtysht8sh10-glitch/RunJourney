@@ -1,9 +1,8 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { connection } from '@/test/native-driver';
+import AsyncStorage from '@/test/sqlite-fixture';
 import { RunRepository } from '@/repositories/run-repository';
 import { RunRecord } from '@/types/run';
 import { TRASH_RETENTION_MS as retention } from '@/utils/run-trash';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-jest.mock('@react-native-async-storage/async-storage', () => require('@react-native-async-storage/async-storage/jest/async-storage-mock'));
 const key = '@runjourney/runs/v1';
 const now = 1800000000000;
 const original: RunRecord = { id: 'a', startedAt: new Date(0).toISOString(), endedAt: new Date(20000).toISOString(), createdAt: '', updatedAt: '', distanceMeters: 12,
@@ -43,7 +42,7 @@ test('multiple expiry, empty state input, expired restore refusal, and automatic
   await seed(['b', 'c'].map(id => ({ ...original, id, trashedAt: now - retention })));
   expect(await RunRepository.getTrashedRuns()).toEqual([]);
   await expect(RunRepository.restoreFromTrash('b')).rejects.toThrow();
-  expect(await AsyncStorage.getItem(key)).toBe('[]');
+  expect(await AsyncStorage.getItem(key)).toBeNull();
 });
 test('manual deletion refuses active history, affects only selected trash, and is idempotent', async () => {
   await seed([original, { ...original, id: 'b', trashedAt: now }, { ...original, id: 'c', trashedAt: now }]);
@@ -54,21 +53,23 @@ test('manual deletion refuses active history, affects only selected trash, and i
 });
 test('current run remains isolated and serialized moves/restores cannot lose other updates', async () => {
   const { endedAt: _endedAt, ...draft } = original;
-  await RunRepository.saveActiveRun(draft);
+  await RunRepository.saveActiveRun({ ...draft, id: 'separate-draft' });
   await expect(RunRepository.moveToTrash('a')).rejects.toThrow();
   await seed([original, { ...original, id: 'b' }]);
   await Promise.all([RunRepository.moveToTrash('a'), RunRepository.moveToTrash('b'), RunRepository.purgeExpiredTrash(now)]);
   expect(await RunRepository.getTrashedRuns()).toHaveLength(2);
   await Promise.all([RunRepository.restoreFromTrash('a'), RunRepository.deletePermanently('b')]);
   expect(await RunRepository.getRuns()).toEqual([original]);
-  expect(await RunRepository.getActiveRun()).toEqual(draft);
+  expect(await RunRepository.getActiveRun()).toEqual({ ...draft, id: 'separate-draft' });
 });
-test.each(['invalid', '{}', '[null]'])('corrupt storage fails closed without rewriting: %s', async stored => {
-  await AsyncStorage.setItem(key, stored);
-  await expect(RunRepository.purgeExpiredTrash(now)).rejects.toThrow();
+test.each(['invalid', '{}', '[null]'])('corrupt individual metadata fails closed without rewriting: %s', async stored => {
+  await seed([original]);
+  await connection.runAsync('UPDATE run_metadata SET payload=? WHERE run_id=?', stored, 'a');
+  await expect(RunRepository.getRun('a')).rejects.toThrow();
   await expect(RunRepository.moveToTrash('a')).rejects.toThrow();
-  expect(await AsyncStorage.getItem(key)).toBe(stored);
+  expect((await connection.getAllAsync<{payload:string}>('SELECT payload FROM run_metadata WHERE run_id=?','a'))[0].payload).toBe(stored);
 });
+
 test('invalid trash timestamps never cause automatic destruction', async () => {
   await seed([{ ...original, trashedAt: -1 }]);
   expect(await RunRepository.purgeExpiredTrash(now)).toBe(0);

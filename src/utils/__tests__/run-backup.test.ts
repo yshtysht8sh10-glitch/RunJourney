@@ -1,12 +1,11 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { connection, injectFault, trace } from '@/test/native-driver';
+import AsyncStorage from '@/test/sqlite-fixture';
 import { RunRepository } from '@/repositories/run-repository';
 import { RunRecord } from '@/types/run';
 import { BACKUP_FORMAT, exportFilename, parseBackup, previewImport, serializeBackup } from '@/utils/run-backup';
 import { serializeAnalysis } from '@/utils/run-analysis-export';
 import { effectiveRun } from '@/utils/run-model';
 import { TRASH_RETENTION_MS } from '@/utils/run-trash';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-jest.mock('@react-native-async-storage/async-storage', () => require('@react-native-async-storage/async-storage/jest/async-storage-mock'));
 const key = '@runjourney/runs/v1', activeKey = '@runjourney/active-run/v1', settingsKey = '@runjourney/run-features/v1';
 const run: RunRecord = { id: 'stable', startedAt: new Date(0).toISOString(), endedAt: new Date(610000).toISOString(), createdAt: '', updatedAt: '', distanceMeters: 5,
   points: Array.from({ length: 123 }, (_, i) => ({ latitude: 35 + i * .0001, longitude: 139, timestamp: i * 5000, accuracy: 5, altitude: -1, speed: 2 })),
@@ -49,10 +48,10 @@ test('rejects oversized/deep structures and dangerous extension keys', () => {
   expect(() => parseBackup(backup([JSON.parse(JSON.stringify(run).replace('"stable"', '"stable","__proto__":{}'))]))).toThrow();
 });
 test('preview is read-only, stable-ID duplicate detection includes internal duplicates and distinct IDs with same dates', async () => {
-  await AsyncStorage.setItem(key, backup());
+  await AsyncStorage.setItem(key, JSON.stringify([run]));
   const result = previewImport([run, run, { ...run, id: 'other', trashedAt: 1 }], []);
   expect(result.additions).toHaveLength(2); expect(result.duplicates).toBe(1); expect(result.trash).toBe(1);
-  expect(result.oldest).toBe(0); expect(await AsyncStorage.getItem(key)).toBe(backup());
+  expect(result.oldest).toBe(0); expect(JSON.parse((await AsyncStorage.getItem(key))!)).toEqual([run]);
 });
 test.each([undefined, 1])('existing lifecycle wins even if incoming lifecycle differs: %s', async trashedAt => {
   const existing = { ...run, trashedAt };
@@ -63,35 +62,36 @@ test.each([undefined, 1])('existing lifecycle wins even if incoming lifecycle di
 });
 test('single additive commit, repeated import adds zero; expired trash preserves date until normal purge', async () => {
   await AsyncStorage.setItem(key, JSON.stringify([run]));
-  await AsyncStorage.setItem(activeKey, JSON.stringify({ id: 'in-progress' }));
+  await AsyncStorage.setItem(activeKey, JSON.stringify({ ...run, id: 'in-progress', endedAt: undefined }));
   await AsyncStorage.setItem(settingsKey, 'settings');
   const incoming = [{ ...run, id: 'new' }, { ...run, id: 'trash', trashedAt: Date.now() }, { ...run, id: 'expired', trashedAt: Date.now() - TRASH_RETENTION_MS }];
-  const write = jest.spyOn(AsyncStorage, 'setItem'); write.mockClear();
+  trace.length = 0;
   expect(await RunRepository.importRuns(incoming)).toEqual({ added: 3, skipped: 0 });
-  expect(write).toHaveBeenCalledTimes(1); expect(write.mock.calls[0][0]).toBe(key);
+  expect(trace.filter(sql => sql === 'COMMIT')).toHaveLength(1);
   expect(await RunRepository.getBackupRuns()).toEqual([run, ...incoming]);
   expect(await RunRepository.importRuns(incoming)).toEqual({ added: 0, skipped: 3 });
   expect((await RunRepository.getRuns()).map(r => r.id)).toEqual(['stable', 'new']);
   expect((await RunRepository.getTrashedRuns()).map(r => r.id)).toEqual(['trash']);
-  expect(await AsyncStorage.getItem(activeKey)).toBe(JSON.stringify({ id: 'in-progress' }));
+  expect(JSON.parse((await AsyncStorage.getItem(activeKey))!)).toEqual(JSON.parse(JSON.stringify({ ...run, id: 'in-progress', endedAt: undefined })));
   expect(await AsyncStorage.getItem(settingsKey)).toBe('settings');
 });
 test('read-only export snapshot never purges trash', async () => {
   const stored = JSON.stringify([{ ...run, trashedAt: 0 }]); await AsyncStorage.setItem(key, stored);
-  expect(await RunRepository.getBackupRuns()).toHaveLength(1); expect(await AsyncStorage.getItem(key)).toBe(stored);
+  expect(await RunRepository.getBackupRuns()).toHaveLength(1); expect(JSON.parse((await AsyncStorage.getItem(key))!)).toEqual(JSON.parse(stored));
 });
 test('all validation precedes write; failure, corrupt existing storage and active ID collision leave all data intact', async () => {
   await AsyncStorage.setItem(key, JSON.stringify([run])); const before = await AsyncStorage.getItem(key);
   expect(() => RunRepository.importRuns([{ ...run, id: 'valid' }, { ...run, distanceMeters: -1 }])).toThrow();
   expect(await AsyncStorage.getItem(key)).toBe(before);
-  jest.spyOn(AsyncStorage, 'setItem').mockRejectedValueOnce(new Error('disk full'));
+  let failed = false; injectFault(sql => { if (!failed && sql.startsWith('INSERT INTO runs')) { failed = true; throw new Error('disk full'); } });
   await expect(RunRepository.importRuns([{ ...run, id: 'new' }])).rejects.toThrow('disk full');
   expect(await AsyncStorage.getItem(key)).toBe(before);
-  await AsyncStorage.setItem(activeKey, JSON.stringify({ id: 'new' }));
+  await AsyncStorage.setItem(activeKey, JSON.stringify({ ...run, id: 'new', endedAt: undefined }));
   await expect(RunRepository.importRuns([{ ...run, id: 'new' }])).rejects.toThrow('進行中');
   expect(await AsyncStorage.getItem(key)).toBe(before);
-  await AsyncStorage.setItem(key, 'corrupt');
-  await expect(RunRepository.importRuns([run])).rejects.toThrow(); expect(await AsyncStorage.getItem(key)).toBe('corrupt');
+  await connection.runAsync('UPDATE run_metadata SET payload=? WHERE run_id=?', 'corrupt', run.id);
+  await expect(RunRepository.getRun(run.id)).rejects.toThrow();
+  expect(await RunRepository.importRuns([{ ...run, id: 'independent' }])).toEqual({ added: 1, skipped: 0 });
 });
 test('concurrent queued imports recheck duplicates and cannot lose updates', async () => {
   const results = await Promise.all([RunRepository.importRuns([run]), RunRepository.importRuns([run, { ...run, id: 'other' }])]);

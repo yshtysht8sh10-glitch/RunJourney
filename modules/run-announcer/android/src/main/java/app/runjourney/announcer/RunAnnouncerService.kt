@@ -9,6 +9,10 @@ import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.media.MediaPlayer
+import android.media.AudioDeviceInfo
+import android.os.Bundle
+import java.io.File
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -18,21 +22,447 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import java.util.Locale
+import org.json.JSONObject
+import org.json.JSONArray
 
 class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   companion object {
+    const val ACTION_BATCH = "app.runjourney.announcer.BATCH"
     const val ACTION_START = "app.runjourney.announcer.START"
     const val ACTION_TEST = "app.runjourney.announcer.TEST"
+    const val ACTION_WORKOUT = "app.runjourney.announcer.WORKOUT"
+    const val ACTION_DIAGNOSTIC_FEEDBACK = "app.runjourney.announcer.TEST_DIAGNOSTIC_FEEDBACK"
     const val PREFS = "runjourney-announcer"
     private const val CHANNEL = "runjourney-voice"
     private const val TAG = "RunAnnouncer"
+    @Volatile internal var stopRunning: (() -> Unit)? = null
   }
 
   private val handler = Handler(Looper.getMainLooper())
   private var tts: TextToSpeech? = null
   private var ready = false
+  private var initFailed = false
   private var speaking = false
-  private val messages = java.util.ArrayDeque<String>()
+  private var lastSpeechAt = 0L
+  private var pendingWorkout: Pair<String, Long>? = null
+  private val messages = mutableListOf<JSONObject>()
+  private var currentNotice: JSONObject? = null
+  private var lastPriority = 0
+  private var batchMode = false
+  private var batchRunId = ""
+  private var goalRevision = ""
+  private var goalRevisionIndex = -1
+  private var cueContext: JSONObject? = null
+  private var cuePreviewUntil = 0L
+  private var candidateCancelled = false
+  private var batchState = "RUNNING"
+  private var latestEventIndex = -1
+  private var ended = false
+  private var chime: MediaPlayer? = null
+  private var chimeActive = false
+  private var recovery: JSONObject? = null
+  private val defaultPaceLedger by lazy { PacePeriodicLedger(this) }
+  private var paceLedgerOverride:PacePeriodicLedger?=null // Storage-failure fixture seam.
+  private val paceLedger get()=paceLedgerOverride ?: defaultPaceLedger
+  private var pacePersistenceBlocked=false
+  private var paceDesiredSchedule:JSONObject?=null
+  private var paceCancellationSchedule:JSONObject?=null
+  private var pacePendingEnd:String?=null
+  private val paceTerminalIds=mutableSetOf<String>() // At most the 32 persisted pending slots.
+  private var pacePersistenceRetry=false
+  private var pacePersistenceFailures=0
+  private var paceRecoveryNeeded=true
+  private var pacePendingBody:String?=null
+  private fun paceStorageAudit(status:String) = audit(JSONObject().put("id","$batchRunId:pace-storage").put("type","PACE_STORAGE")
+    .put("data",JSONObject().put("runId",batchRunId).put("terminalPending",paceTerminalIds.size)),status)
+  private fun flushPacePersistence():Boolean {
+    try {
+      if(paceRecoveryNeeded) {
+        val unknown=paceLedger.recoverUnknown() ?: return pacePersistenceFailed("UNKNOWN_COMPLETION_PERSIST_FAILED")
+        unknown.forEach{audit(it,"UNKNOWN_COMPLETION")}
+        paceRecoveryNeeded=false
+      }
+      val cancellation=paceCancellationSchedule
+      if(cancellation!=null && !paceLedger.configure(cancellation,System.currentTimeMillis())) return pacePersistenceFailed("CONFIG_CANCEL_PERSIST_FAILED")
+      paceCancellationSchedule=null
+      val schedule=paceDesiredSchedule
+      if(schedule!=null && !paceLedger.configure(schedule,System.currentTimeMillis())) return pacePersistenceFailed("CONFIG_PERSIST_FAILED")
+      paceDesiredSchedule=null
+      val finish=pacePendingEnd
+      if(finish!=null && !paceLedger.end(finish)) return pacePersistenceFailed("END_PERSIST_FAILED")
+      pacePendingEnd=null
+      val body=pacePendingBody
+      if(body!=null && !paceLedger.bodyRequested(body,System.currentTimeMillis()))return pacePersistenceFailed("BODY_ATTEMPT_PERSIST_FAILED")
+      pacePendingBody=null
+      for(id in paceTerminalIds.toList()) {
+        if(!paceLedger.complete(id)) return pacePersistenceFailed("TERMINAL_PERSIST_FAILED")
+        paceTerminalIds.remove(id)
+      }
+      if(pacePersistenceBlocked) paceStorageAudit("PERSISTENCE_RECOVERED")
+      pacePersistenceBlocked=false;pacePersistenceFailures=0
+      return true
+    } catch (_:Exception) { return pacePersistenceFailed("LEDGER_IO_FAILED") }
+  }
+  private fun pacePersistenceFailed(reason:String):Boolean {
+    pacePersistenceBlocked=true;paceStorageAudit(reason)
+    if(!pacePersistenceRetry) {
+      pacePersistenceRetry=true
+      val delay=2000L * (1L shl pacePersistenceFailures.coerceAtMost(4));pacePersistenceFailures++
+      handler.postDelayed({
+        pacePersistenceRetry=false
+        if(flushPacePersistence()) { restorePace();speakNext() }
+      },delay)
+    }
+    return false
+  }
+  private fun periodic(n: JSONObject) = n.optJSONObject("data")?.optJSONObject("pacePeriodicSnapshot") != null
+  private fun waitingPeriodic(n: JSONObject) = periodic(n) || n.optString("type") == "CURRENT_TIME"
+  private fun legacyInformation(n: JSONObject) = VoicePolicy.information(n.optString("type")) && !periodic(n)
+  private fun requeuePeriodic(n: JSONObject) {
+    if (n.optString("type")=="CURRENT_TIME" && messages.any{it.optString("type")=="CURRENT_TIME"}) {
+      retireClock(n,"MERGED_NEW_CLOCK_BOUNDARY"); return
+    }
+    n.remove("startedAt"); messages.add(n)
+  }
+  private fun preparePaceBody(notice:JSONObject):Boolean {
+    if(!periodic(notice))return true
+    pacePendingBody=notice.optString("id")
+    if(!flushPacePersistence()) {
+      audit(notice,"BODY_BLOCKED_PERSISTENCE")
+      requeuePeriodic(notice);tts?.stop();clearAdaptive();currentNotice=null;speaking=false;releaseFocus();return false
+    }
+    return validInState(notice)
+  }
+  private fun restorePace() {
+    if(pacePersistenceBlocked)return
+    val ids = messages.map { it.optString("id") } + listOfNotNull(currentNotice?.optString("id"))
+    paceLedger.pending(batchRunId).filter { it.optString("id") !in ids && it.optString("id") !in paceTerminalIds }.forEach { messages.add(it) }
+  }
+  private fun restoreClock() {
+    if(clockBlocked)return
+    val n=try{clockLedger.pending(batchRunId)}catch(_:Exception){clockFailure("CLOCK_LEDGER_IO_FAILED");return}
+    messages.toList().filter{it.optString("type")=="CURRENT_TIME" && it.optString("id")!=n?.optString("id")}.forEach{messages.remove(it);retireClock(it,"MERGED_OR_CANCELLED_CLOCK")}
+    if(clockBlocked)return
+    if(n!=null && !ended && n.optString("id") !in clockTerminalIds && messages.none{it.optString("id")==n.optString("id")} && currentNotice?.optString("id")!=n.optString("id"))messages.add(n)
+  }
+  private val defaultClockLedger by lazy{ClockPeriodicLedger(this)}
+  private var clockLedgerOverride:ClockPeriodicLedger?=null
+  private val clockLedger get()=clockLedgerOverride ?: defaultClockLedger
+  private var clockBlocked=false
+  private var clockRecoveryNeeded=true
+  private var clockDesiredConfig:Pair<String,JSONObject>?=null
+  private var clockCancellationConfig:Pair<String,JSONObject>?=null
+  private var clockReceipt:Pair<Long,JSONObject>?=null
+  private var clockPendingEnd:String?=null
+  private var clockBody:JSONObject?=null
+  private val clockTerminalIds=mutableSetOf<String>()
+  private fun retireClock(notice:JSONObject,reason:String) {
+    val id=notice.optString("id")
+    if(clockBody?.optString("id")==id)clockBody=null
+    clockTerminalIds.add(id);audit(notice,reason);flushClock()
+  }
+  private var clockRetry=false
+  private var clockFailures=0
+  private fun clockFailure(reason:String):Boolean {
+    clockBlocked=true
+    audit(JSONObject().put("id","$batchRunId:clock-storage").put("type","CLOCK_STORAGE").put("data",JSONObject().put("runId",batchRunId)),reason)
+    if(!clockRetry){clockRetry=true;val delay=2000L*(1L shl clockFailures.coerceAtMost(4));clockFailures++
+      handler.postDelayed({clockRetry=false;if(flushClock()){restoreClock();speakNext()}},delay)}
+    return false
+  }
+  private fun flushClock():Boolean {
+    try {
+      if(clockRecoveryNeeded){val recovered=clockLedger.recoverUnknown();if(!recovered.first)return clockFailure("CLOCK_UNKNOWN_PERSIST_FAILED");recovered.second?.let{audit(it,"UNKNOWN_COMPLETION")};clockRecoveryNeeded=false}
+      clockCancellationConfig?.let{if(!clockLedger.configure(it.first,it.second,System.currentTimeMillis()))return clockFailure("CLOCK_CANCEL_CONFIG_PERSIST_FAILED")};clockCancellationConfig=null
+      clockDesiredConfig?.let{if(!clockLedger.configure(it.first,it.second,System.currentTimeMillis()))return clockFailure("CLOCK_CONFIG_PERSIST_FAILED")};clockDesiredConfig=null
+      clockPendingEnd?.let{if(!clockLedger.end(it))return clockFailure("CLOCK_CANCEL_PERSIST_FAILED")};clockPendingEnd=null
+      clockReceipt?.let{if(!clockLedger.receive(it.first,it.second))return clockFailure("CLOCK_RECEIPT_PERSIST_FAILED")};clockReceipt=null
+      clockBody?.let{if(!clockLedger.bodyRequested(it.optString("id"),System.currentTimeMillis(),it))return clockFailure("CLOCK_BODY_PERSIST_FAILED")};clockBody=null
+      for(id in clockTerminalIds.toList()){if(!clockLedger.complete(id))return clockFailure("CLOCK_TERMINAL_PERSIST_FAILED");clockTerminalIds.remove(id)}
+      clockBlocked=false;clockFailures=0;return true
+    }catch(_:Exception){return clockFailure("CLOCK_LEDGER_IO_FAILED")}
+  }
+  private fun prepareClockBody(notice:JSONObject):Boolean {
+    if(notice.optString("type")!="CURRENT_TIME")return true
+    clockBody=JSONObject(notice.toString())
+    if(flushClock())return true
+    requeuePeriodic(notice);tts?.stop();clearAdaptive();currentNotice=null;speaking=false;releaseFocus();return false
+  }
+  private val clockTick = object : Runnable {
+    override fun run() {
+      val clock=try{clockLedger.snapshot()}catch(_:Exception){clockFailure("CLOCK_LEDGER_IO_FAILED");handler.postDelayed(this,1000);return}
+      if (ended) return
+      if(clockBlocked || !clock.optBoolean("enabled")){handler.postDelayed(this,1000);return}
+      val now = System.currentTimeMillis()
+      val due = CurrentTimePolicy.boundary(clock.optLong("startedAt"), now, clock.optInt("minutes",10))
+      val previousBoundary = clock.optLong("boundary")
+      if (due > previousBoundary) {
+        val n = JSONObject().put("id", "$batchRunId:clock:$due").put("type", "CURRENT_TIME").put("priority", 30)
+          .put("message", "CURRENT_TIME_AT_PLAYBACK").put("generatedAt", now).put("expiresAt", Long.MAX_VALUE).put("nativeQueuedAt", now)
+          .put("data", JSONObject().put("runId", batchRunId).put("sampledAt", now)
+            .put("scheduledAt", clock.optLong("startedAt")+due*clock.optInt("minutes",10)*60000L)
+            .put("intervalMinutes", clock.optInt("minutes",10)).put("skippedBoundaries", due-previousBoundary-1)
+            .put("state", batchState).put("competingType", currentNotice?.optString("type") ?: "")
+            .put("queueSize", messages.size))
+        audit(n, "GENERATED")
+        clockReceipt=due to n
+        if(flushClock()){restoreClock();audit(n,"QUEUED");speakNext()}
+      }
+      handler.postDelayed(this, 1000)
+    }
+  }
+  private var adaptivePlayer: MediaPlayer? = null
+  private var speechFile: File? = null
+  private var adaptiveGain = 1f
+  private var lastAudioAuditAt = 0L
+  private var lastAudioRoute = -1
+  private var lastAudioGain = -1f
+  private val volumeTick = object : Runnable {
+    override fun run() {
+      val player = adaptivePlayer ?: return
+      try {
+        val route = player.routedDevice?.type ?: 0
+        NoiseState.outputType = route
+        NoiseState.externalOutput = route in listOf(AudioDeviceInfo.TYPE_WIRED_HEADPHONES, AudioDeviceInfo.TYPE_WIRED_HEADSET,
+          AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, AudioDeviceInfo.TYPE_USB_HEADSET, AudioDeviceInfo.TYPE_BLE_HEADSET)
+        val gain = if (NoiseState.available()) NoiseState.gain.coerceIn(.65f, 1f) else 1f
+        adaptiveGain = gain.coerceIn(adaptiveGain - .1f, adaptiveGain + .1f).coerceIn(.65f, 1f)
+        player.setVolume(adaptiveGain, adaptiveGain)
+        val now = System.currentTimeMillis()
+        if (route != lastAudioRoute || kotlin.math.abs(adaptiveGain - lastAudioGain) >= .05f || now - lastAudioAuditAt >= 5000) {
+          lastAudioAuditAt = now; lastAudioRoute = route; lastAudioGain = adaptiveGain
+          currentNotice?.let { audit(it, "ADAPTIVE_APPLIED") }
+        }
+        handler.postDelayed(this, 200)
+      } catch (_: Exception) { currentNotice?.let { finishUtterance("ADAPTIVE_VOLUME_ERROR") } }
+    }
+  }
+  private fun clearAdaptive() {
+    handler.removeCallbacks(volumeTick)
+    adaptivePlayer?.release(); adaptivePlayer = null
+    speechFile?.delete(); speechFile = null
+    NoiseState.playback = false; NoiseState.externalOutput = false; NoiseState.outputType = 0
+  }
+  private val debugPrefs by lazy { getSharedPreferences("runjourney-voice-debug", 0) }
+  private val seen by lazy {
+    val stored = JSONArray(debugPrefs.getString("seen", "[]"))
+    (0 until stored.length()).map { stored.getString(it) }.toMutableList()
+  }
+
+  private fun audit(n: JSONObject, status: String) {
+    try {
+      val now = System.currentTimeMillis()
+      if (status == "STARTED" && n.optString("type") == "PACE_WARNING") {
+        val data = n.optJSONObject("data")
+        val sample = data?.optJSONObject("paceSample")
+        if (sample != null && !data.optBoolean("simulation", false)) {
+          preferences.edit().putString("paceAnnouncementBaseline", sample.toString()).apply()
+        }
+      }
+      val record = JSONObject(n.toString()).put("status", status).put("loggedAt", now)
+      if (n.has("nativeQueuedAt")) record.put("queueWaitMs", (n.optLong("startedAt", now) - n.optLong("nativeQueuedAt")).coerceAtLeast(0))
+      val adaptive = n.optString("playbackMode") == "adaptive-local-synthesis"
+      record.put("audio", NoiseState.snapshot(this).put("adaptiveApplied", adaptive)
+        .put("appliedGain", if(adaptive) adaptiveGain else JSONObject.NULL)
+        .put("requestedGain", if(adaptive) adaptiveGain else n.optDouble("directRequestedGain", 1.0))
+        .put("outputLoudnessMeasured", false)
+        .put("gainCeilingReached", adaptive && adaptiveGain >= .99f)
+        .put("relativeToQuiet", if(adaptive) adaptiveGain / .65f else JSONObject.NULL)
+        .put("exceedsNormalPlayback", false)
+        .put("streamAtMaximum", audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) >= audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC))
+        .put("adaptiveFallback", n.optString("adaptiveFallback"))
+        .put("effectLimitation", if (!adaptive) "DIRECT_VOLUME_REQUEST_ONLY_NO_DYNAMIC_CONTROL" else if(adaptiveGain >= .99f) "GAIN_CEILING_NO_FURTHER_HEADROOM" else if(NoiseState.outputType == 0) "OUTPUT_ROUTE_UNKNOWN" else "LISTENING_EFFECT_REQUIRES_FIELD_ACCEPTANCE")
+        .put("fallbackReason", if(adaptive) "" else if(!NoiseState.available()) "MICROPHONE_INACTIVE_OR_STALE" else "IMMEDIATE_STATE_NOTICE_OR_DIRECT_FALLBACK"))
+      if (!record.has("startedAt")) record.put("startedAt", JSONObject.NULL)
+      VoiceLogStorage.append(applicationContext, record.toString(), now)
+    } catch (e: Exception) { Log.w(TAG, "Voice audit unavailable", e) }
+  }
+
+  private fun receiveBatch(payload: String) {
+    val serviceReceivedAt = System.currentTimeMillis()
+    batchMode = true
+    val batch = JSONObject(payload)
+    val runId = batch.optString("runId")
+    val staleClockConfig=batchRunId==runId && batch.optInt("latestEventIndex",-1)<latestEventIndex
+    if(runId.startsWith("preview-cues-") && batch.optLong("previewLeaseMs")>0 && !preferences.getBoolean("running",false)) {
+      val until=System.currentTimeMillis()+batch.optLong("previewLeaseMs").coerceIn(1,30000)
+      cuePreviewUntil=until
+      handler.postDelayed({if(cuePreviewUntil==until && batchRunId==runId && !preferences.getBoolean("running",false)) {
+        GoalCueFence.finish(this,runId)
+        cuePreviewUntil=0;messages.forEach{audit(it,"DISCARDED_PREVIEW_LEASE")};messages.clear()
+        interrupt("INTERRUPTED_PREVIEW_LEASE");stopSelf()
+      }},until-System.currentTimeMillis())
+    }
+    val cancel = batch.optBoolean("cancelCandidate")
+    val paused = batch.optBoolean("paused")
+    val incoming = batch.getJSONArray("notices")
+    if (debugPrefs.getString("finishedRun", "") == runId && !batch.optBoolean("ended")) {
+      (0 until incoming.length()).forEach { audit(incoming.getJSONObject(it), "RUN_ENDED") }; return
+    }
+    batch.optJSONObject("clock")?.takeUnless{staleClockConfig}?.let { c ->
+      val started = c.optLong("startedAt")
+      val minutes = c.optInt("minutes", 10)
+      val clock=try{clockLedger.snapshot()}catch(_:Exception){JSONObject()}
+      val same=clock.optString("runId")==runId && clock.optLong("startedAt")==started && clock.optInt("minutes")==minutes && clock.optBoolean("enabled")==c.optBoolean("enabled")
+      val previousConfig=clockDesiredConfig
+      if(previousConfig!=null && (!previousConfig.second.optBoolean("enabled") || previousConfig.second.optLong("startedAt")!=started || previousConfig.second.optInt("minutes")!=minutes))
+        clockCancellationConfig=previousConfig.first to JSONObject(previousConfig.second.toString()).put("enabled",false)
+      clockDesiredConfig=runId to JSONObject(c.toString())
+      if(!same){clockReceipt=null;clockBody=null}
+      if (!same) audit(JSONObject().put("id", "$runId:clock-config:$serviceReceivedAt").put("type", "CLOCK_CONFIGURATION")
+        .put("data", JSONObject().put("runId",runId).put("enabled",c.optBoolean("enabled")).put("minutes",minutes).put("startedAt",started)), "CONFIGURED")
+      handler.removeCallbacks(clockTick)
+      if (!same) { messages.toList().filter{it.optString("type")=="CURRENT_TIME"}.forEach{messages.remove(it);audit(it,"CANCELLED_CLOCK_CONFIGURATION")} }
+      if (c.optBoolean("enabled")) handler.post(clockTick)
+    }
+    if (batchRunId.isNotEmpty() && batchRunId != runId) {
+      messages.forEach { audit(it, "DISCARDED_RUN_CHANGED") }; messages.clear()
+      if (!chimeActive || currentNotice?.let { VoicePolicy.commonChime(it.optString("type")) } == true) interrupt("INTERRUPTED_RUN_CHANGED")
+      recovery = null
+    }
+    if (batchRunId != runId) { goalRevision = ""; goalRevisionIndex = -1; cueContext = null }
+    if (batch.has("goalRevision") && batch.optInt("goalRevisionIndex", 0) >= goalRevisionIndex) {
+      goalRevision = batch.optString("goalRevision"); goalRevisionIndex = batch.optInt("goalRevisionIndex", 0)
+    }
+    batch.optJSONObject("cueContext")?.let { c ->
+      val old=cueContext
+      if(batch.optInt("goalRevisionIndex",0)>=goalRevisionIndex && c.optString("revision")==goalRevision && (old==null || (c.optLong("version")>=old.optLong("version") && (c.optString("revision")!=old.optString("revision") || c.optLong("at")>=old.optLong("at"))))) cueContext=c
+    }
+    val staleState = batchRunId == runId && batch.optInt("latestEventIndex", -1) < latestEventIndex
+    batchRunId = runId
+    if (!staleState) candidateCancelled = cancel
+    batch.optJSONObject("recovery")?.let { recovery = it }
+    if (!staleState) {
+      batchState = batch.optString("state", if (paused) "AUTO_STOP" else "RUNNING")
+      latestEventIndex = batch.optInt("latestEventIndex", -1)
+    }
+    ended = ended && runId == debugPrefs.getString("finishedRun", "") || batch.optBoolean("ended")
+    batch.optJSONObject("paceSchedule")?.let { if (!staleState) {
+      val previous=paceDesiredSchedule
+      if(previous!=null && (!previous.optBoolean("enabled") || previous.optString("configKey")!=it.optString("configKey")))
+        paceCancellationSchedule=JSONObject(previous.toString()).put("enabled",false)
+      paceDesiredSchedule=JSONObject(it.toString())
+    } }
+    if (ended) pacePendingEnd=runId
+    flushPacePersistence()
+    if(ended){clockPendingEnd=runId;clockDesiredConfig=null;clockCancellationConfig=null;clockReceipt=null;clockBody=null}
+    flushClock()
+    restorePace()
+    restoreClock()
+    // An OFF/config-change also cancels in-memory snapshots from the old epoch.
+    val paceIds = if(pacePersistenceBlocked) emptyList() else paceLedger.pending(runId).map { it.optString("id") }
+    messages.toList().filter { periodic(it) && it.optString("id") !in paceIds }.forEach { messages.remove(it); audit(it,"CANCELLED_PACE_EPOCH") }
+    if(ended || !runId.startsWith("preview-cues-"))cuePreviewUntil=0
+    if (ended && !batch.optBoolean("muted")) debugPrefs.edit().putString("finishedRun", runId).apply()
+    messages.toList().forEach { n ->
+      if (!validInState(n)) {
+        messages.remove(n); audit(n, "CANCELLED_STATE_OR_CANDIDATE")
+      }
+    }
+    if (currentNotice?.let { !validInState(it) } == true) interrupt("INTERRUPTED_STATE_CHANGED")
+    val sorted = (0 until incoming.length()).map { incoming.getJSONObject(it) }.sortedByDescending { it.optInt("priority") }
+    sorted.forEach { n ->
+      n.put("serviceReceivedAt", serviceReceivedAt)
+      val id = n.getString("id")
+      if(n.optString("type")=="CURRENT_TIME" && (messages.any{it.optString("id")==id} || currentNotice?.optString("id")==id)){audit(n,"ALREADY_ACCEPTED");return@forEach}
+      if (periodic(n)) {
+        val receipt = if(pacePersistenceBlocked) "PERSISTENCE_BLOCKED" else try { paceLedger.accept(n) } catch (_:Exception) { "PERSIST_FAILED" }
+        audit(n, receipt)
+        if(receipt=="PERSIST_FAILED") pacePersistenceFailed("RECEIPT_PERSIST_FAILED")
+        restorePace()
+        return@forEach
+      }
+      if (!seen.contains(id)) {
+        seen.add(id); while (seen.size > 2048) seen.removeAt(0)
+        val type = n.optString("type")
+        if (validInState(n) && n.optInt("priority") >= 80 && ordinaryQueueSize() >= 16) {
+          messages.filterNot { diagnostic(it) || waitingPeriodic(it) }.minByOrNull { it.optInt("priority") }?.let { old ->
+            if (old.optInt("priority") < n.optInt("priority")) { messages.remove(old); audit(old, "EVICTED_FOR_IMPORTANT_NOTICE") }
+          }
+        }
+        val reason = if (initFailed) "INIT_FAILED" else if (!validInState(n) && n.optString("message").isNotBlank()) "STALE_STATE" else VoicePolicy.suppression(type, n.optString("message").isBlank(),
+          System.currentTimeMillis(), n.optLong("expiresAt"), paused,
+          sorted.any { it.optInt("priority") > 20 && System.currentTimeMillis() <= it.optLong("expiresAt") && it.optString("message").isNotBlank() },
+          messages.any { it.optInt("priority") >= 70 }, ordinaryQueueSize())
+        if (reason == "QUEUED") n.put("nativeQueuedAt", System.currentTimeMillis())
+        audit(n, reason)
+        if (reason == "QUEUED") {
+          if (type == "GOAL_COUNTDOWN") messages.toList().filter { it.optString("type")==type }.forEach { messages.remove(it);audit(it,"DISCARDED_NEWER_COUNTDOWN") }
+          if (VoicePolicy.information(type)) messages.toList().filter { it.optString("type") == type && !periodic(it) }.forEach {
+            messages.remove(it); audit(it, "DISCARDED_NEWER_INFORMATION")
+          }
+          if (n.optInt("priority") >= 80) messages.filter { legacyInformation(it) }.forEach { defer(it) }
+          if (VoicePolicy.information(type) && (paused || (chimeActive && currentNotice?.let { !VoicePolicy.commonChime(it.optString("type")) } == true) || (currentNotice?.optInt("priority") ?: 0) >= 80 || messages.any { it.optInt("priority") >= 80 })) defer(n)
+          messages.add(n)
+        }
+      }
+    }
+    debugPrefs.edit().putString("seen", JSONArray(seen).toString()).apply()
+    messages.sortByDescending { it.optInt("priority") }
+    val nextPriority = messages.firstOrNull()?.optInt("priority") ?: 0
+    // A short, valid stop hint must not wait behind a long lap/periodic notice.
+    if (speaking && (!chimeActive || currentNotice?.let { VoicePolicy.commonChime(it.optString("type")) } == true) && VoicePolicy.shouldPreempt(currentNotice?.optInt("priority") ?: 110, nextPriority)) {
+      interrupt(if (nextPriority >= 100) "INTERRUPTED_BY_TRANSITION" else "INTERRUPTED_BY_STOP_HINT")
+    }
+    speakNext()
+    if (ready && !speaking && messages.isEmpty()) finishTest()
+  }
+  private fun validInState(n: JSONObject): Boolean {
+    val type = n.optString("type")
+    if (diagnostic(n)) return packageName == "app.runjourney.mobile.test" &&
+      !GoalCueFence.ended(this, n.optJSONObject("data")?.optString("runId") ?: "") &&
+      (n.optJSONObject("data")?.optString("markerSessionId").isNullOrBlank() || n.getJSONObject("data").optString("markerSessionId") == RunMarkerService.lastSessionId()) &&
+      (n.optJSONObject("data")?.optString("feedbackKind") != "SENSOR_STARTED" || SensorDiagnostics.recording()) && DiagnosticFeedbackPolicy.valid(
+      n.optJSONObject("data")?.optString("runId") ?: "", n.optJSONObject("data")?.optString("sensorSessionId") ?: "",
+      SensorDiagnostics.associatedRunId(), SensorDiagnostics.associatedSessionId(), debugPrefs.getString("finishedRun", "") ?: "") &&
+      !(ended && batchRunId == n.optJSONObject("data")?.optString("runId"))
+    if ((type == "GOAL_WARNING" || VoicePolicy.goalCue(type)) && n.optJSONObject("data")?.optString("goalRevision") != goalRevision) return false
+    val c=cueContext
+    if(type=="GOAL_WARNING" && c?.optString("revision")==goalRevision && c.optBoolean("suppressWarning")) return false
+    if(VoicePolicy.goalCue(type)) {
+      if(GoalCueFence.ended(this,n.optJSONObject("data")?.optString("runId")?:""))return false
+      if(n.optJSONObject("data")?.optInt("goalEpoch",-1)!=goalRevisionIndex)return false
+      if(c==null || c.optString("revision")!=goalRevision || !c.optBoolean("enabled") || !c.optBoolean("running") || n.optJSONObject("data")?.optLong("cueVersion")!=c.optLong("version")) return false
+      val remaining=if(c.optString("kind")=="time") (c.optLong("deadline")-System.currentTimeMillis())/1000.0 else c.optDouble("remaining")
+      if(!remaining.isFinite() || remaining<=0) return false
+      if(type=="TURNAROUND" && !c.optBoolean("turnaround")) return false
+      val label=n.optJSONObject("data")?.optInt("label")?:0
+      if(type=="GOAL_COUNTDOWN" && (!c.optBoolean("countdown") || label !in 10..(if(c.optString("kind")=="time")60 else 200) || label%10!=0 || label!=(kotlin.math.ceil(remaining/10)*10).toInt())) return false
+    }
+    if (type == "LEGACY") return !ended
+    if (n.optJSONObject("data")?.optString("runId") != batchRunId) return false
+    if(n.optString("type")=="CURRENT_TIME")return try{
+      !ended && !clockBlocked && n.optString("id") !in clockTerminalIds && clockLedger.snapshot().optBoolean("enabled") && (currentNotice===n || clockLedger.pending(batchRunId)?.optString("id")==n.optString("id"))
+    }catch(_:Exception){clockFailure("CLOCK_LEDGER_IO_FAILED");false}
+    if (periodic(n)) return !ended && !pacePersistenceBlocked && n.optString("id") !in paceTerminalIds && paceLedger.pending(batchRunId).any { it.optString("id") == n.optString("id") }
+    return VoicePolicy.validState(type, candidateCancelled, batchState, ended,
+      n.optJSONObject("data")?.optInt("eventIndex", -1) ?: -1, latestEventIndex)
+  }
+  private fun defer(n: JSONObject) {
+    if (n.optBoolean("deferred")) return
+    n.put("deferred", true).put("expiresAt", System.currentTimeMillis() + 120000)
+    audit(n, "DEFERRED")
+  }
+  private fun interrupt(status: String) {
+    if (chimeActive) {
+      if (currentNotice?.let { VoicePolicy.commonChime(it.optString("type")) } != true) { currentNotice?.let { audit(it, "CHIME_INTERRUPT_BLOCKED") }; return }
+      currentNotice?.let { audit(it, "CHIME_INTERRUPTED_BEFORE_BODY") }
+      chime?.release(); chime = null; chimeActive = false; NoiseState.playback = false
+    }
+    currentNotice?.let {
+      audit(it, status)
+      if (diagnostic(it) && DiagnosticFeedbackPolicy.retryInterrupted(it.optInt("diagnosticAttempt"), validInState(it))) {
+        val retry = JSONObject(it.toString()).put("diagnosticAttempt", it.optInt("diagnosticAttempt") + 1)
+        retry.remove("startedAt"); messages.add(0, retry); audit(retry, "REQUEUED_AFTER_INTERRUPTION")
+      } else if (waitingPeriodic(it) && !ended && validInState(it)) {
+        val retry = JSONObject(it.toString()); requeuePeriodic(retry); audit(retry,"REQUEUED_PERIODIC_INTERRUPTION")
+      } else if (!ended && validInState(it) && legacyInformation(it) && it.optInt("retry") == 0) {
+        val retry = JSONObject(it.toString()).put("originalId", it.optString("id")).put("id", it.optString("id") + ":retry").put("retry", 1)
+        retry.remove("startedAt"); defer(retry); messages.add(retry)
+      } else audit(it, "DISCARDED")
+    }; currentNotice = null
+    tts?.stop(); clearAdaptive(); releaseFocus(); speaking = false
+  }
   private var wakeLock: PowerManager.WakeLock? = null
   private var focusRequest: AudioFocusRequest? = null
   private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
@@ -56,7 +486,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       // OFF and ON both wait for the shared analysis at the exact boundary.
       if (due > last && ready && preferences.getInt("messageInterval", -1) == due) {
         preferences.edit().putInt("lastAnnouncement", due).apply()
-        speak(preferences.getString("message", "") ?: "")
+        if (!batchMode) speak(preferences.getString("message", "") ?: "")
       }
       val next = now + ((due.toLong() + 1) * interval + 10_000 - active)
       handler.postDelayed(this, if (verified) 1_000 else (next - now).coerceIn(1_000, 10_000))
@@ -65,13 +495,26 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
 
   override fun onCreate() {
     super.onCreate()
+    // Only generated speech, never microphone PCM or backup files.
+    try { cacheDir.listFiles { file -> file.isFile && file.name.startsWith("runjourney-tts-") }?.forEach { it.delete() } } catch (_: Exception) { }
+    stopRunning = { handler.post {
+      preferences.edit().putBoolean("running", false).putBoolean("workoutAllowed", false).apply()
+      receiveBatch(JSONObject().put("runId", batchRunId).put("ended", true).put("muted", true).put("cancelCandidate", true)
+        .put("notices", JSONArray()).toString())
+    }; Unit }
+    lastSpeechAt = debugPrefs.getLong("lastSpeechAt", 0)
+    lastPriority = debugPrefs.getInt("lastPriority", 0)
     val channel = NotificationChannel(CHANNEL, "ランニング音声通知", NotificationManager.IMPORTANCE_LOW)
     getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     tts = TextToSpeech(this, this)
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    val testing = intent?.action == ACTION_TEST
+    val feedback = intent?.action == ACTION_DIAGNOSTIC_FEEDBACK
+    if (feedback && packageName != "app.runjourney.mobile.test") { stopSelf(); return START_NOT_STICKY }
+    val batch = intent?.action == ACTION_BATCH
+    val workout = intent?.action == ACTION_WORKOUT
+    val testing = intent?.action == ACTION_TEST || workout || batch || feedback
     if (intent?.action == ACTION_START) {
       val started = intent.getLongExtra("startedAtMs", System.currentTimeMillis())
       val previous = preferences.getLong("startedAtMs", 0)
@@ -88,18 +531,36 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     val notification = Notification.Builder(this, CHANNEL)
       .setSmallIcon(applicationInfo.icon)
       .setContentTitle("RunJourney 音声通知中")
-      .setContentText("走行中、5分ごとに時間と距離を読み上げます")
+      .setContentText("走行中の時間・距離・ペースを案内します")
       .setOngoing(true).build()
     startForeground(607, notification)
-    if (testing) {
-      val message = intent?.getStringExtra("message") ?: ""
-      if (ready) speak(message) else pendingTests.add(message)
-      if (!preferences.getBoolean("running", false)) return START_NOT_STICKY
-    }
-    if (wakeLock?.isHeld != true) {
+    // Workout-only speech also needs a bounded wake lock while the screen is off.
+    // A periodic START upgrades any previous temporary lock to the running lock.
+    if (wakeLock?.isHeld != true || intent?.action == ACTION_START) {
+      wakeLock?.let { if (it.isHeld) it.release() }
       wakeLock = (getSystemService(Context.POWER_SERVICE) as PowerManager)
         .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "RunJourney:VoiceAnnouncements")
-        .apply { acquire() }
+        .apply { if (preferences.getBoolean("running", false)) acquire() else acquire(if (feedback) 120_000 else 30_000) }
+    }
+    if (feedback) {
+      receiveDiagnosticFeedback(intent?.getStringExtra("payload") ?: "{}")
+      return START_NOT_STICKY
+    }
+    if (batch) {
+      receiveBatch(intent?.getStringExtra("payload") ?: "{}")
+      return START_NOT_STICKY
+    }
+    if (testing) {
+      val message = intent?.getStringExtra("message") ?: ""
+      if (workout) {
+        pendingWorkout = message to (intent?.getLongExtra("expiresAt", 0) ?: 0)
+        if (ready) deliverWorkout()
+      } else {
+        // Stops/transitions and periodic laps take priority over guidance.
+        pendingWorkout = null
+        if (ready) speak(message) else pendingTests.add(message)
+      }
+      if (!preferences.getBoolean("running", false)) return START_NOT_STICKY
     }
     handler.removeCallbacks(tick)
     handler.post(tick)
@@ -108,32 +569,139 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
 
   override fun onInit(status: Int) {
     ready = status == TextToSpeech.SUCCESS
+    initFailed = !ready
     if (ready) {
       tts?.language = Locale.JAPANESE
       pendingTests.forEach { speak(it) }
       pendingTests.clear()
+      deliverWorkout()
+      speakNext()
+      if (!speaking && messages.isEmpty()) finishTest()
     }
     else {
       Log.e(TAG, "Japanese TTS initialization failed: $status")
       preferences.edit().putString("ttsStatus", "INIT_FAILED").apply()
+      messages.forEach { audit(it, "INIT_FAILED") }; messages.clear()
       finishTest()
     }
   }
 
   private fun speak(message: String) {
     if (message.isBlank()) return
-    messages.add(message)
+    pendingWorkout = null
+    messages.add(JSONObject().put("id", "legacy-${System.nanoTime()}").put("message", message).put("type", "LEGACY").put("expiresAt", System.currentTimeMillis() + 20000).put("priority", 40))
     speakNext()
+  }
+
+  private fun diagnostic(n: JSONObject) = n.optString("type") == DiagnosticFeedbackPolicy.TYPE
+  private fun ordinaryQueueSize() = messages.count { !diagnostic(it) && !waitingPeriodic(it) }
+  private fun receiveDiagnosticFeedback(payload: String) {
+    val n = try { JSONObject(payload) } catch (_: Exception) { return }
+    if (!diagnostic(n) || n.optString("message") != DiagnosticFeedbackPolicy.message(n.optJSONObject("data")?.optString("feedbackKind") ?: "") || n.optString("message").isBlank()) return
+    if (n.optJSONObject("data")?.optString("feedbackKind") in listOf("BEGIN_SAVED", "END_SAVED") && n.optJSONObject("data")?.optBoolean("ackPersisted") != true) { audit(n, "REJECTED_NO_SAVED_ACK"); return }
+    n.put("priority", DiagnosticFeedbackPolicy.PRIORITY).put("expiresAt", Long.MAX_VALUE)
+    val id = n.optString("id")
+    if (id.isBlank() || seen.contains(id)) { audit(n, "DUPLICATE_FEEDBACK"); return }
+    seen.add(id); while (seen.size > 2048) seen.removeAt(0)
+    debugPrefs.edit().putString("seen", JSONArray(seen).toString()).apply()
+    if (validInState(n) && n.optJSONObject("data")?.optString("feedbackKind") == "MARKER_FAILED") {
+      val previous = (listOfNotNull(currentNotice) + messages).firstOrNull {
+        diagnostic(it) && it.optJSONObject("data")?.optString("feedbackKind") == "MARKER_FAILED" && validInState(it)
+      }
+      if (previous != null) { n.put("mergedInto", previous.optString("id")); audit(n, "COALESCED_PENDING_MARKER_FAILURE"); return }
+    }
+    val reason = when {
+      !validInState(n) -> "CANCELLED_DIAGNOSTIC_SESSION_OR_RUN"
+      initFailed -> "INIT_FAILED"
+      messages.count { diagnostic(it) } >= DiagnosticFeedbackPolicy.LIMIT -> "FEEDBACK_QUEUE_LIMIT"
+      else -> "QUEUED"
+    }
+    n.put("nativeQueuedAt", System.currentTimeMillis()); audit(n, reason)
+    if (reason == "QUEUED") { messages.add(n); speakNext() }
+    else finishTest()
+  }
+
+  private fun deliverWorkout() {
+    val pending = pendingWorkout ?: return
+    pendingWorkout = null
+    val now = System.currentTimeMillis()
+    val interval = preferences.getLong("intervalMs", 300_000).coerceAtLeast(1_000)
+    val active = preferences.getLong("activeMs", 0) +
+      if (preferences.getBoolean("paused", false)) 0 else (now - preferences.getLong("clockUpdatedMs", now)).coerceAtLeast(0)
+    val lapDueSoon = preferences.getBoolean("running", false) &&
+      (interval - active % interval <= 20_000 || active / interval > preferences.getInt("lastAnnouncement", 0))
+    if (preferences.getBoolean("workoutAllowed", false) && now <= pending.second &&
+      !speaking && messages.isEmpty() && !lapDueSoon && now - lastSpeechAt >= 20_000) speak(pending.first)
+    else if (!speaking && messages.isEmpty()) finishTest()
+  }
+
+  // expiresAt is a body START deadline, not a duration budget for a valid body.
+  // RUN/state/latest-label invalidation still applies throughout playback.
+  private var cueWatchVersion = 0L
+  private fun armCueDeadline(notice: JSONObject, limit: Long, reason: String) {
+    val version=++cueWatchVersion
+    val goalDeadline=cueContext?.optLong("deadline")?:0
+    val end=if(goalDeadline>0) minOf(goalDeadline,limit) else limit
+    notice.put("cueWatchDeadline",end).put("cueWatchReason",reason)
+    handler.postDelayed({if(currentNotice===notice && cueWatchVersion==version){
+      interrupt(if(goalDeadline>0 && end==goalDeadline) "INTERRUPTED_CUE_GOAL_DEADLINE" else reason)
+      speakNext();if(!speaking&&messages.isEmpty())finishTest()
+    }},(end-System.currentTimeMillis()).coerceAtLeast(0))
+  }
+  private fun cueBodyStarted(notice: JSONObject, at: Long): Boolean {
+    if(!VoicePolicy.goalCue(notice.optString("type")))return true
+    val deadline=cueContext?.optLong("deadline")?:0
+    if(at>notice.optLong("expiresAt") || (deadline>0 && at>=deadline) || !validInState(notice)) {
+      interrupt("CUE_START_EXPIRED_OR_INVALID");speakNext();return false
+    }
+    // Bounded engine watchdog; a newer number, pause, end or goal deadline wins.
+    val duration=if(notice.optString("type")=="GOAL_COUNTDOWN") 5000L else 15000L
+    notice.put("bodyCompleteBy",at+duration)
+    armCueDeadline(notice,at+duration,"INTERRUPTED_CUE_BODY_TIMEOUT")
+    return true
   }
 
   private fun speakNext() {
     if (speaking || !ready || messages.isEmpty()) return
-    val message = messages.removeFirst()
+    // Deferred information follows state feedback, ahead of new periodic items.
+    messages.sortByDescending { if (it.optBoolean("deferred")) 75 else it.optInt("priority") }
+    val selected = messages.indexOfFirst { !waitingPeriodic(it) || batchState == "RUNNING" && (!periodic(it) || !pacePersistenceBlocked) && (it.optString("type")!="CURRENT_TIME" || !clockBlocked) }
+    if (selected < 0) return
+    val notice = messages.removeAt(selected)
+    if ((batchMode || diagnostic(notice)) && !validInState(notice)) {
+      audit(notice, "STALE_STATE")
+      if (messages.isEmpty()) finishTest() else speakNext()
+      return
+    }
+    val now = System.currentTimeMillis()
+    if (now > notice.optLong("expiresAt")) {
+      audit(notice, if (now > notice.optLong("expiresAt")) "EXPIRED" else "HIGHER_PRIORITY_COOLDOWN")
+      if (messages.isEmpty()) finishTest() else speakNext()
+      return
+    }
+    if (notice.optBoolean("deferred")) {
+      val fresh = recovery
+      if (fresh == null || now - (fresh.optJSONObject("data")?.optLong("sampledAt") ?: 0) > 120000) {
+        audit(notice, "DISCARDED_STALE_RECOVERY"); speakNext(); return
+      }
+      val merged = JSONArray().put(notice.optString("originalId", notice.optString("id")))
+      messages.toList().filter { it.optBoolean("deferred") }.forEach {
+        messages.remove(it); merged.put(it.optString("originalId", it.optString("id"))); audit(it, "DISCARDED_MERGED_RECOVERY")
+      }
+      notice.put("message", fresh.getString("message")).put("data", fresh.getJSONObject("data"))
+        .put("recoveryOf", merged).put("retry", 1)
+      audit(notice, "RESUMED")
+    }
+    currentNotice = notice
+    if(VoicePolicy.goalCue(notice.optString("type"))) armCueDeadline(notice, notice.optLong("expiresAt"), "CUE_START_EXPIRED")
     val attributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
       .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
     val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
       .setAudioAttributes(attributes).setOnAudioFocusChangeListener { }.build()
     if (audioManager.requestAudioFocus(request) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+      audit(notice, "AUDIO_FOCUS_DENIED")
+      currentNotice = null
+      if (waitingPeriodic(notice)) { requeuePeriodic(notice); handler.postDelayed({speakNext()}, 2000); return }
       Log.w(TAG, "Audio focus denied")
       preferences.edit().putString("ttsStatus", "AUDIO_FOCUS_DENIED").apply()
       if (!messages.isEmpty()) handler.post { speakNext() } else finishTest()
@@ -141,23 +709,212 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     }
     focusRequest = request
     speaking = true
+    lastSpeechAt = System.currentTimeMillis()
+    lastPriority = notice.optInt("priority")
+    debugPrefs.edit().putLong("lastSpeechAt", lastSpeechAt).putInt("lastPriority", lastPriority).apply()
+    if(notice.optString("type")=="GOAL_COUNTDOWN") {
+      val session=batchRunId+":"+goalRevision
+      val sessions=debugPrefs.getStringSet("countdownChimeSessions",emptySet())!!.toMutableSet()
+      if(sessions.contains(session)) notice.put("chimePlayed",true)
+      else { sessions.add(session);debugPrefs.edit().putStringSet("countdownChimeSessions",sessions).commit() }
+    }
+    if ((VoicePolicy.commonChime(notice.optString("type")) || notice.optString("type") in listOf("STOP_CANDIDATE_ANNOUNCED", "AUTO_STOP_CONFIRMED", "AUTO_RESUME_CONFIRMED")) && !notice.optBoolean("chimePlayed")) {
+      playChime(notice, attributes); return
+    }
+    speakNotice(notice, attributes)
+  }
+
+  private fun playChime(notice: JSONObject, attributes: AudioAttributes) {
+    val common = VoicePolicy.commonChime(notice.optString("type"))
+    notice.put("chimeKind", if(common) "common-v1" else "transition")
+    audit(notice, "CHIME_PREPARING")
+    chimeActive = true
+    NoiseState.playback = true; NoiseState.externalOutput = false
+    notice.put("chimePlayed", true)
+    val player = MediaPlayer()
+    chime = player
+    fun complete(status: String) {
+      if (chime !== player) return
+      audit(notice, status)
+      player.release(); chime = null; chimeActive = false
+      NoiseState.playback = false
+      // Hold the same notice and focus through the gap; a delayed callback cannot
+      // resurrect a body after interruption, expiry, RUN change or service teardown.
+      fun body() {
+        if (currentNotice !== notice) return
+        val higher = messages.any { if(common) VoicePolicy.shouldPreempt(notice.optInt("priority"), it.optInt("priority")) else it.optInt("priority") > notice.optInt("priority") }
+        if (!VoicePolicy.afterChime(validInState(notice), System.currentTimeMillis(), notice.optLong("expiresAt"), higher)) {
+          if (waitingPeriodic(notice) && validInState(notice)) { requeuePeriodic(notice); audit(notice,"REQUEUED_PERIODIC_AFTER_CHIME") }
+          else audit(notice, "DISCARDED_STATE_AFTER_CHIME")
+          currentNotice = null; speaking = false; releaseFocus()
+          speakNext(); if (messages.isEmpty() && !speaking) finishTest()
+        } else { audit(notice, "BODY_REQUESTED_AFTER_CHIME"); speakNotice(notice, attributes) }
+      }
+      if(common) handler.postDelayed({ body() }, 180) else body()
+    }
+    try {
+      player.setAudioAttributes(attributes)
+      val resource = when (notice.optString("type")) {
+        "STOP_CANDIDATE_ANNOUNCED" -> R.raw.run_candidate
+        "AUTO_STOP_CONFIRMED" -> R.raw.run_stop
+        "AUTO_RESUME_CONFIRMED" -> R.raw.run_resume
+        else -> R.raw.run_notice
+      }
+      resources.openRawResourceFd(resource).use { fd -> player.setDataSource(fd.fileDescriptor, fd.startOffset, fd.length) }
+      player.setOnCompletionListener { complete("CHIME_COMPLETED") }
+      player.setOnErrorListener { _, _, _ -> complete("CHIME_FAILED"); true }
+      player.setOnPreparedListener {
+        if (chime === player) {
+          try { player.start(); audit(notice, "CHIME_STARTED") } catch (_: Exception) { complete("CHIME_FAILED") }
+        }
+      }
+      player.prepareAsync()
+      handler.postDelayed({ if (chime === player) complete("CHIME_TIMEOUT") }, 2000)
+    } catch (_: Exception) { complete("CHIME_FAILED") }
+  }
+
+  private fun speakNotice(notice: JSONObject, attributes: AudioAttributes) {
+    if (!bodyEligible(notice)) return
+    // Clock wording is resolved at body dispatch, never cached in an audio file.
+    // Even with noise gain enabled, avoid a synthesis delay across a minute edge.
+    if(notice.optString("type")=="CURRENT_TIME") { speakDirect(notice,attributes);return }
+    if (notice.optString("type")!="GOAL_COUNTDOWN" && NoiseState.available() && (VoicePolicy.information(notice.optString("type")) || notice.optString("type") in listOf("LEGACY", "RUN_GOAL_FINISHED", "RUN_STARTED", "GOAL_WARNING", "TURNAROUND"))) {
+      synthesizeAdaptive(notice, attributes); return
+    }
+    speakDirect(notice, attributes)
+  }
+
+  private fun bodyEligible(notice: JSONObject): Boolean {
+    if (currentNotice !== notice) return false
+    if (System.currentTimeMillis() > notice.optLong("expiresAt") || ((batchMode || diagnostic(notice)) && !validInState(notice))) {
+      tts?.stop(); finishUtterance("EXPIRED_OR_INVALID_BEFORE_BODY"); return false
+    }
+    return true
+  }
+
+  private fun synthesizeAdaptive(notice: JSONObject, attributes: AudioAttributes) {
+    if(notice.optString("type")=="CURRENT_TIME") { speakDirect(notice,attributes);return }
+    val file = try { File.createTempFile("runjourney-tts-", ".wav", cacheDir) } catch (_: Exception) { speakDirect(notice, attributes); return }
+    speechFile = file
+    val key = "synthesis-${System.nanoTime()}"
+    val synthesisRequestedAt = System.currentTimeMillis()
+    val synthesisTimeoutMs = SynthesisBudget.timeoutMs(notice.getString("message"))
+    notice.put("synthesisKey", key).put("synthesisRequestedAt", synthesisRequestedAt)
+      .put("synthesisTimeoutMs", synthesisTimeoutMs)
+    fun fallback(reason: String) {
+      if (currentNotice !== notice || speechFile !== file) return
+      notice.put("adaptiveFallback", reason); audit(notice, reason); tts?.stop(); clearAdaptive(); speakDirect(notice, attributes)
+    }
+    tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+      override fun onStart(id: String?) { if (id == key) handler.post { if (speechFile === file) audit(notice, "SYNTHESIS_STARTED") } }
+      override fun onDone(id: String?) { if (id == key) {
+        val synthesisCompletedAt=System.currentTimeMillis()
+        val clarity = SpeechClarity.process(file)
+        val clarityDurationMs=System.currentTimeMillis()-synthesisCompletedAt
+        handler.post {
+        if (currentNotice !== notice || speechFile !== file) return@post
+        if (!bodyEligible(notice)) return@post
+        notice.put("synthesisDurationMs", synthesisCompletedAt - synthesisRequestedAt)
+        notice.put("speechClarity", JSONObject().put("status",clarity.status).put("beforeRms",clarity.beforeRms).put("afterRms",clarity.afterRms)
+          .put("processingMs",clarityDurationMs).put("beforePeak",clarity.beforePeak).put("afterPeak",clarity.afterPeak).put("outputLoudnessMeasured",false))
+        audit(notice, "SYNTHESIS_COMPLETED")
+        try {
+          val player = MediaPlayer(); adaptivePlayer = player
+          var started = false
+          player.setAudioAttributes(attributes); player.setDataSource(file.absolutePath)
+          player.setOnPreparedListener {
+            if (currentNotice === notice && adaptivePlayer === player) {
+              if (!bodyEligible(notice)) return@setOnPreparedListener
+              try {
+                val gain = if (NoiseState.available()) NoiseState.gain else 1f
+                adaptiveGain = gain.coerceIn(.65f, 1f)
+                player.setVolume(gain, gain); NoiseState.playback = true
+                if(!preparePaceBody(notice))return@setOnPreparedListener
+                player.start(); started = true
+                NoiseState.outputType = player.routedDevice?.type ?: 0
+                lastAudioAuditAt = 0; lastAudioRoute = -1; lastAudioGain = -1f
+                val at=System.currentTimeMillis()
+                if(!cueBodyStarted(notice,at))return@setOnPreparedListener
+                notice.put("startedAt", at).put("playbackMode", "adaptive-local-synthesis")
+                audit(notice, "STARTED"); handler.post(volumeTick)
+              } catch (_: Exception) { fallback("ADAPTIVE_START_FAILED") }
+            }
+          }
+          player.setOnCompletionListener { if (adaptivePlayer === player) finishUtterance("DONE") }
+          player.setOnErrorListener { _, _, _ ->
+            if (adaptivePlayer === player) { if (started) finishUtterance("ADAPTIVE_PLAYBACK_ERROR") else fallback("ADAPTIVE_PREPARE_FAILED") }; true
+          }
+          player.prepareAsync()
+          handler.postDelayed({ if (speechFile === file && !started) fallback("ADAPTIVE_PREPARE_TIMEOUT") }, 2000)
+          handler.postDelayed({ if (speechFile === file && currentNotice === notice) finishUtterance("PLAYBACK_TIMEOUT") }, 45000)
+        } catch (_: Exception) { fallback("ADAPTIVE_PLAYER_FAILED") }
+      } } }
+      override fun onError(id: String?) { if (id == key) handler.post { fallback("SYNTHESIS_FAILED") } }
+      override fun onError(id: String?, errorCode: Int) { onError(id) }
+    })
+    audit(notice, "SYNTHESIS_QUEUED")
+    try {
+      if (tts?.synthesizeToFile(notice.getString("message"), Bundle(), file, key) != TextToSpeech.SUCCESS) fallback("SYNTHESIS_REJECTED")
+    } catch (_: Exception) { fallback("SYNTHESIS_FAILED") }
+    handler.postDelayed({ if (speechFile === file && adaptivePlayer == null) fallback("SYNTHESIS_TIMEOUT") }, synthesisTimeoutMs)
+  }
+
+  private fun speakDirect(notice: JSONObject, attributes: AudioAttributes) {
+    if (!bodyEligible(notice)) return
+    notice.put("playbackMode", "direct-tts")
+    NoiseState.playback = true; NoiseState.externalOutput = false
+    val message = if (notice.optString("type") == "CURRENT_TIME") CurrentTimePolicy.message(System.currentTimeMillis()).also { notice.put("message", it) } else notice.getString("message")
+    val adaptiveEligible = VoicePolicy.goalCue(notice.optString("type")) || VoicePolicy.information(notice.optString("type")) || notice.optString("type") in listOf("LEGACY", "RUN_GOAL_FINISHED", "RUN_STARTED", "GOAL_WARNING")
+    val directGain = if (adaptiveEligible && NoiseState.available()) NoiseState.gain.coerceIn(.65f, 1f) else 1f
+    notice.put("directRequestedGain", directGain).put("directGainDynamic", false)
+    val params = Bundle().apply { putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, directGain) }
     tts?.setAudioAttributes(attributes)
+    val utteranceKey = "runjourney-${System.nanoTime()}"
     tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
       override fun onStart(utteranceId: String?) {
+        if (utteranceId != utteranceKey) return
+        val startedAt = System.currentTimeMillis()
+        handler.post { if (currentNotice === notice && cueBodyStarted(notice,startedAt)) { notice.put("startedAt", startedAt); audit(notice, "STARTED") } }
         Log.i(TAG, "Speaking: $message")
         preferences.edit().putString("ttsStatus", "SPEAKING").putLong("ttsStartedAt", System.currentTimeMillis()).apply()
       }
-      override fun onDone(utteranceId: String?) { handler.post { finishUtterance("DONE") } }
-      override fun onError(utteranceId: String?) { handler.post { finishUtterance("ERROR") } }
+      override fun onDone(utteranceId: String?) { if (utteranceId == utteranceKey) handler.post { if (currentNotice === notice) finishUtterance("DONE") } }
+      override fun onError(utteranceId: String?) { if (utteranceId == utteranceKey) handler.post { if (currentNotice === notice) finishUtterance("ERROR") } }
+      override fun onError(utteranceId: String?, errorCode: Int) { onError(utteranceId) }
     })
-    if (tts?.speak(message, TextToSpeech.QUEUE_FLUSH, null, "runjourney-${System.nanoTime()}") != TextToSpeech.SUCCESS) finishUtterance("SPEAK_FAILED")
+    handler.postDelayed({
+      if (currentNotice === notice) { tts?.stop(); finishUtterance("PLAYBACK_TIMEOUT") }
+    }, 30000)
+    if(!preparePaceBody(notice))return
+    if(!prepareClockBody(notice))return
+    if (tts?.speak(message, TextToSpeech.QUEUE_FLUSH, params, utteranceKey) != TextToSpeech.SUCCESS) finishUtterance("SPEAK_FAILED")
   }
 
   private fun finishUtterance(status: String) {
+    var retryDelay = false
+    currentNotice?.let {
+      audit(it, status)
+      if (waitingPeriodic(it) && status != "DONE" && !ended && validInState(it) && it.optInt("periodicAttempts") < 3) {
+        it.put("periodicAttempts", it.optInt("periodicAttempts") + 1); requeuePeriodic(it); retryDelay = true
+        audit(it,"RETRY_PERIODIC_ENGINE_FAILURE")
+      } else {
+        if (status != "DONE" && waitingPeriodic(it)) audit(it,"PERIODIC_ENGINE_RETRIES_EXHAUSTED")
+        if (periodic(it)) {
+          paceTerminalIds.add(it.optString("id"))
+          flushPacePersistence()
+        }
+        if (it.optString("type")=="CURRENT_TIME") {
+          clockTerminalIds.add(it.optString("id"));flushClock()
+        }
+      }
+    }
+    clearAdaptive(); currentNotice = null
+    lastSpeechAt = System.currentTimeMillis()
     preferences.edit().putString("ttsStatus", status).apply()
+    debugPrefs.edit().putLong("lastSpeechAt", lastSpeechAt).putInt("lastPriority", lastPriority).apply()
     releaseFocus()
     speaking = false
-    if (messages.isEmpty()) finishTest() else speakNext()
+    if (messages.isEmpty()) finishTest() else if (retryDelay) handler.postDelayed({speakNext()},2000) else speakNext()
   }
 
   private fun releaseFocus() {
@@ -168,11 +925,20 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   private val pendingTests = mutableListOf<String>()
 
   private fun finishTest() {
-    if (!preferences.getBoolean("running", false)) handler.post { stopSelf() }
+    if(cuePreviewUntil>System.currentTimeMillis())return
+    if (!preferences.getBoolean("running", false)) handler.post { if (!speaking && messages.isEmpty()) stopSelf() }
   }
 
   override fun onDestroy() {
+    stopRunning = null
     handler.removeCallbacks(tick)
+    handler.removeCallbacks(clockTick)
+    handler.removeCallbacksAndMessages(null)
+    if (chimeActive) currentNotice?.let { audit(it, "CHIME_INTERRUPTED_SERVICE_DESTROYED") }
+    chime?.release(); chime = null; chimeActive = false
+    clearAdaptive()
+    currentNotice?.let { audit(it, "SERVICE_DESTROYED") }; currentNotice = null
+    messages.forEach { audit(it, "SERVICE_DESTROYED") }; messages.clear()
     tts?.stop()
     tts?.shutdown()
     releaseFocus()
