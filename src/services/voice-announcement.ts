@@ -1,4 +1,5 @@
 import { paceAnnouncementMessage, type PaceAnnouncementSample } from '@/domain/pace-workout';
+import { pacePeriodicSnapshots, paceSchedule, type PacePeriodicCursor } from '@/domain/pace-periodic';
 import { goalRevision, goalWarning, startMessage } from '@/domain/run-notices';
 import { GoalCues,cueContext } from './goal-cues';
 import { GoalCueSettings } from '@/repositories/goal-cue-settings';
@@ -28,7 +29,10 @@ function nativeAnnouncer() {
   if (Platform.OS !== 'android') return null;
   // Loaded only on Android: other platforms have no native TTS service.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return require('../../modules/run-announcer').default as typeof import('../../modules/run-announcer').default;
+  return require('../../modules/run-announcer').default as typeof import('../../modules/run-announcer').default & {
+    pacePeriodicVersion?: () => number;
+    pacePeriodicState?: (runId: string, configKey: string) => string;
+  };
 }
 
 const warningSeen = new Set<string>();
@@ -122,11 +126,13 @@ export const VoiceAnnouncement = {
     if (periodicPreference) periodicPreference.value = enabled;
     if (!enabled && !activeRun?.paceWorkout?.voice) AdaptiveAudio.stop();
     if (enabled && activeRun) this.start(activeRun);
-    else if (!(await ClockSettingsRepository.get()).enabled) nativeAnnouncer()?.stop();
+    else if (!(await ClockSettingsRepository.get()).enabled
+      && !((nativeAnnouncer()?.pacePeriodicVersion?.() ?? 0) >= 1 && validPaceState(activeRun?.paceWorkout) && activeRun.paceWorkout.voice)) nativeAnnouncer()?.stop();
   },
   async restore(activeRun: ActiveRun | null): Promise<void> {
     try {
-      if (activeRun && (await this.enabled() || (await ClockSettingsRepository.get()).enabled)) this.start(activeRun);
+      if (activeRun && (await this.enabled() || (await ClockSettingsRepository.get()).enabled
+        || (nativeAnnouncer()?.pacePeriodicVersion?.() ?? 0) >= 1 && validPaceState(activeRun.paceWorkout) && activeRun.paceWorkout.voice)) this.start(activeRun);
       else this.stop();
     } catch (error) {
       console.warn('Voice announcement could not be restored', error);
@@ -230,7 +236,9 @@ async function updateGuidance(run: ActiveRun, stateOnly: boolean) {
   // after that wait, so a stale observation cannot create a new stop hint.
   const now = Date.now();
   const workout = validPaceLapState(run.paceWorkout) && run.paceWorkout.voice;
-  if (!periodic && !workout && !clockSettings.enabled) return;
+  const fixedPace = (native?.pacePeriodicVersion?.() ?? 0) >= 1;
+  const schedule = fixedPace ? paceSchedule(run) : undefined;
+  if (!periodic && !workout && !clockSettings.enabled && !schedule) return;
   if (hintSession.runId !== run.id) hintSession = { runId: run.id, active: false, lastAt: -Infinity, detectedAt: 0, lowSpeedAt: 0 };
   const snapshot = voiceSnapshot(run, now);
   const notices: Record<string, unknown>[] = [];
@@ -270,11 +278,11 @@ async function updateGuidance(run: ActiveRun, stateOnly: boolean) {
         lastHintDetectedAt: hintSession.detectedAt || null, lastHintLowSpeedObservedAt: hintSession.lowSpeedAt || null,
         hintToConfirmationMs: hintSession.detectedAt && e.confirmedAt && e.confirmedAt >= hintSession.detectedAt && e.confirmedAt - hintSession.detectedAt <= 30000 ? e.confirmedAt - hintSession.detectedAt : null });
   });
-  const batchState = `${run.id}:${candidate}:${running}:${snapshot.activeMs}:${snapshot.distanceMeters}`;
+  const batchState = `${run.id}:${candidate}:${running}:${snapshot.activeMs}:${snapshot.distanceMeters}:${schedule?.configKey ?? ''}:${schedule?.enabled ?? ''}`;
   const send = async () => {
     if (finishedRuns.has(run.id)) return;
     notices.forEach(n => { n.dispatchedAt = Date.now(); });
-    await native?.notifyBatch?.(JSON.stringify({ clock: { ...clockSettings, startedAt: Date.parse(run.startedAt) }, notices: notices.splice(0), recovery: recoveryGuidance(run, now), cancelCandidate: !candidate, paused: !running, state: stateOf(run), goalRevision: goalRevision(run), goalRevisionIndex: run.goalChanges?.length ?? 0, latestEventIndex: (run.events?.length ?? 0) - 1, runId: run.id }));
+    await native?.notifyBatch?.(JSON.stringify({ ...(schedule ? { paceSchedule: schedule } : {}), clock: { ...clockSettings, startedAt: Date.parse(run.startedAt) }, notices: notices.splice(0), recovery: recoveryGuidance(run, now), cancelCandidate: !candidate, paused: !running, state: stateOf(run), goalRevision: goalRevision(run), goalRevisionIndex: run.goalChanges?.length ?? 0, latestEventIndex: (run.events?.length ?? 0) - 1, runId: run.id }));
     lastBatchState = batchState;
   };
   // State feedback must leave JS before kilometer interpolation or voice-item I/O.
@@ -299,7 +307,7 @@ async function updateGuidance(run: ActiveRun, stateOnly: boolean) {
           boundaryWallAt: wallAt, snapshotDistanceMeters: snapshot.distanceMeters, snapshotActiveMs: snapshot.activeMs });
     }
     const notice = validPaceState(run.paceWorkout) ? run.paceWorkout.notice : undefined;
-    if (notice) {
+    if (notice && (notice.goal || !fixedPace)) {
       let message = notice.message;
       if (notice.paceSample) {
         let previous: PaceAnnouncementSample | undefined;
@@ -309,6 +317,28 @@ async function updateGuidance(run: ActiveRun, stateOnly: boolean) {
       add(notice.key, notice.goal ? 'WORKOUT_GOAL' : 'PACE_WARNING', message, notice.at, 20000,
         notice.goal ? 60 : 20, notice.paceSample ? { paceSample: notice.paceSample } : {});
     }
+  }
+  if (schedule?.enabled) {
+    // A missing cursor is a first-use handshake, not permission to reconstruct
+    // old intervals using today's settings. Native persists the config epoch.
+    let cursor: PacePeriodicCursor | undefined;
+    try { cursor = JSON.parse(native?.pacePeriodicState?.(run.id, schedule.configKey) ?? 'null') ?? undefined; }
+    catch { /* Native ledger unavailable: leave slots unacknowledged for retry. */ }
+    if (cursor) for (const interval of pacePeriodicSnapshots(run, now, cursor)) {
+      const id = `${run.id}:pace:${interval.configKey}:${interval.slot}`;
+      // Do not use sentNotices here. Receipt/persistence ACK, not a JS send
+      // attempt, owns deduplication and permits retry after a bridge failure.
+      notices.push({ id, type: 'PACE_WARNING', message: interval.message,
+        generatedAt: now, queuedAt: now, scheduledAt: interval.endAt,
+        expiresAt: Number.MAX_SAFE_INTEGER, priority: 20,
+        data: { ...snapshot, pacePeriodicSnapshot: interval } });
+      diagnosticLog('PACE_SNAPSHOT_SUBMITTED', id, 'PACE_WARNING', { runId: run.id, submittedAt: now,
+        scheduledAt: interval.endAt, sourceAt: interval.endAt, intervalStartAt: interval.startAt,
+        quality: interval.quality, reason: interval.reason });
+    }
+    // Also deliver a new schedule when no slot is due yet. Without this the
+    // Native fixed-cycle scheduler would never acquire its initial epoch.
+    if (!notices.length) await send();
   }
   if (periodic) {
     const clock = announcementClock(run);
