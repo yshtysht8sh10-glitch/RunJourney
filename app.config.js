@@ -15,7 +15,7 @@ function getGitCommitHash() {
 
 module.exports = ({ config }) => ({
   ...config,
-  plugins: [...(config.plugins || []), 'expo-sharing', './plugins/with-android-build-variants'],
+  plugins: [...(config.plugins || []), 'expo-sharing', './plugins/with-android-build-variants', './plugins/with-production-build-guard'],
   extra: {
     ...config.extra,
     buildGitHash: getGitCommitHash(),
