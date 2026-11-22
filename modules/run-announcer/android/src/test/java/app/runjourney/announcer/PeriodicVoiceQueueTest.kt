@@ -44,6 +44,24 @@ class PeriodicVoiceQueueTest {
     set("paceLedgerOverride",null);assertEquals(true,call("flushPacePersistence"))
     batch();assertTrue(queue().isEmpty());assertTrue(PacePeriodicLedger(service).pending("r").isEmpty())
   }
+  @Test fun serviceRestartSuppressesAttemptedBodyButKeepsNeverAttemptedSnapshot(){
+    batch(notices=listOf(pace(1),pace(2)))
+    val first=queue().removeAt(0);set("currentNotice",first);set("speaking",true)
+    assertEquals(true,service.javaClass.getDeclaredMethod("preparePaceBody",JSONObject::class.java).apply{isAccessible=true}.invoke(service,first))
+    service.onDestroy();service=Robolectric.buildService(RunAnnouncerService::class.java).create().get();set("ready",false)
+    batch();assertEquals(listOf("p2"),queue().map{it.getString("id")})
+    assertEquals(1,JSONObject(PacePeriodicLedger(service).state("r","a")).getInt("unknownCompletionCount"))
+  }
+  @Test fun bodyAttemptWriteFailureBlocksOnlyPaceBeforeOutputAndCanRecover(){
+    batch(notices=listOf(pace(1)))
+    val first=queue().removeAt(0);set("currentNotice",first);set("speaking",true)
+    set("paceLedgerOverride",PacePeriodicLedger(service){false})
+    assertEquals(false,service.javaClass.getDeclaredMethod("preparePaceBody",JSONObject::class.java).apply{isAccessible=true}.invoke(service,first))
+    assertNull(get("currentNotice"));assertTrue(get("pacePersistenceBlocked") as Boolean)
+    assertFalse(PacePeriodicLedger(service).pending("r").single().has("attemptState"))
+    set("paceLedgerOverride",null);assertEquals(true,call("flushPacePersistence"))
+    assertEquals("BODY_REQUESTED",PacePeriodicLedger(service).pending("r").single().getString("attemptState"))
+  }
   @Test fun offPersistenceFailureSuppressesOldSnapshotsUntilDurableRetry(){
     batch(notices=listOf(pace(1)))
     service.getSharedPreferences(RunAnnouncerService.PREFS,0).edit().putBoolean("running",true).commit()

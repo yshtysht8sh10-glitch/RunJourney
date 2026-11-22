@@ -71,10 +71,17 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   private val paceTerminalIds=mutableSetOf<String>() // At most the 32 persisted pending slots.
   private var pacePersistenceRetry=false
   private var pacePersistenceFailures=0
+  private var paceRecoveryNeeded=true
+  private var pacePendingBody:String?=null
   private fun paceStorageAudit(status:String) = audit(JSONObject().put("id","$batchRunId:pace-storage").put("type","PACE_STORAGE")
     .put("data",JSONObject().put("runId",batchRunId).put("terminalPending",paceTerminalIds.size)),status)
   private fun flushPacePersistence():Boolean {
     try {
+      if(paceRecoveryNeeded) {
+        val unknown=paceLedger.recoverUnknown() ?: return pacePersistenceFailed("UNKNOWN_COMPLETION_PERSIST_FAILED")
+        unknown.forEach{audit(it,"UNKNOWN_COMPLETION")}
+        paceRecoveryNeeded=false
+      }
       val cancellation=paceCancellationSchedule
       if(cancellation!=null && !paceLedger.configure(cancellation,System.currentTimeMillis())) return pacePersistenceFailed("CONFIG_CANCEL_PERSIST_FAILED")
       paceCancellationSchedule=null
@@ -84,6 +91,9 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       val finish=pacePendingEnd
       if(finish!=null && !paceLedger.end(finish)) return pacePersistenceFailed("END_PERSIST_FAILED")
       pacePendingEnd=null
+      val body=pacePendingBody
+      if(body!=null && !paceLedger.bodyRequested(body,System.currentTimeMillis()))return pacePersistenceFailed("BODY_ATTEMPT_PERSIST_FAILED")
+      pacePendingBody=null
       for(id in paceTerminalIds.toList()) {
         if(!paceLedger.complete(id)) return pacePersistenceFailed("TERMINAL_PERSIST_FAILED")
         paceTerminalIds.remove(id)
@@ -113,6 +123,15 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       audit(n,"MERGED_NEW_CLOCK_BOUNDARY"); return
     }
     n.remove("startedAt"); messages.add(n)
+  }
+  private fun preparePaceBody(notice:JSONObject):Boolean {
+    if(!periodic(notice))return true
+    pacePendingBody=notice.optString("id")
+    if(!flushPacePersistence()) {
+      audit(notice,"BODY_BLOCKED_PERSISTENCE")
+      requeuePeriodic(notice);tts?.stop();clearAdaptive();currentNotice=null;speaking=false;releaseFocus();return false
+    }
+    return validInState(notice)
   }
   private fun restorePace() {
     if(pacePersistenceBlocked)return
@@ -758,6 +777,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
                 val gain = if (NoiseState.available()) NoiseState.gain else 1f
                 adaptiveGain = gain.coerceIn(.65f, 1f)
                 player.setVolume(gain, gain); NoiseState.playback = true
+                if(!preparePaceBody(notice))return@setOnPreparedListener
                 player.start(); started = true
                 NoiseState.outputType = player.routedDevice?.type ?: 0
                 lastAudioAuditAt = 0; lastAudioRoute = -1; lastAudioGain = -1f
@@ -813,6 +833,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     handler.postDelayed({
       if (currentNotice === notice) { tts?.stop(); finishUtterance("PLAYBACK_TIMEOUT") }
     }, 30000)
+    if(!preparePaceBody(notice))return
     if (tts?.speak(message, TextToSpeech.QUEUE_FLUSH, params, utteranceKey) != TextToSpeech.SUCCESS) finishUtterance("SPEAK_FAILED")
   }
 

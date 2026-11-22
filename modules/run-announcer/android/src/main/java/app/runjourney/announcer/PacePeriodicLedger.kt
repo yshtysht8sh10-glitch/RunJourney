@@ -27,7 +27,8 @@ internal class PacePeriodicLedger(context: Context, private val writeOverride: (
   @Synchronized fun state(run: String, config: String): String {
     val s = load()
     return if (s.optString("runId") == run && s.optString("configKey") == config)
-      JSONObject().put("acceptedThrough", s.optLong("acceptedThrough")).put("activeFromMs", s.optLong("activeFromMs")).toString() else "null"
+      JSONObject().put("acceptedThrough", s.optLong("acceptedThrough")).put("activeFromMs", s.optLong("activeFromMs"))
+        .put("unknownCompletionCount",s.optLong("unknownCompletionCount")).toString() else "null"
   }
   @Synchronized fun configure(schedule: JSONObject, now: Long): Boolean {
     if (schedule.optInt("version") != 1 || schedule.optLong("intervalMs") !in 60000L..600000L || schedule.optString("runId").isBlank()) return false
@@ -38,6 +39,7 @@ internal class PacePeriodicLedger(context: Context, private val writeOverride: (
     val started = schedule.optLong("startedAt")
     val firstInterval = now - started < schedule.optLong("intervalMs")
     val s = if (same) old else JSONObject().put("runId", schedule.optString("runId")).put("configKey", schedule.optString("configKey"))
+      .put("unknownCompletionCount",if(old.optString("runId")==schedule.optString("runId"))old.optLong("unknownCompletionCount") else 0)
       .put("acceptedThrough", if (old.optString("runId") != schedule.optString("runId") && firstInterval) 0 else ((now-started)/schedule.optLong("intervalMs")).coerceAtLeast(0))
       .put("activeFromMs", if (old.optString("runId") != schedule.optString("runId") && firstInterval) started else now)
     if (!same || !enabled || !old.optBoolean("enabled")) {
@@ -70,6 +72,24 @@ internal class PacePeriodicLedger(context: Context, private val writeOverride: (
     val s=load(); val a=s.optJSONArray("pending") ?: return true
     s.put("pending", JSONArray((0 until a.length()).map { a.getJSONObject(it) }.filter { it.optString("id") != id }))
     return save(s)
+  }
+  /** Written immediately before requesting body output; not proof that audio was heard. */
+  @Synchronized fun bodyRequested(id:String,at:Long):Boolean {
+    val s=load();val a=s.optJSONArray("pending") ?: return true
+    val n=(0 until a.length()).map{a.getJSONObject(it)}.firstOrNull{it.optString("id")==id} ?: return true
+    if(n.optString("attemptState")=="BODY_REQUESTED")return true
+    n.put("attemptState","BODY_REQUESTED").put("bodyRequestedAt",at)
+    return save(s)
+  }
+  /** A new service cannot know whether an interrupted process completed speech. */
+  @Synchronized fun recoverUnknown():List<JSONObject>? {
+    val s=load();val a=s.optJSONArray("pending") ?: return emptyList()
+    val unknown=(0 until a.length()).map{a.getJSONObject(it)}.filter{it.optString("attemptState")=="BODY_REQUESTED"}
+    if(unknown.isEmpty())return emptyList()
+    s.put("pending",JSONArray((0 until a.length()).map{a.getJSONObject(it)}.filter{it.optString("attemptState")!="BODY_REQUESTED"}))
+      .put("unknownCompletionCount",s.optLong("unknownCompletionCount")+unknown.size)
+      .put("lastUnknownCompletionIds",JSONArray(unknown.take(32).map{it.optString("id")}))
+    return if(save(s)) unknown else null
   }
   @Synchronized fun end(run: String): Boolean {
     val s=load(); if(s.optString("runId") != run) return true

@@ -46,6 +46,19 @@ class PacePeriodicLedgerTest {
     assertEquals(0,JSONObject(ledger.state("r","a")).getInt("acceptedThrough"))
     assertEquals("PERSISTED_ACK",ledger.accept(notice(1)))
   }
+  @Test fun restartedBodyAttemptBecomesUnknownTerminalRatherThanSuccessfulOrReplayed(){
+    ledger.configure(schedule(),1001);ledger.accept(notice(1));ledger.accept(notice(2))
+    assertTrue(ledger.bodyRequested("r:a:1",70000))
+    val reopened=PacePeriodicLedger(context);assertEquals(listOf("r:a:1"),reopened.recoverUnknown()!!.map{it.getString("id")})
+    assertEquals(listOf("r:a:2"),reopened.pending("r").map{it.getString("id")})
+    assertEquals(1,JSONObject(reopened.state("r","a")).getInt("unknownCompletionCount"))
+    assertTrue(reopened.recoverUnknown()!!.isEmpty());assertEquals(2,JSONObject(reopened.state("r","a")).getInt("acceptedThrough"))
+  }
+  @Test fun failedUnknownTerminalPersistenceDoesNotSilentlyRemoveOrAcknowledgeIt(){
+    ledger.configure(schedule(),1001);ledger.accept(notice(1));ledger.bodyRequested("r:a:1",70000)
+    assertNull(PacePeriodicLedger(context){false}.recoverUnknown());assertEquals(1,ledger.pending("r").size)
+    assertEquals(0,JSONObject(ledger.state("r","a")).getInt("unknownCompletionCount"))
+  }
   @Test fun legacyPreferencesAreReadWithoutDeletingOrOverwritingTheirContents() {
     val raw=JSONObject().put("runId","r").put("configKey","a").put("enabled",true).put("acceptedThrough",1).put("activeFromMs",1000)
       .put("pending",org.json.JSONArray().put(notice(1))).toString()
