@@ -17,7 +17,7 @@ class PacePeriodicLedgerTest {
   private fun schedule(key:String="a", enabled:Boolean=true) = JSONObject().put("version",1).put("runId","r").put("configKey",key).put("startedAt",1000).put("intervalMs",60000).put("enabled",enabled)
   private fun notice(slot:Int, quality:String="READY", key:String="a") = JSONObject().put("id","r:$key:$slot").put("type","PACE_WARNING").put("message","immutable $slot")
     .put("data",JSONObject().put("runId","r").put("pacePeriodicSnapshot",JSONObject().put("version",1).put("runId","r").put("configKey",key).put("slot",slot).put("quality",quality)))
-  @Before fun setup() { context.getSharedPreferences("runjourney-pace-periodic-v1",Context.MODE_PRIVATE).edit().clear().commit();ledger=PacePeriodicLedger(context) }
+  @Before fun setup() { android.util.AtomicFile(java.io.File(context.filesDir,"pace-periodic-v1.json")).delete();context.getSharedPreferences("runjourney-pace-periodic-v1",0).edit().clear().commit();ledger=PacePeriodicLedger(context) }
   @Test fun receiptSurvivesNewInstanceAndDuplicateCannotReplaceSnapshot() {
     assertEquals("null",ledger.state("r","a"));assertTrue(ledger.configure(schedule(),1001))
     assertEquals("PERSISTED_ACK",ledger.accept(notice(1)));assertEquals("ALREADY_ACCEPTED",ledger.accept(notice(1).put("message","changed")))
@@ -45,6 +45,14 @@ class PacePeriodicLedgerTest {
     assertEquals("PERSIST_FAILED",failed.accept(notice(1)))
     assertEquals(0,JSONObject(ledger.state("r","a")).getInt("acceptedThrough"))
     assertEquals("PERSISTED_ACK",ledger.accept(notice(1)))
+  }
+  @Test fun legacyPreferencesAreReadWithoutDeletingOrOverwritingTheirContents() {
+    val raw=JSONObject().put("runId","r").put("configKey","a").put("enabled",true).put("acceptedThrough",1).put("activeFromMs",1000)
+      .put("pending",org.json.JSONArray().put(notice(1))).toString()
+    val prefs=context.getSharedPreferences("runjourney-pace-periodic-v1",0)
+    prefs.edit().putString("ledger",raw).commit()
+    assertEquals(1,ledger.pending("r").size);assertTrue(ledger.complete("r:a:1"))
+    assertTrue(ledger.pending("r").isEmpty());assertEquals(raw,prefs.getString("ledger",null))
   }
   @Test fun settingOffAndChangedEpochCancelOldSnapshotsAndEndFencesLateReceipt() {
     ledger.configure(schedule(),1001);ledger.accept(notice(1))

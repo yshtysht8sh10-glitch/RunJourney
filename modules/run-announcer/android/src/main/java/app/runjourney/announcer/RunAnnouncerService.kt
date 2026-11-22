@@ -61,7 +61,50 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   private var chime: MediaPlayer? = null
   private var chimeActive = false
   private var recovery: JSONObject? = null
-  private val paceLedger by lazy { PacePeriodicLedger(this) }
+  private val defaultPaceLedger by lazy { PacePeriodicLedger(this) }
+  private var paceLedgerOverride:PacePeriodicLedger?=null // Storage-failure fixture seam.
+  private val paceLedger get()=paceLedgerOverride ?: defaultPaceLedger
+  private var pacePersistenceBlocked=false
+  private var paceDesiredSchedule:JSONObject?=null
+  private var paceCancellationSchedule:JSONObject?=null
+  private var pacePendingEnd:String?=null
+  private val paceTerminalIds=mutableSetOf<String>() // At most the 32 persisted pending slots.
+  private var pacePersistenceRetry=false
+  private var pacePersistenceFailures=0
+  private fun paceStorageAudit(status:String) = audit(JSONObject().put("id","$batchRunId:pace-storage").put("type","PACE_STORAGE")
+    .put("data",JSONObject().put("runId",batchRunId).put("terminalPending",paceTerminalIds.size)),status)
+  private fun flushPacePersistence():Boolean {
+    try {
+      val cancellation=paceCancellationSchedule
+      if(cancellation!=null && !paceLedger.configure(cancellation,System.currentTimeMillis())) return pacePersistenceFailed("CONFIG_CANCEL_PERSIST_FAILED")
+      paceCancellationSchedule=null
+      val schedule=paceDesiredSchedule
+      if(schedule!=null && !paceLedger.configure(schedule,System.currentTimeMillis())) return pacePersistenceFailed("CONFIG_PERSIST_FAILED")
+      paceDesiredSchedule=null
+      val finish=pacePendingEnd
+      if(finish!=null && !paceLedger.end(finish)) return pacePersistenceFailed("END_PERSIST_FAILED")
+      pacePendingEnd=null
+      for(id in paceTerminalIds.toList()) {
+        if(!paceLedger.complete(id)) return pacePersistenceFailed("TERMINAL_PERSIST_FAILED")
+        paceTerminalIds.remove(id)
+      }
+      if(pacePersistenceBlocked) paceStorageAudit("PERSISTENCE_RECOVERED")
+      pacePersistenceBlocked=false;pacePersistenceFailures=0
+      return true
+    } catch (_:Exception) { return pacePersistenceFailed("LEDGER_IO_FAILED") }
+  }
+  private fun pacePersistenceFailed(reason:String):Boolean {
+    pacePersistenceBlocked=true;paceStorageAudit(reason)
+    if(!pacePersistenceRetry) {
+      pacePersistenceRetry=true
+      val delay=2000L * (1L shl pacePersistenceFailures.coerceAtMost(4));pacePersistenceFailures++
+      handler.postDelayed({
+        pacePersistenceRetry=false
+        if(flushPacePersistence()) { restorePace();speakNext() }
+      },delay)
+    }
+    return false
+  }
   private fun periodic(n: JSONObject) = n.optJSONObject("data")?.optJSONObject("pacePeriodicSnapshot") != null
   private fun waitingPeriodic(n: JSONObject) = periodic(n) || n.optString("type") == "CURRENT_TIME"
   private fun legacyInformation(n: JSONObject) = VoicePolicy.information(n.optString("type")) && !periodic(n)
@@ -72,8 +115,9 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     n.remove("startedAt"); messages.add(n)
   }
   private fun restorePace() {
+    if(pacePersistenceBlocked)return
     val ids = messages.map { it.optString("id") } + listOfNotNull(currentNotice?.optString("id"))
-    paceLedger.pending(batchRunId).filter { it.optString("id") !in ids }.forEach { messages.add(it) }
+    paceLedger.pending(batchRunId).filter { it.optString("id") !in ids && it.optString("id") !in paceTerminalIds }.forEach { messages.add(it) }
   }
   private fun restoreClock() {
     val text=preferences.getString("clockPending",null) ?: return
@@ -227,13 +271,19 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       latestEventIndex = batch.optInt("latestEventIndex", -1)
     }
     ended = ended && runId == debugPrefs.getString("finishedRun", "") || batch.optBoolean("ended")
-    batch.optJSONObject("paceSchedule")?.let { if (!staleState) paceLedger.configure(it, serviceReceivedAt) }
-    if (ended) paceLedger.end(runId)
+    batch.optJSONObject("paceSchedule")?.let { if (!staleState) {
+      val previous=paceDesiredSchedule
+      if(previous!=null && (!previous.optBoolean("enabled") || previous.optString("configKey")!=it.optString("configKey")))
+        paceCancellationSchedule=JSONObject(previous.toString()).put("enabled",false)
+      paceDesiredSchedule=JSONObject(it.toString())
+    } }
+    if (ended) pacePendingEnd=runId
+    flushPacePersistence()
     if (ended) preferences.edit().remove("clockPending").commit()
     restorePace()
     restoreClock()
     // An OFF/config-change also cancels in-memory snapshots from the old epoch.
-    val paceIds = paceLedger.pending(runId).map { it.optString("id") }
+    val paceIds = if(pacePersistenceBlocked) emptyList() else paceLedger.pending(runId).map { it.optString("id") }
     messages.toList().filter { periodic(it) && it.optString("id") !in paceIds }.forEach { messages.remove(it); audit(it,"CANCELLED_PACE_EPOCH") }
     if(ended || !runId.startsWith("preview-cues-"))cuePreviewUntil=0
     if (ended && !batch.optBoolean("muted")) debugPrefs.edit().putString("finishedRun", runId).apply()
@@ -248,8 +298,9 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       n.put("serviceReceivedAt", serviceReceivedAt)
       val id = n.getString("id")
       if (periodic(n)) {
-        val receipt = paceLedger.accept(n)
+        val receipt = if(pacePersistenceBlocked) "PERSISTENCE_BLOCKED" else try { paceLedger.accept(n) } catch (_:Exception) { "PERSIST_FAILED" }
         audit(n, receipt)
+        if(receipt=="PERSIST_FAILED") pacePersistenceFailed("RECEIPT_PERSIST_FAILED")
         restorePace()
         return@forEach
       }
@@ -312,7 +363,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     }
     if (type == "LEGACY") return !ended
     if (n.optJSONObject("data")?.optString("runId") != batchRunId) return false
-    if (waitingPeriodic(n)) return !ended && (!periodic(n) || paceLedger.pending(batchRunId).any { it.optString("id") == n.optString("id") })
+    if (waitingPeriodic(n)) return !ended && (!periodic(n) || !pacePersistenceBlocked && n.optString("id") !in paceTerminalIds && paceLedger.pending(batchRunId).any { it.optString("id") == n.optString("id") })
     return VoicePolicy.validState(type, candidateCancelled, batchState, ended,
       n.optJSONObject("data")?.optInt("eventIndex", -1) ?: -1, latestEventIndex)
   }
@@ -543,7 +594,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     if (speaking || !ready || messages.isEmpty()) return
     // Deferred information follows state feedback, ahead of new periodic items.
     messages.sortByDescending { if (it.optBoolean("deferred")) 75 else it.optInt("priority") }
-    val selected = messages.indexOfFirst { !waitingPeriodic(it) || batchState == "RUNNING" }
+    val selected = messages.indexOfFirst { !waitingPeriodic(it) || batchState == "RUNNING" && (!periodic(it) || !pacePersistenceBlocked) }
     if (selected < 0) return
     val notice = messages.removeAt(selected)
     if ((batchMode || diagnostic(notice)) && !validInState(notice)) {
@@ -653,6 +704,9 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
 
   private fun speakNotice(notice: JSONObject, attributes: AudioAttributes) {
     if (!bodyEligible(notice)) return
+    // Clock wording is resolved at body dispatch, never cached in an audio file.
+    // Even with noise gain enabled, avoid a synthesis delay across a minute edge.
+    if(notice.optString("type")=="CURRENT_TIME") { speakDirect(notice,attributes);return }
     if (notice.optString("type")!="GOAL_COUNTDOWN" && NoiseState.available() && (VoicePolicy.information(notice.optString("type")) || notice.optString("type") in listOf("LEGACY", "RUN_GOAL_FINISHED", "RUN_STARTED", "GOAL_WARNING", "TURNAROUND"))) {
       synthesizeAdaptive(notice, attributes); return
     }
@@ -668,6 +722,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
   }
 
   private fun synthesizeAdaptive(notice: JSONObject, attributes: AudioAttributes) {
+    if(notice.optString("type")=="CURRENT_TIME") { speakDirect(notice,attributes);return }
     val file = try { File.createTempFile("runjourney-tts-", ".wav", cacheDir) } catch (_: Exception) { speakDirect(notice, attributes); return }
     speechFile = file
     val key = "synthesis-${System.nanoTime()}"
@@ -770,7 +825,10 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
         audit(it,"RETRY_PERIODIC_ENGINE_FAILURE")
       } else {
         if (status != "DONE" && waitingPeriodic(it)) audit(it,"PERIODIC_ENGINE_RETRIES_EXHAUSTED")
-        if (periodic(it)) paceLedger.complete(it.optString("id"))
+        if (periodic(it)) {
+          paceTerminalIds.add(it.optString("id"))
+          flushPacePersistence()
+        }
         if (it.optString("type")=="CURRENT_TIME") {
           val queued=preferences.getString("clockPending",null)?.let{raw->JSONObject(raw)}
           if(queued?.optString("id")==it.optString("id")) preferences.edit().remove("clockPending").commit()
@@ -802,6 +860,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     stopRunning = null
     handler.removeCallbacks(tick)
     handler.removeCallbacks(clockTick)
+    handler.removeCallbacksAndMessages(null)
     if (chimeActive) currentNotice?.let { audit(it, "CHIME_INTERRUPTED_SERVICE_DESTROYED") }
     chime?.release(); chime = null; chimeActive = false
     clearAdaptive()

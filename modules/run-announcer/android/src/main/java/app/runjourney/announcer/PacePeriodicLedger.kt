@@ -1,14 +1,29 @@
 package app.runjourney.announcer
 
 import android.content.Context
+import android.util.AtomicFile
+import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
 
 /** Speech-only durable receipt ledger. Never reads/writes RUN or GPS storage. */
 internal class PacePeriodicLedger(context: Context, private val writeOverride: ((String) -> Boolean)? = null) {
-  private val prefs = context.getSharedPreferences("runjourney-pace-periodic-v1", 0)
-  private fun load() = JSONObject(prefs.getString("ledger", "{}") ?: "{}")
-  private fun save(value: JSONObject): Boolean = writeOverride?.invoke(value.toString()) ?: prefs.edit().putString("ledger", value.toString()).commit()
+  companion object { private val ioLock=Any() }
+  private val file = AtomicFile(File(context.filesDir,"pace-periodic-v1.json"))
+  private val legacyPrefs=context.getSharedPreferences("runjourney-pace-periodic-v1",0)
+  private fun load() = synchronized(ioLock) {
+    try { JSONObject(file.openRead().bufferedReader().use { it.readText() }) }
+    catch (_: java.io.FileNotFoundException) { JSONObject(legacyPrefs.getString("ledger","{}") ?: "{}") }
+  }
+  private fun save(value: JSONObject): Boolean = synchronized(ioLock) {
+    writeOverride?.let { return it(value.toString()) }
+    var stream:java.io.FileOutputStream?=null
+    try {
+      val bytes=value.toString().toByteArray(Charsets.UTF_8)
+      stream=file.startWrite();stream.write(bytes);stream.fd.sync();file.finishWrite(stream)
+      file.openRead().use { it.readBytes().contentEquals(bytes) }
+    } catch (_: Exception) { file.failWrite(stream);false }
+  }
   @Synchronized fun state(run: String, config: String): String {
     val s = load()
     return if (s.optString("runId") == run && s.optString("configKey") == config)

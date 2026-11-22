@@ -17,10 +17,10 @@ class PeriodicVoiceQueueTest {
   private fun get(name:String)=service.javaClass.getDeclaredField(name).apply{isAccessible=true}.get(service)
   private fun set(name:String,value:Any?)=service.javaClass.getDeclaredField(name).apply{isAccessible=true}.set(service,value)
   @Suppress("UNCHECKED_CAST") private fun queue()=get("messages") as MutableList<JSONObject>
-  private fun batch(state:String="RUNNING", index:Int=1, ended:Boolean=false, notices:List<JSONObject> = emptyList()) {
+  private fun batch(state:String="RUNNING", index:Int=1, ended:Boolean=false, notices:List<JSONObject> = emptyList(), enabled:Boolean=true) {
     val now=System.currentTimeMillis()
     val b=JSONObject().put("runId","r").put("state",state).put("paused",state!="RUNNING").put("latestEventIndex",index).put("ended",ended)
-      .put("paceSchedule",JSONObject().put("version",1).put("runId","r").put("configKey","a").put("startedAt",now).put("intervalMs",60000).put("enabled",!ended))
+      .put("paceSchedule",JSONObject().put("version",1).put("runId","r").put("configKey","a").put("startedAt",now).put("intervalMs",60000).put("enabled",enabled && !ended))
       .put("notices",JSONArray(notices))
     service.javaClass.getDeclaredMethod("receiveBatch",String::class.java).apply{isAccessible=true}.invoke(service,b.toString())
   }
@@ -28,10 +28,60 @@ class PeriodicVoiceQueueTest {
     .put("data",JSONObject().put("runId","r").put("pacePeriodicSnapshot",JSONObject().put("version",1).put("runId","r").put("configKey","a").put("slot",slot).put("quality","READY")))
   @Before fun setup(){
     service=Robolectric.buildService(RunAnnouncerService::class.java).create().get()
+    android.util.AtomicFile(java.io.File(service.filesDir,"pace-periodic-v1.json")).delete()
     listOf("runjourney-pace-periodic-v1","runjourney-voice-debug",RunAnnouncerService.PREFS).forEach{service.getSharedPreferences(it,Context.MODE_PRIVATE).edit().clear().commit()}
     set("ready",false)
   }
-  @After fun teardown(){service.onDestroy()}
+  @After fun teardown(){service.onDestroy();NoiseState.running=false;NoiseState.playback=false}
+  private fun call(name:String)=service.javaClass.getDeclaredMethod(name).apply{isAccessible=true}.invoke(service)
+  @Test fun completedSpeechIsNotReplayedWhenTerminalPersistenceFails(){
+    batch(notices=listOf(pace(1)))
+    set("currentNotice",queue().removeAt(0));set("speaking",true)
+    set("paceLedgerOverride",PacePeriodicLedger(service){false})
+    service.javaClass.getDeclaredMethod("finishUtterance",String::class.java).apply{isAccessible=true}.invoke(service,"DONE")
+    assertTrue(get("pacePersistenceBlocked") as Boolean)
+    batch();assertTrue(queue().isEmpty());assertEquals(1,PacePeriodicLedger(service).pending("r").size)
+    set("paceLedgerOverride",null);assertEquals(true,call("flushPacePersistence"))
+    batch();assertTrue(queue().isEmpty());assertTrue(PacePeriodicLedger(service).pending("r").isEmpty())
+  }
+  @Test fun offPersistenceFailureSuppressesOldSnapshotsUntilDurableRetry(){
+    batch(notices=listOf(pace(1)))
+    service.getSharedPreferences(RunAnnouncerService.PREFS,0).edit().putBoolean("running",true).commit()
+    set("paceLedgerOverride",PacePeriodicLedger(service){false});batch(enabled=false)
+    assertTrue(get("pacePersistenceBlocked") as Boolean);assertTrue(queue().isEmpty())
+    assertEquals(1,PacePeriodicLedger(service).pending("r").size)
+    assertTrue(service.getSharedPreferences(RunAnnouncerService.PREFS,0).getBoolean("running",false))
+    set("paceLedgerOverride",null);assertEquals(true,call("flushPacePersistence"));assertTrue(PacePeriodicLedger(service).pending("r").isEmpty())
+  }
+  @Test fun offOnWhileStorageFailsStillCancelsPreviousEpochBeforeRearming(){
+    batch(notices=listOf(pace(1)));set("paceLedgerOverride",PacePeriodicLedger(service){false})
+    batch(enabled=false);batch(enabled=true)
+    assertTrue(queue().isEmpty());assertTrue(get("pacePersistenceBlocked") as Boolean)
+    set("paceLedgerOverride",null);assertEquals(true,call("flushPacePersistence"))
+    batch();assertTrue(queue().isEmpty());assertTrue(PacePeriodicLedger(service).pending("r").isEmpty())
+  }
+  @Test fun endPersistenceFailureDoesNotRestoreSpeechAndRetrySealsCancellation(){
+    batch(notices=listOf(pace(1)));set("paceLedgerOverride",PacePeriodicLedger(service){false})
+    val b=JSONObject().put("runId","r").put("ended",true).put("latestEventIndex",2).put("notices",JSONArray())
+    service.javaClass.getDeclaredMethod("receiveBatch",String::class.java).apply{isAccessible=true}.invoke(service,b.toString())
+    assertTrue(get("pacePersistenceBlocked") as Boolean);assertTrue(queue().isEmpty())
+    set("paceLedgerOverride",null);assertEquals(true,call("flushPacePersistence"));assertTrue(PacePeriodicLedger(service).pending("r").isEmpty())
+  }
+  @Test fun noiseEnabledClockUsesFreshDirectWordingAfterMinuteBoundary(){
+    batch()
+    val clock=JSONObject().put("id","clock").put("type","CURRENT_TIME").put("message","CURRENT_TIME_AT_PLAYBACK").put("expiresAt",Long.MAX_VALUE)
+      .put("data",JSONObject().put("runId","r"))
+    set("currentNotice",clock)
+    NoiseState.running=true;NoiseState.updatedAt=System.currentTimeMillis();NoiseState.gain=.75f
+    org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofSeconds(61))
+    NoiseState.updatedAt=System.currentTimeMillis()
+    val attributes=android.media.AudioAttributes.Builder().build()
+    service.javaClass.getDeclaredMethod("synthesizeAdaptive",JSONObject::class.java,android.media.AudioAttributes::class.java).apply{isAccessible=true}.invoke(service,clock,attributes)
+    assertNull(get("speechFile"));assertEquals("direct-tts",clock.getString("playbackMode"))
+    assertEquals(CurrentTimePolicy.message(System.currentTimeMillis()),clock.getString("message"))
+    assertEquals(1.0,clock.getDouble("directRequestedGain"),.001) // Existing CLOCK gain policy unchanged.
+    assertEquals(clock.getString("message"),org.robolectric.Shadows.shadowOf(get("tts") as android.speech.tts.TextToSpeech).lastSpokenText)
+  }
   @Test fun immutablePaceSurvivesPauseTtlSameTypeAndDeferredReplacement(){
     batch("AUTO_STOP",notices=listOf(pace(1),pace(2)))
     assertEquals(listOf("slot 1","slot 2"),queue().map{it.getString("message")})
