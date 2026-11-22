@@ -1,0 +1,18 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'app.runjourney.legacy'
+version = '1.0.0'
+
+android {
+  namespace 'app.runjourney.legacy'
+  testOptions { unitTests { includeAndroidResources = true } }
+  defaultConfig { versionCode 1; versionName '1.0.0' }
+}
+
+dependencies {
+  testImplementation 'junit:junit:4.13.2'
+  testImplementation 'org.robolectric:robolectric:4.17'
+}
