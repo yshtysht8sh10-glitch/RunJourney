@@ -29,14 +29,21 @@ class VoiceRecoveryTest {
     .put("message", "test").put("priority", when(type) { "RUN_GOAL_FINISHED" -> 110; "AUTO_STOP_CONFIRMED", "AUTO_RESUME_CONFIRMED" -> 100; "STOP_CANDIDATE_ANNOUNCED" -> 80; "KILOMETER_LAP" -> 70; "FIVE_MINUTES" -> 40; else -> 20 })
     .put("expiresAt", System.currentTimeMillis() + 30000).put("data", JSONObject().put("runId", "r").put("eventIndex", index))
   private fun batch(state: String = "RUNNING", vararg notices: JSONObject, ended: Boolean = false, candidate: Boolean = false, index: Int = 0) {
+    notices.firstOrNull{it.optString("type")=="CURRENT_TIME"}?.let{seedClock(System.currentTimeMillis(),it,1)}
     val payload = JSONObject().put("runId", "r").put("state", state).put("paused", state != "RUNNING")
       .put("ended", ended).put("cancelCandidate", !candidate).put("latestEventIndex", index).put("notices", JSONArray(notices.toList()))
     service.javaClass.getDeclaredMethod("receiveBatch", String::class.java).apply { isAccessible = true }.invoke(service, payload.toString())
+  }
+  private fun seedClock(start:Long,pending:JSONObject?=null,boundary:Long=0){
+    val s=JSONObject().put("runId","r").put("startedAt",start).put("minutes",10).put("enabled",true).put("boundary",boundary)
+    if(pending!=null)s.put("pending",pending)
+    java.io.File(service.filesDir,"clock-periodic-v1.json").writeText(s.toString())
   }
   @Before fun setup() {
     NoiseState.running = false; NoiseState.playback = false
     ShadowMediaPlayer.setMediaInfoProvider { ShadowMediaPlayer.MediaInfo(320, 0) }
     service = Robolectric.buildService(RunAnnouncerService::class.java).create().get()
+    android.util.AtomicFile(java.io.File(service.filesDir,"clock-periodic-v1.json")).delete()
     service.getSharedPreferences("runjourney-voice-debug", Context.MODE_PRIVATE).edit().clear().commit()
     set("ready", false)
   }
@@ -217,13 +224,13 @@ class VoiceRecoveryTest {
   @Test fun currentClockKeepsPausedOrBusyBoundariesForDelayedPlayback() {
     val prefs = service.getSharedPreferences(RunAnnouncerService.PREFS, 0)
     batch("AUTO_STOP")
-    prefs.edit().putBoolean("clockEnabled", true).putLong("clockStarted", System.currentTimeMillis()-600000).putInt("clockMinutes",10).putLong("clockBoundary",0).commit()
+    seedClock(System.currentTimeMillis()-600000)
     (get("clockTick") as Runnable).run()
-    assertEquals(1L,prefs.getLong("clockBoundary",0)); assertEquals(1,queue().size)
+    assertEquals(1L,ClockPeriodicLedger(service).snapshot().optLong("boundary")); assertEquals(1,queue().size)
     batch("RUNNING"); (get("clockTick") as Runnable).run(); assertEquals(1,queue().size)
-    prefs.edit().putLong("clockStarted",System.currentTimeMillis()-1200000).commit()
+    seedClock(System.currentTimeMillis()-1200000,boundary=1)
     set("speaking",true); (get("clockTick") as Runnable).run()
-    assertEquals(2L,prefs.getLong("clockBoundary",0)); assertEquals(1,queue().size)
+    assertEquals(2L,ClockPeriodicLedger(service).snapshot().optLong("boundary")); assertEquals(1,queue().size)
     set("speaking",false); (get("clockTick") as Runnable).run(); assertEquals(1,queue().size)
   }
   @Test fun currentClockIsHeldOnStopAndRetriedAfterImportantStateFeedback() {

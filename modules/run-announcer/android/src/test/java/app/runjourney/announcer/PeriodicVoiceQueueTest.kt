@@ -17,18 +17,25 @@ class PeriodicVoiceQueueTest {
   private fun get(name:String)=service.javaClass.getDeclaredField(name).apply{isAccessible=true}.get(service)
   private fun set(name:String,value:Any?)=service.javaClass.getDeclaredField(name).apply{isAccessible=true}.set(service,value)
   @Suppress("UNCHECKED_CAST") private fun queue()=get("messages") as MutableList<JSONObject>
-  private fun batch(state:String="RUNNING", index:Int=1, ended:Boolean=false, notices:List<JSONObject> = emptyList(), enabled:Boolean=true) {
+  private fun batch(state:String="RUNNING", index:Int=1, ended:Boolean=false, notices:List<JSONObject> = emptyList(), enabled:Boolean=true,clock:JSONObject?=null) {
     val now=System.currentTimeMillis()
     val b=JSONObject().put("runId","r").put("state",state).put("paused",state!="RUNNING").put("latestEventIndex",index).put("ended",ended)
       .put("paceSchedule",JSONObject().put("version",1).put("runId","r").put("configKey","a").put("startedAt",now).put("intervalMs",60000).put("enabled",enabled && !ended))
       .put("notices",JSONArray(notices))
+    if(clock!=null)b.put("clock",clock)
     service.javaClass.getDeclaredMethod("receiveBatch",String::class.java).apply{isAccessible=true}.invoke(service,b.toString())
   }
   private fun pace(slot:Int)=JSONObject().put("id","p$slot").put("type","PACE_WARNING").put("priority",20).put("message","slot $slot").put("expiresAt",1)
     .put("data",JSONObject().put("runId","r").put("pacePeriodicSnapshot",JSONObject().put("version",1).put("runId","r").put("configKey","a").put("slot",slot).put("quality","READY")))
+  private fun seedClock(start:Long,pending:JSONObject?=null,boundary:Long=0){
+    val s=JSONObject().put("runId","r").put("startedAt",start).put("minutes",10).put("enabled",true).put("boundary",boundary)
+    if(pending!=null)s.put("pending",pending)
+    java.io.File(service.filesDir,"clock-periodic-v1.json").writeText(s.toString())
+  }
   @Before fun setup(){
     service=Robolectric.buildService(RunAnnouncerService::class.java).create().get()
     android.util.AtomicFile(java.io.File(service.filesDir,"pace-periodic-v1.json")).delete()
+    android.util.AtomicFile(java.io.File(service.filesDir,"clock-periodic-v1.json")).delete()
     listOf("runjourney-pace-periodic-v1","runjourney-voice-debug",RunAnnouncerService.PREFS).forEach{service.getSharedPreferences(it,Context.MODE_PRIVATE).edit().clear().commit()}
     set("ready",false)
   }
@@ -62,6 +69,34 @@ class PeriodicVoiceQueueTest {
     set("paceLedgerOverride",null);assertEquals(true,call("flushPacePersistence"))
     assertEquals("BODY_REQUESTED",PacePeriodicLedger(service).pending("r").single().getString("attemptState"))
   }
+  private fun clockNotice()=JSONObject().put("id","clock-one").put("type","CURRENT_TIME").put("message","CURRENT_TIME_AT_PLAYBACK").put("expiresAt",Long.MAX_VALUE).put("data",JSONObject().put("runId","r"))
+  @Test fun failedClockReceiptKeepsBoundaryUntilDurableRetry(){
+    batch();seedClock(System.currentTimeMillis()-605000)
+    set("clockLedgerOverride",ClockPeriodicLedger(service){false});(get("clockTick") as Runnable).run()
+    assertTrue(get("clockBlocked") as Boolean);assertEquals(0,ClockPeriodicLedger(service).snapshot().getInt("boundary"));assertTrue(queue().isEmpty())
+    set("clockLedgerOverride",null);assertEquals(true,call("flushClock"));call("restoreClock")
+    assertEquals(1,ClockPeriodicLedger(service).snapshot().getInt("boundary"));assertEquals(1,queue().count{it.optString("type")=="CURRENT_TIME"})
+  }
+  @Test fun failedClockTerminalIsNotRestoredAsDuplicateInSameService(){
+    batch();val n=clockNotice();seedClock(System.currentTimeMillis(),n,1);set("currentNotice",n);set("speaking",true)
+    set("clockLedgerOverride",ClockPeriodicLedger(service){false})
+    service.javaClass.getDeclaredMethod("finishUtterance",String::class.java).apply{isAccessible=true}.invoke(service,"DONE")
+    assertTrue(get("clockBlocked") as Boolean);batch();assertTrue(queue().none{it.optString("type")=="CURRENT_TIME"})
+    assertNotNull(ClockPeriodicLedger(service).pending("r"));set("clockLedgerOverride",null);assertEquals(true,call("flushClock"));assertNull(ClockPeriodicLedger(service).pending("r"))
+  }
+  @Test fun clockOffOnDuringStorageFailureCancelsPreviousPendingBeforeReenable(){
+    batch();val started=System.currentTimeMillis();seedClock(started,clockNotice(),1)
+    fun c(on:Boolean)=JSONObject().put("startedAt",started).put("minutes",10).put("enabled",on)
+    set("clockLedgerOverride",ClockPeriodicLedger(service){false});batch(clock=c(false));batch(clock=c(true))
+    assertTrue(get("clockBlocked") as Boolean);assertTrue(queue().none{it.optString("type")=="CURRENT_TIME"})
+    set("clockLedgerOverride",null);assertEquals(true,call("flushClock"));call("restoreClock");assertNull(ClockPeriodicLedger(service).pending("r"))
+  }
+  @Test fun attemptedClockOnServiceRestartIsUnknownRatherThanAutomaticallyRepeated(){
+    batch();val n=clockNotice();seedClock(System.currentTimeMillis(),n,1);set("currentNotice",n)
+    assertEquals(true,service.javaClass.getDeclaredMethod("prepareClockBody",JSONObject::class.java).apply{isAccessible=true}.invoke(service,n))
+    service.onDestroy();service=Robolectric.buildService(RunAnnouncerService::class.java).create().get();set("ready",false);batch()
+    assertTrue(queue().none{it.optString("type")=="CURRENT_TIME"});assertEquals(1,ClockPeriodicLedger(service).snapshot().getInt("unknownCompletionCount"))
+  }
   @Test fun offPersistenceFailureSuppressesOldSnapshotsUntilDurableRetry(){
     batch(notices=listOf(pace(1)))
     service.getSharedPreferences(RunAnnouncerService.PREFS,0).edit().putBoolean("running",true).commit()
@@ -90,6 +125,7 @@ class PeriodicVoiceQueueTest {
     val clock=JSONObject().put("id","clock").put("type","CURRENT_TIME").put("message","CURRENT_TIME_AT_PLAYBACK").put("expiresAt",Long.MAX_VALUE)
       .put("data",JSONObject().put("runId","r"))
     set("currentNotice",clock)
+    seedClock(System.currentTimeMillis(),clock,1)
     NoiseState.running=true;NoiseState.updatedAt=System.currentTimeMillis();NoiseState.gain=.75f
     org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofSeconds(61))
     NoiseState.updatedAt=System.currentTimeMillis()
@@ -130,10 +166,10 @@ class PeriodicVoiceQueueTest {
     batch("AUTO_STOP")
     val prefs=service.getSharedPreferences(RunAnnouncerService.PREFS,Context.MODE_PRIVATE)
     val now=System.currentTimeMillis()
-    prefs.edit().putBoolean("clockEnabled",true).putLong("clockStarted",now-605000).putInt("clockMinutes",10).putLong("clockBoundary",0).commit()
+    seedClock(now-605000)
     (get("clockTick") as Runnable).run()
     assertEquals(1,queue().size);assertEquals(Long.MAX_VALUE,queue().single().getLong("expiresAt"))
-    prefs.edit().putLong("clockBoundary",0).commit();(get("clockTick") as Runnable).run()
+    seedClock(now-1205000);(get("clockTick") as Runnable).run()
     assertEquals(1,queue().size);assertEquals("CURRENT_TIME",queue().single().getString("type"))
   }
 }

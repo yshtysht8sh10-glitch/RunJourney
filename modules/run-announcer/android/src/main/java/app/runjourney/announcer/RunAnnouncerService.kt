@@ -139,32 +139,68 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     paceLedger.pending(batchRunId).filter { it.optString("id") !in ids && it.optString("id") !in paceTerminalIds }.forEach { messages.add(it) }
   }
   private fun restoreClock() {
-    val text=preferences.getString("clockPending",null) ?: return
-    val n=JSONObject(text)
-    if(n.optJSONObject("data")?.optString("runId") == batchRunId && !ended && preferences.getBoolean("clockEnabled",false)
-      && messages.none{it.optString("type")=="CURRENT_TIME"} && currentNotice?.optString("id") != n.optString("id")) messages.add(n)
+    if(clockBlocked)return
+    val n=try{clockLedger.pending(batchRunId)}catch(_:Exception){clockFailure("CLOCK_LEDGER_IO_FAILED");return}
+    messages.toList().filter{it.optString("type")=="CURRENT_TIME" && it.optString("id")!=n?.optString("id")}.forEach{messages.remove(it);audit(it,"MERGED_OR_CANCELLED_CLOCK")}
+    if(n!=null && !ended && n.optString("id") !in clockTerminalIds && messages.none{it.optString("id")==n.optString("id")} && currentNotice?.optString("id")!=n.optString("id"))messages.add(n)
+  }
+  private val defaultClockLedger by lazy{ClockPeriodicLedger(this)}
+  private var clockLedgerOverride:ClockPeriodicLedger?=null
+  private val clockLedger get()=clockLedgerOverride ?: defaultClockLedger
+  private var clockBlocked=false
+  private var clockRecoveryNeeded=true
+  private var clockDesiredConfig:Pair<String,JSONObject>?=null
+  private var clockCancellationConfig:Pair<String,JSONObject>?=null
+  private var clockReceipt:Pair<Long,JSONObject>?=null
+  private var clockPendingEnd:String?=null
+  private var clockBody:String?=null
+  private val clockTerminalIds=mutableSetOf<String>()
+  private var clockRetry=false
+  private var clockFailures=0
+  private fun clockFailure(reason:String):Boolean {
+    clockBlocked=true
+    audit(JSONObject().put("id","$batchRunId:clock-storage").put("type","CLOCK_STORAGE").put("data",JSONObject().put("runId",batchRunId)),reason)
+    if(!clockRetry){clockRetry=true;val delay=2000L*(1L shl clockFailures.coerceAtMost(4));clockFailures++
+      handler.postDelayed({clockRetry=false;if(flushClock()){restoreClock();speakNext()}},delay)}
+    return false
+  }
+  private fun flushClock():Boolean {
+    try {
+      if(clockRecoveryNeeded){val recovered=clockLedger.recoverUnknown();if(!recovered.first)return clockFailure("CLOCK_UNKNOWN_PERSIST_FAILED");recovered.second?.let{audit(it,"UNKNOWN_COMPLETION")};clockRecoveryNeeded=false}
+      clockCancellationConfig?.let{if(!clockLedger.configure(it.first,it.second,System.currentTimeMillis()))return clockFailure("CLOCK_CANCEL_CONFIG_PERSIST_FAILED")};clockCancellationConfig=null
+      clockDesiredConfig?.let{if(!clockLedger.configure(it.first,it.second,System.currentTimeMillis()))return clockFailure("CLOCK_CONFIG_PERSIST_FAILED")};clockDesiredConfig=null
+      clockPendingEnd?.let{if(!clockLedger.end(it))return clockFailure("CLOCK_CANCEL_PERSIST_FAILED")};clockPendingEnd=null
+      clockReceipt?.let{if(!clockLedger.receive(it.first,it.second))return clockFailure("CLOCK_RECEIPT_PERSIST_FAILED")};clockReceipt=null
+      clockBody?.let{if(!clockLedger.bodyRequested(it,System.currentTimeMillis()))return clockFailure("CLOCK_BODY_PERSIST_FAILED")};clockBody=null
+      for(id in clockTerminalIds.toList()){if(!clockLedger.complete(id))return clockFailure("CLOCK_TERMINAL_PERSIST_FAILED");clockTerminalIds.remove(id)}
+      clockBlocked=false;clockFailures=0;return true
+    }catch(_:Exception){return clockFailure("CLOCK_LEDGER_IO_FAILED")}
+  }
+  private fun prepareClockBody(notice:JSONObject):Boolean {
+    if(notice.optString("type")!="CURRENT_TIME")return true
+    clockBody=notice.optString("id")
+    if(flushClock())return true
+    requeuePeriodic(notice);tts?.stop();clearAdaptive();currentNotice=null;speaking=false;releaseFocus();return false
   }
   private val clockTick = object : Runnable {
     override fun run() {
-      if (!preferences.getBoolean("clockEnabled", false) || ended) return
+      val clock=try{clockLedger.snapshot()}catch(_:Exception){clockFailure("CLOCK_LEDGER_IO_FAILED");handler.postDelayed(this,1000);return}
+      if (ended) return
+      if(clockBlocked || !clock.optBoolean("enabled")){handler.postDelayed(this,1000);return}
       val now = System.currentTimeMillis()
-      val due = CurrentTimePolicy.boundary(preferences.getLong("clockStarted", 0), now, preferences.getInt("clockMinutes", 10))
-      val previousBoundary = preferences.getLong("clockBoundary", 0)
+      val due = CurrentTimePolicy.boundary(clock.optLong("startedAt"), now, clock.optInt("minutes",10))
+      val previousBoundary = clock.optLong("boundary")
       if (due > previousBoundary) {
         val n = JSONObject().put("id", "$batchRunId:clock:$due").put("type", "CURRENT_TIME").put("priority", 30)
           .put("message", "CURRENT_TIME_AT_PLAYBACK").put("generatedAt", now).put("expiresAt", Long.MAX_VALUE).put("nativeQueuedAt", now)
           .put("data", JSONObject().put("runId", batchRunId).put("sampledAt", now)
-            .put("scheduledAt", preferences.getLong("clockStarted",0)+due*preferences.getInt("clockMinutes",10)*60000L)
-            .put("intervalMinutes", preferences.getInt("clockMinutes",10)).put("skippedBoundaries", due-previousBoundary-1)
+            .put("scheduledAt", clock.optLong("startedAt")+due*clock.optInt("minutes",10)*60000L)
+            .put("intervalMinutes", clock.optInt("minutes",10)).put("skippedBoundaries", due-previousBoundary-1)
             .put("state", batchState).put("competingType", currentNotice?.optString("type") ?: "")
             .put("queueSize", messages.size))
         audit(n, "GENERATED")
-        messages.toList().filter { it.optString("type") == "CURRENT_TIME" }.forEach {
-          messages.remove(it); audit(it, "MERGED_NEW_CLOCK_BOUNDARY")
-        }
-        if (preferences.edit().putLong("clockBoundary",due).putString("clockPending",n.toString()).commit()) {
-          messages.add(n); audit(n, "QUEUED"); speakNext()
-        } else audit(n,"CLOCK_RECEIPT_PERSIST_FAILED")
+        clockReceipt=due to n
+        if(flushClock()){restoreClock();audit(n,"QUEUED");speakNext()}
       }
       handler.postDelayed(this, 1000)
     }
@@ -241,6 +277,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     batchMode = true
     val batch = JSONObject(payload)
     val runId = batch.optString("runId")
+    val staleClockConfig=batchRunId==runId && batch.optInt("latestEventIndex",-1)<latestEventIndex
     if(runId.startsWith("preview-cues-") && batch.optLong("previewLeaseMs")>0 && !preferences.getBoolean("running",false)) {
       val until=System.currentTimeMillis()+batch.optLong("previewLeaseMs").coerceIn(1,30000)
       cuePreviewUntil=until
@@ -256,16 +293,20 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     if (debugPrefs.getString("finishedRun", "") == runId && !batch.optBoolean("ended")) {
       (0 until incoming.length()).forEach { audit(incoming.getJSONObject(it), "RUN_ENDED") }; return
     }
-    batch.optJSONObject("clock")?.let { c ->
+    batch.optJSONObject("clock")?.takeUnless{staleClockConfig}?.let { c ->
       val started = c.optLong("startedAt")
       val minutes = c.optInt("minutes", 10)
-      val same = preferences.getLong("clockStarted", 0) == started && preferences.getInt("clockMinutes", 10) == minutes && preferences.getBoolean("clockEnabled", false) == c.optBoolean("enabled")
-      preferences.edit().putLong("clockStarted", started).putInt("clockMinutes", minutes).putBoolean("clockEnabled", c.optBoolean("enabled"))
-        .putLong("clockBoundary", if(same) preferences.getLong("clockBoundary", 0) else CurrentTimePolicy.boundary(started, System.currentTimeMillis(), minutes)).apply()
+      val clock=try{clockLedger.snapshot()}catch(_:Exception){JSONObject()}
+      val same=clock.optString("runId")==runId && clock.optLong("startedAt")==started && clock.optInt("minutes")==minutes && clock.optBoolean("enabled")==c.optBoolean("enabled")
+      val previousConfig=clockDesiredConfig
+      if(previousConfig!=null && (!previousConfig.second.optBoolean("enabled") || previousConfig.second.optLong("startedAt")!=started || previousConfig.second.optInt("minutes")!=minutes))
+        clockCancellationConfig=previousConfig.first to JSONObject(previousConfig.second.toString()).put("enabled",false)
+      clockDesiredConfig=runId to JSONObject(c.toString())
+      if(!same){clockReceipt=null;clockBody=null}
       if (!same) audit(JSONObject().put("id", "$runId:clock-config:$serviceReceivedAt").put("type", "CLOCK_CONFIGURATION")
         .put("data", JSONObject().put("runId",runId).put("enabled",c.optBoolean("enabled")).put("minutes",minutes).put("startedAt",started)), "CONFIGURED")
       handler.removeCallbacks(clockTick)
-      if (!same) { preferences.edit().remove("clockPending").commit(); messages.toList().filter{it.optString("type")=="CURRENT_TIME"}.forEach{messages.remove(it);audit(it,"CANCELLED_CLOCK_CONFIGURATION")} }
+      if (!same) { messages.toList().filter{it.optString("type")=="CURRENT_TIME"}.forEach{messages.remove(it);audit(it,"CANCELLED_CLOCK_CONFIGURATION")} }
       if (c.optBoolean("enabled")) handler.post(clockTick)
     }
     if (batchRunId.isNotEmpty() && batchRunId != runId) {
@@ -298,7 +339,8 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     } }
     if (ended) pacePendingEnd=runId
     flushPacePersistence()
-    if (ended) preferences.edit().remove("clockPending").commit()
+    if(ended){clockPendingEnd=runId;clockDesiredConfig=null;clockCancellationConfig=null;clockReceipt=null;clockBody=null}
+    flushClock()
     restorePace()
     restoreClock()
     // An OFF/config-change also cancels in-memory snapshots from the old epoch.
@@ -316,6 +358,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     sorted.forEach { n ->
       n.put("serviceReceivedAt", serviceReceivedAt)
       val id = n.getString("id")
+      if(n.optString("type")=="CURRENT_TIME" && (messages.any{it.optString("id")==id} || currentNotice?.optString("id")==id)){audit(n,"ALREADY_ACCEPTED");return@forEach}
       if (periodic(n)) {
         val receipt = if(pacePersistenceBlocked) "PERSISTENCE_BLOCKED" else try { paceLedger.accept(n) } catch (_:Exception) { "PERSIST_FAILED" }
         audit(n, receipt)
@@ -382,7 +425,10 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     }
     if (type == "LEGACY") return !ended
     if (n.optJSONObject("data")?.optString("runId") != batchRunId) return false
-    if (waitingPeriodic(n)) return !ended && (!periodic(n) || !pacePersistenceBlocked && n.optString("id") !in paceTerminalIds && paceLedger.pending(batchRunId).any { it.optString("id") == n.optString("id") })
+    if(n.optString("type")=="CURRENT_TIME")return try{
+      !ended && !clockBlocked && n.optString("id") !in clockTerminalIds && clockLedger.snapshot().optBoolean("enabled") && (currentNotice===n || clockLedger.pending(batchRunId)?.optString("id")==n.optString("id"))
+    }catch(_:Exception){clockFailure("CLOCK_LEDGER_IO_FAILED");false}
+    if (periodic(n)) return !ended && !pacePersistenceBlocked && n.optString("id") !in paceTerminalIds && paceLedger.pending(batchRunId).any { it.optString("id") == n.optString("id") }
     return VoicePolicy.validState(type, candidateCancelled, batchState, ended,
       n.optJSONObject("data")?.optInt("eventIndex", -1) ?: -1, latestEventIndex)
   }
@@ -613,7 +659,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     if (speaking || !ready || messages.isEmpty()) return
     // Deferred information follows state feedback, ahead of new periodic items.
     messages.sortByDescending { if (it.optBoolean("deferred")) 75 else it.optInt("priority") }
-    val selected = messages.indexOfFirst { !waitingPeriodic(it) || batchState == "RUNNING" && (!periodic(it) || !pacePersistenceBlocked) }
+    val selected = messages.indexOfFirst { !waitingPeriodic(it) || batchState == "RUNNING" && (!periodic(it) || !pacePersistenceBlocked) && (it.optString("type")!="CURRENT_TIME" || !clockBlocked) }
     if (selected < 0) return
     val notice = messages.removeAt(selected)
     if ((batchMode || diagnostic(notice)) && !validInState(notice)) {
@@ -834,6 +880,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
       if (currentNotice === notice) { tts?.stop(); finishUtterance("PLAYBACK_TIMEOUT") }
     }, 30000)
     if(!preparePaceBody(notice))return
+    if(!prepareClockBody(notice))return
     if (tts?.speak(message, TextToSpeech.QUEUE_FLUSH, params, utteranceKey) != TextToSpeech.SUCCESS) finishUtterance("SPEAK_FAILED")
   }
 
@@ -851,8 +898,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
           flushPacePersistence()
         }
         if (it.optString("type")=="CURRENT_TIME") {
-          val queued=preferences.getString("clockPending",null)?.let{raw->JSONObject(raw)}
-          if(queued?.optString("id")==it.optString("id")) preferences.edit().remove("clockPending").commit()
+          clockTerminalIds.add(it.optString("id"));flushClock()
         }
       }
     }

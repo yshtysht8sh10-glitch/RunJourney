@@ -27,6 +27,7 @@ class DiagnosticVoiceQueueTest {
     .put("ended",ended).put("latestEventIndex",1).put("notices",JSONArray(items.toList())).toString())
   @Before fun setup() {
     service=Robolectric.buildService(RunAnnouncerService::class.java).create().get()
+    android.util.AtomicFile(java.io.File(service.filesDir,"clock-periodic-v1.json")).delete()
     val base = service.baseContext
     android.content.ContextWrapper::class.java.getDeclaredField("mBase").apply { isAccessible=true }.set(service,
       object : android.content.ContextWrapper(base) { override fun getPackageName() = "app.runjourney.mobile.test" })
@@ -89,9 +90,8 @@ class DiagnosticVoiceQueueTest {
   @Test fun diagnosticSpeechAloneDoesNotCauseScheduledClockToBeSkipped() {
     set("ready",true);set("speaking",true);set("currentNotice",feedback("begin"))
     set("batchRunId","r");set("batchState","RUNNING")
-    service.getSharedPreferences(RunAnnouncerService.PREFS,Context.MODE_PRIVATE).edit()
-      .putBoolean("clockEnabled",true).putLong("clockStarted",System.currentTimeMillis()-600000)
-      .putInt("clockMinutes",10).putLong("clockBoundary",0).commit()
+    val started=System.currentTimeMillis()-600000
+    ClockPeriodicLedger(service).configure("r",JSONObject().put("enabled",true).put("startedAt",started).put("minutes",10),started+1)
     (get("clockTick") as Runnable).run()
     assertTrue(queue().any { it.optString("type")=="CURRENT_TIME" })
     call("receiveDiagnosticFeedback",feedback("next","END_SAVED").toString())
