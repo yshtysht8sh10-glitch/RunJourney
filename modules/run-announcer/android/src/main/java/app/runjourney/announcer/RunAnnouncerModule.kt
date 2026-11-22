@@ -133,6 +133,11 @@ class RunAnnouncerModule : Module() {
     AsyncFunction("voiceLog") { limit: Int, promise: Promise ->
       VoiceLogStorage.read(requireNotNull(appContext.reactContext), limit, promise)
     }
+    AsyncFunction("compactVoiceStats") { runId:String,promise:Promise -> VoiceLogStorage.compactStats(requireNotNull(appContext.reactContext),runId,promise) }
+    AsyncFunction("compactVoicePage") { runId:String,offset:Double,end:Double,promise:Promise ->
+      if(!offset.isFinite() || !end.isFinite() || offset<0 || end<0 || offset!=offset.toLong().toDouble() || end!=end.toLong().toDouble())promise.reject("COMPACT_RANGE","Invalid byte range",null)
+      else VoiceLogStorage.compactPage(requireNotNull(appContext.reactContext),runId,offset.toLong(),end.toLong(),promise)
+    }
     // Dispatch the tiny service intent directly; do not wait on the shared
     // async-module executor behind database/file work. Playback stays async.
     Function("markerControl") { action: String -> RunMarkerService.control(requireNotNull(appContext.reactContext), action) }

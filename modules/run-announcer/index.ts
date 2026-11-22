@@ -33,6 +33,8 @@ type RunAnnouncer = {
   addListener?(event: 'finishClock', listener: () => void): { remove(): void };
   notifyBatch?(payload: string): Promise<void> | void;
   voiceLog?(limit: number): Promise<string>;
+  compactVoiceStats?(runId: string): Promise<string>;
+  compactVoicePage?(runId: string, byteOffset: number, endOffset: number): Promise<string>;
   updateWorkout?(key: string, message: string, expiresAt: number, allowed: boolean): void;
   start(startedAtMs: number, intervalMs: number): void;
   updateClock(activeMs: number, paused: boolean, confirmedActiveMs: number): void;
