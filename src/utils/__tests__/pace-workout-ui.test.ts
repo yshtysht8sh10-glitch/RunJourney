@@ -69,7 +69,7 @@ test('report displays valid-time-only ratio and unknown intervals without readin
 
 test('editing and reverting a field clears dirty; failed save keeps dirty and blocks leaving', async () => {
   await act(async () => { tree = create(createElement(PaceWorkoutSettings)); });
-  const frequency = () => tree.root.findAllByType(TextInput).find(n=>n.props.accessibilityLabel==='音声の最小間隔（秒・60〜600）')!;
+  const frequency = () => tree.root.findAllByType(TextInput).find(n=>n.props.accessibilityLabel==='PACE通知間隔（秒・60〜600）')!;
   expect(paceEditorDirty()).toBe(false);
   await act(async()=>{frequency().props.onChangeText('60');}); expect(paceEditorDirty()).toBe(true);
   await act(async()=>{frequency().props.onChangeText(String(settings.voiceIntervalSec));});expect(paceEditorDirty()).toBe(false);
@@ -81,4 +81,16 @@ test('editing and reverting a field clears dirty; failed save keeps dirty and bl
   await act(async()=>{save.onPress!();});
   expect(destination).not.toHaveBeenCalled();expect(paceEditorDirty()).toBe(true);
   alert.mockRestore();
+});
+
+test('host rerenders preserve unsaved input; reopening loads saved settings without silently saving a draft', async () => {
+  await act(async () => { tree = create(createElement(PaceWorkoutSettings)); });
+  const frequency = () => tree.root.findAllByType(TextInput).find(n => n.props.accessibilityLabel === 'PACE通知間隔（秒・60〜600）')!;
+  await act(async () => { frequency().props.onChangeText('60'); });
+  await act(async () => { tree.update(createElement(PaceWorkoutSettings)); });
+  expect(frequency().props.value).toBe('60'); expect(paceEditorDirty()).toBe(true);
+  expect(PaceSettingsRepository.save).not.toHaveBeenCalled();
+  await act(async () => { tree.unmount(); tree = create(createElement(PaceWorkoutSettings)); });
+  expect(frequency().props.value).toBe(String(settings.voiceIntervalSec)); expect(paceEditorDirty()).toBe(false);
+  expect(PaceSettingsRepository.save).not.toHaveBeenCalled();
 });

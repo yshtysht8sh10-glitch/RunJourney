@@ -72,7 +72,7 @@ export default function PaceWorkoutSettings() {
   </View>;
   return <View style={styles.panel}>
     <Text style={styles.title}>ペース走（次のSTARTから）</Text>
-    <Text accessibilityLiveRegion="polite" style={dirty ? styles.error : styles.note}>{dirty ? "編集中・未保存" : "保存済み"} · 適用予定: {persisted.enabled ? `${persisted.distanceKm}km / ${formatWorkoutPace(persisted.paceSecPerKm)} /km / 音声${persisted.voice ? persisted.voiceIntervalSec + "秒以上間隔" : "OFF"}` : "ペース走OFF"}</Text>
+    <Text accessibilityLiveRegion="polite" style={dirty ? styles.error : styles.note}>{dirty ? "編集中・未保存" : "保存済み"} · 適用予定: {persisted.enabled ? `${persisted.distanceKm}km / ${formatWorkoutPace(persisted.paceSecPerKm)} /km / 音声${persisted.voice ? persisted.voiceIntervalSec + "秒間隔" : "OFF"}` : "ペース走OFF"}</Text>
     <View style={styles.row}><Text style={styles.text}>一定ペース走</Text><Switch accessibilityLabel="一定ペース走" value={settings.enabled} disabled={!loaded || busy}
       onValueChange={enabled => { setSettings(s => ({ ...s, enabled })); setSaved(false); }} /></View>
     {settings.enabled && <>
@@ -92,7 +92,7 @@ export default function PaceWorkoutSettings() {
       {input('許容幅（±秒/km）', tolerance, setTolerance)}
       <View style={styles.row}><Text style={styles.text}>ペース走の音声案内</Text><Switch accessibilityLabel="ペース走の音声案内" value={settings.voice} disabled={busy}
         onValueChange={voice => { setSettings(s => ({ ...s, voice })); setSaved(false); }} /></View>
-      {input('音声の最小間隔（秒・60〜600）', frequency, setFrequency)}
+      {input('PACE通知間隔（秒・60〜600）', frequency, setFrequency)}
       <Text style={styles.note}>{Platform.OS === 'android' ? '音声は対応するAndroid開発ビルドで利用できます。通常の5分通知とは個別に設定します。' : 'この端末では画面表示で案内します。音声はAndroidに対応しています。'}目標に到達しても自動STOPしません。</Text>
       {!valid && <Text accessibilityRole="alert" style={styles.error}>距離0.1〜200km、ペース2〜30分/km、許容幅0〜120秒、通知60〜600秒、目標時間48時間以内で入力してください。</Text>}
     </>}
