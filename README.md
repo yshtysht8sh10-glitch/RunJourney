@@ -218,3 +218,8 @@ npx expo-doctor
 ## Auto Stop / Break（実走テスト）
 
 DEFAULTは両方OFF。STOPは全ユーザー共通で1.5秒長押しです。設定・状態・GPS・実走チェックは [設計ドキュメント](docs/auto-stop-break.md) を参照してください。
+
+## 音声仕様と履歴
+
+- [現mainの音声仕様（正本）](docs/voice-current.md)
+- [v28/v31の歴史資料・原本・対話型編集の位置付け](docs/voice-history-index.md)

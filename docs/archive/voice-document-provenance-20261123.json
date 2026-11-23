@@ -1,0 +1,98 @@
+[
+  {
+    "ref": "a1fc246",
+    "source": "README.md",
+    "archive": "docs/archive/pr71-test-v28/README.md",
+    "sha256": "bef34bd8214cfe2fd7460018da7c31d796297ca03d05ba40d1c5198f49f01b83"
+  },
+  {
+    "ref": "a1fc246",
+    "source": "docs/archive/auto-stop-flow-before-v28.md",
+    "archive": "docs/archive/pr71-test-v28/docs/archive/auto-stop-flow-before-v28.md",
+    "sha256": "98e82d2a3b98781f2f22501ba4f041a61f80d873ebddf5e7e3e7abf428d4414a"
+  },
+  {
+    "ref": "a1fc246",
+    "source": "docs/archive/voice-matrix-before-v28.md",
+    "archive": "docs/archive/pr71-test-v28/docs/archive/voice-matrix-before-v28.md",
+    "sha256": "1e4ac03d9d83dc3bf12dd78745475477a4071f217e9c5cca3646a4ce47f5a71f"
+  },
+  {
+    "ref": "a1fc246",
+    "source": "docs/auto-stop-break.md",
+    "archive": "docs/archive/pr71-test-v28/docs/auto-stop-break.md",
+    "sha256": "b2ceba0c304978966171d463ffddd3cbcb806f37e4a65cc6006870f7d1b6a3ca"
+  },
+  {
+    "ref": "a1fc246",
+    "source": "docs/auto-stop-flow-20261031.md",
+    "archive": "docs/archive/pr71-test-v28/docs/auto-stop-flow-20261031.md",
+    "sha256": "ee0874b029e71f44d5b0a61e8a583943770ef53877e2b30b94d7e6787bdfa985"
+  },
+  {
+    "ref": "a1fc246",
+    "source": "docs/auto-stop-recovery.md",
+    "archive": "docs/archive/pr71-test-v28/docs/auto-stop-recovery.md",
+    "sha256": "8eac9d42522189adc965f6f0ce58ad61f539fab8fd41e3adbd58f3cd1d2e6127"
+  },
+  {
+    "ref": "a1fc246",
+    "source": "docs/documentation-maintenance.md",
+    "archive": "docs/archive/pr71-test-v28/docs/documentation-maintenance.md",
+    "sha256": "2ae70d191a2ce132515f8e9ab0b76898e47b03b8df19b41ea8f2bcd4260ea0ec"
+  },
+  {
+    "ref": "a1fc246",
+    "source": "docs/flow-matrix-update-review-20261110.md",
+    "archive": "docs/archive/pr71-test-v28/docs/flow-matrix-update-review-20261110.md",
+    "sha256": "af9f39a8802742b16ef288b59444f8eb19ec88caf24e0e678a40253ceed4d442"
+  },
+  {
+    "ref": "a1fc246",
+    "source": "docs/goal-cues-20261109.md",
+    "archive": "docs/archive/pr71-test-v28/docs/goal-cues-20261109.md",
+    "sha256": "5f7b624dcaba9b726cccd5ff73b6b5698ca768761fdfa47ac3818726ffec8ac0"
+  },
+  {
+    "ref": "a1fc246",
+    "source": "docs/gps-observation-architecture.md",
+    "archive": "docs/archive/pr71-test-v28/docs/gps-observation-architecture.md",
+    "sha256": "74f58c1aa14965873ddd0c9c0e835855e3348efbe3d6ade71db3522bb2d40840"
+  },
+  {
+    "ref": "a1fc246",
+    "source": "docs/pace-and-voice.md",
+    "archive": "docs/archive/pr71-test-v28/docs/pace-and-voice.md",
+    "sha256": "cb9724ad43ccd4a7e1f07593844d604781cd1c10aeaadfc7af5dd62b009852b7"
+  },
+  {
+    "ref": "a1fc246",
+    "source": "docs/run-flow-index.md",
+    "archive": "docs/archive/pr71-test-v28/docs/run-flow-index.md",
+    "sha256": "c55054015f7afdd9c4799c3c062be719ccb79fc7ae9d213c7d9fa4a1799accb5"
+  },
+  {
+    "ref": "a1fc246",
+    "source": "docs/verification-matrix-v28.md",
+    "archive": "docs/archive/pr71-test-v28/docs/verification-matrix-v28.md",
+    "sha256": "fda426b8c855fb3267882465b52946ae775798e6c9d37c85bf51fa6dbb9c8bb1"
+  },
+  {
+    "ref": "a1fc246",
+    "source": "docs/voice-matrix-20261031.md",
+    "archive": "docs/archive/pr71-test-v28/docs/voice-matrix-20261031.md",
+    "sha256": "233d1a43298158c23e0846acd0cb8a1bdc1767501114c5ff404a0e06802a9946"
+  },
+  {
+    "ref": "199acde",
+    "source": "docs/voice-spec-interactive.html",
+    "archive": "docs/archive/pr74-test-v28/docs/voice-spec-interactive.html.txt",
+    "sha256": "bc01d549551edd2921912cea2ef6c646f7451c80114bc2ed23e75c4faaa71cea"
+  },
+  {
+    "ref": "a822da8465d1dc2699e634fa680b136390d89395",
+    "source": "docs/voice-spec-interactive.html",
+    "archive": "docs/archive/pr75-test-v31/docs/voice-spec-interactive.html.txt",
+    "sha256": "73b16b9973f8602eff5e1d270dc269aa38d69077d94e6ad5ef8c8c2900e576a4"
+  }
+]

@@ -1,3 +1,5 @@
+> 歴史的資料：本文の対象SHA・Test版当時の仕様/評価です。最新音声仕様の正本は[voice-current.md](voice-current.md)、v28原本と参照関係は[voice-history-index.md](voice-history-index.md)を参照。Auto Stop判定を今回変更していません。
+
 # 音声案内マトリクス（#48関連・設計レビュー待ち）
 
 対象：現行332edff（第2件の現在時刻を含む）。既存音声の文言・情報構成・優先度は今回変更していない。本資料の後半は提案であり未実装。実際のキュー/チャイム詳細は先に[Auto Stopフロー](auto-stop-flow-20261031.md)を参照。

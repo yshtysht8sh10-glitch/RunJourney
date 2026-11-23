@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RunJourney 音声仕様マトリクス</title>
+<style>
+:root{font-family:system-ui,"Noto Sans JP",sans-serif;color:#182331;background:#f5f7fb}*{box-sizing:border-box}body{margin:0;padding:20px}main{max-width:1400px;margin:auto}h1{font-size:1.5rem;margin-bottom:6px}p{line-height:1.6}.muted{color:#526174;font-size:.88rem}.panel{background:white;border:1px solid #dbe2ea;border-radius:14px;padding:16px;margin:14px 0}button,select,input,textarea{font:inherit}button{cursor:pointer;border:1px solid #b9c6d4;border-radius:8px;background:#fff;padding:8px 12px}button:hover{background:#eef4fa}button:focus-visible,select:focus-visible{outline:3px solid #4c9df1}button.primary{background:#174e85;color:#fff;border-color:#174e85}button:disabled{opacity:.45;cursor:not-allowed}label{display:inline-block;margin-right:12px}input,select,textarea{border:1px solid #bac6d3;border-radius:7px;padding:7px;max-width:100%}.controls{display:flex;gap:9px;flex-wrap:wrap;align-items:center}.scroll{overflow:auto;max-height:72vh;border:1px solid #dbe2ea;border-radius:9px}table{border-collapse:separate;border-spacing:0;min-width:920px;width:100%;font-size:.86rem}th,td{border-bottom:1px solid #e6ebf1;padding:6px;text-align:center}th{background:#edf3fa;position:sticky;top:0;z-index:2;min-width:98px}th:first-child,td:first-child{position:sticky;left:0;z-index:1;background:#fff;text-align:left;min-width:220px;max-width:260px}th:first-child{z-index:3;background:#edf3fa}.cell{width:50px;height:38px;padding:0;font-size:1.15rem;font-weight:bold}.yes{color:#12642e}.maybe{color:#8a5800}.no{color:#7d8995}.changed{background:#fff0cc!important;box-shadow:inset 0 0 0 2px #d78d00}.tag{font-size:.75rem;color:#526174}details{margin:10px 0}summary{cursor:pointer;font-weight:600}.warn{border-left:4px solid #d28b00;padding-left:12px}textarea{width:100%;min-height:70px}footer{font-size:.8rem;color:#5d6876;margin:24px 0}#status{min-height:1.4em}code{font-size:.8rem}
+</style></head><body><main>
+<h1>RunJourney｜音声読み上げ仕様マトリクス</h1>
+<p class="muted">Test v28（PR #71の資料）を初期基準とする仕様検討用HTML。ここでの編集はアプリの設定・コードを変更しません。<strong>● 読む　△ 条件付き　－ 読まない</strong></p>
+<div class="panel"><div class="controls">
+<label>比較元 <select id="base"></select></label>
+<label>編集対象 <select id="target"></select></label>
+<label>分類 <select id="group"><option value="all">全機能</option><option value="periodic">定期・ペース</option><option value="goal">開始・目標・終了</option><option value="state">状態・その他</option></select></label>
+<label><input type="checkbox" id="diff">差分行のみ</label>
+</div><p class="muted">各セルをクリックすると ● → △ → － → ●。黄色は比較元との差分です。基準スナップショットは編集できません。</p>
+<div class="scroll"><table id="matrix"></table></div>
+<p id="status" aria-live="polite"></p></div>
+<div class="panel">
+<h2>改訂履歴・スナップショット</h2>
+<p class="muted">「保存」はブラウザ内の一時保存です。GitHubへ残すにはJSONを書き出し、レビュー後にリポジトリへコミットしてください。過去版は上書きせず、新版を追加します。</p>
+<div class="controls"><label>改訂番号 <input id="version" placeholder="例：voice-spec-1.1"></label><label>対応Test版 <input id="testVersion" placeholder="例：Test v29"></label></div>
+<label style="display:block;margin-top:10px">変更理由・実走根拠 <textarea id="reason" placeholder="例：11/15の実走で5分通知が長すぎたため項目を削減。RUN IDは非公開で管理"></textarea></label>
+<div class="controls"><button class="primary" id="save">新しい版として保存</button><button id="export">全履歴をJSONで書き出す</button><label>JSONを読み込む <input type="file" id="import" accept="application/json,.json"></label><button id="reset">作業案を初期化</button></div>
+<div id="history"></div>
+</div>
+<details class="panel" open><summary>△の意味と注意事項（重要）</summary>
+<p>△は「目標がある場合のみ」「設定で項目ONの場合のみ」「有効な計測値がある場合のみ」などを表します。<strong>通知が発生しないこと</strong>と、<strong>通知内の特定項目が省略されること</strong>は別です。</p>
+<p>時間ラップ通知は現行実装で5分固定、距離ラップ通知は1km固定。時間ラップの6項目は個別設定があり、初期ONは経過時間・総距離のみ。直近ラップ距離が30m未満ならラップ項目を抑制します。</p>
+<p>FASTとSLOWは短期ペースによる状態判定ですが、<strong>読み上げる「早い／遅い」はRUN全体の累計貯金の符号</strong>で決まります。FASTでも「遅れています」、SLOWでも「早いです」と言う場合があります。ON_TARGETはFAST/SLOWから復帰したときだけ通知し、適正が続く間は定期発話しません。</p>
+<p>状態通知の音声は競合・TTL・停止状態・キューで中断／破棄され得ます。情報復旧は元のラップ文をそのまま再読せず、最新総量へまとめます。現在時刻は別スイッチで、競合時はその回を見送ります。</p>
+<p>この表は<strong>通知が発火した場合の情報項目</strong>を表し、各機能の有効化設定・優先度・TTLを変更するものではありません。過去版の復元は資料で裏付けられる場合のみ登録してください。</p></details>
+<p class="muted">根拠：<a href="voice-matrix-20261031.md">音声仕様マトリクス</a>、<a href="verification-matrix-v28.md">検証マトリクス</a>。仕様確定・実機検証・Production反映はそれぞれ別の判断です。</p>
+<footer>RunJourney / interactive voice-spec draft. データはこのブラウザに保存されます。位置情報や生RUNログは入力しないでください。</footer>
+</main><script>
+"use strict";
+const cols=[
+["距離ラップ通知","KILOMETER_LAP","periodic"],["時間ラップ通知","FIVE_MINUTES","periodic"],["FAST","PACE_WARNING","periodic"],["適正復帰","PACE_WARNING","periodic"],["SLOW","PACE_WARNING","periodic"],
+["RUN開始","RUN_STARTED","goal"],["ペース目標到達","WORKOUT_GOAL","goal"],["終了前予告","GOAL_WARNING","goal"],["折り返し","TURNAROUND","goal"],["カウントダウン","GOAL_COUNTDOWN","goal"],["RUN終了","RUN_GOAL_FINISHED","goal"],
+["停止兆候","STOP_CANDIDATE_ANNOUNCED","state"],["自動停止","AUTO_STOP_CONFIRMED","state"],["自動再開","AUTO_RESUME_CONFIRMED","state"],["手動休憩","BREAK","state"],["手動再開","RESUME","state"],["現在時刻","CURRENT_TIME","state"],["情報復旧","DEFERRED","state"]
+];
+const items=[
+"経過実走時間","総走行距離","今回の距離ラップ時間","直近時間ラップの距離","直近時間ラップのペース","直近時間ラップの時速","フルマラソン換算","今回ラップの目標差","累計の目標差・貯金","現在ペース数値","目標ペース数値","現在ペースと目標の差","目標ペースへの復帰","適用中の目標・設定","目標到達・計測継続","目標までの残り量","目標半分の距離・時間","RUN全体の平均ペース","RUN全体の平均時速","完了ラップ数・最終ラップ","終了・労いの言葉","停止確認中の案内","タイマー停止通知","タイマー再開通知","手動休憩通知","現在時刻","保留情報の説明"
+];
+const seed=items.map(()=>cols.map(()=>"－"));
+function put(name,map){let i=items.indexOf(name);for(const [col,val] of Object.entries(map))seed[i][col]=val;}
+put("経過実走時間",{1:"●",10:"●",17:"●"});
+put("総走行距離",{0:"●",1:"△",10:"●",17:"●"});
+put("今回の距離ラップ時間",{0:"●"});
+put("直近時間ラップの距離",{1:"△"});
+put("直近時間ラップのペース",{1:"△"});
+put("直近時間ラップの時速",{1:"△"});
+put("フルマラソン換算",{1:"△"});
+put("今回ラップの目標差",{0:"△"});
+put("累計の目標差・貯金",{0:"△",2:"●",4:"●",17:"△"});
+put("目標ペースへの復帰",{3:"●"});
+put("適用中の目標・設定",{5:"●"});
+put("目標到達・計測継続",{6:"●"});
+put("目標までの残り量",{7:"●",9:"●"});
+put("目標半分の距離・時間",{8:"●"});
+put("RUN全体の平均ペース",{10:"△",17:"△"});
+put("RUN全体の平均時速",{10:"△"});
+put("完了ラップ数・最終ラップ",{10:"△"});
+put("終了・労いの言葉",{10:"●"});
+put("停止確認中の案内",{11:"●"});
+put("タイマー停止通知",{12:"●"});
+put("タイマー再開通知",{13:"●",15:"●"});
+put("手動休憩通知",{14:"●"});
+put("現在時刻",{16:"●"});
+put("保留情報の説明",{17:"●"});
+const key="runjourney-voice-spec-versions-v1";
+const baseline={id:"test-v28",test:"Test v28",reason:"PR #71 / docs/voice-matrix-20261031.md に基づく初期ベースライン（2026-11-10）。推測による旧版の補完なし。",created:"2026-11-10",cells:seed};
+const clone=x=>JSON.parse(JSON.stringify(x));
+function valid(v){return v&&typeof v.id==="string"&&typeof v.test==="string"&&Array.isArray(v.cells)&&v.cells.length===items.length&&v.cells.every(r=>Array.isArray(r)&&r.length===cols.length&&r.every(c=>["●","△","－"].includes(c)));}
+let versions=[baseline];try{const saved=JSON.parse(localStorage.getItem(key)||"[]");if(Array.isArray(saved))versions.push(...saved.filter(valid).filter(x=>x.id!==baseline.id));}catch(e){}
+let draft=clone(versions[versions.length-1].cells);
+const $=id=>document.getElementById(id), opt=(value,text)=>{let e=document.createElement("option");e.value=value;e.textContent=text;return e};
+function refreshSelectors(){const b=$("base").value||baseline.id,t=$("target").value||"draft";$("base").replaceChildren(...versions.map(v=>opt(v.id,v.id+" ("+v.test+")")));$("target").replaceChildren(opt("draft","編集中の案"),...versions.map(v=>opt(v.id,v.id+" ("+v.test+")")));$("base").value=versions.some(v=>v.id===b)?b:baseline.id;$("target").value=t==="draft"||versions.some(v=>v.id===t)?t:"draft";}
+function getVersion(id){return id==="draft"?{cells:draft}:versions.find(v=>v.id===id)||baseline}
+function render(){const b=getVersion($("base").value).cells,t=getVersion($("target").value).cells,g=$("group").value,editable=$("target").value==="draft";let selected=cols.map((c,i)=>i).filter(i=>g==="all"||cols[i][2]===g);
+const table=$("matrix");table.replaceChildren();const head=document.createElement("tr");let first=document.createElement("th");first.textContent="読み上げ情報";head.append(first);
+selected.forEach(j=>{const th=document.createElement("th");th.innerHTML=cols[j][0]+"<div class='tag'>"+cols[j][1]+"</div>";head.append(th)});table.append(head);
+let differences=0;items.forEach((item,i)=>{const diffs=selected.filter(j=>b[i][j]!==t[i][j]);differences+=diffs.length;if($("diff").checked&&!diffs.length)return;const tr=document.createElement("tr");const name=document.createElement("td");name.textContent=item;tr.append(name);
+selected.forEach(j=>{const td=document.createElement("td"),v=t[i][j],btn=document.createElement("button");btn.type="button";btn.className="cell "+(v==="●"?"yes":v==="△"?"maybe":"no")+(b[i][j]!==v?" changed":"");btn.textContent=v;btn.disabled=!editable;btn.title=cols[j][0]+" / "+item+"："+(v==="●"?"読む":v==="△"?"条件付き":"読まない");btn.setAttribute("aria-label",btn.title);btn.onclick=()=>{draft[i][j]=["●","△","－"][([ "●","△","－"].indexOf(v)+1)%3];render()};td.append(btn);tr.append(td)});table.append(tr)});
+$("status").textContent="表示列 "+selected.length+"件／比較元との差分 "+differences+"セル"+(!editable?"（保存済み版は閲覧のみ）":"");
+const hist=$("history");hist.replaceChildren();versions.forEach(v=>{let p=document.createElement("p");p.className="muted";p.textContent=v.id+"｜"+v.test+"｜"+(v.created||"")+"｜"+(v.reason||"");hist.append(p)});
+}
+function persist(){localStorage.setItem(key,JSON.stringify(versions.slice(1)));}
+$("base").onchange=render;$("target").onchange=render;$("group").onchange=render;$("diff").onchange=render;
+$("save").onclick=()=>{const id=$("version").value.trim(),test=$("testVersion").value.trim(),reason=$("reason").value.trim();if(!/^[a-zA-Z0-9][a-zA-Z0-9._-]{2,50}$/.test(id)||!test||!reason){alert("改訂番号（英数字・._-）、対応Test版、変更理由を入力してください。");return;}if(versions.some(v=>v.id===id)){alert("同じ改訂番号は使用できません。新しい番号にしてください。");return;}versions.push({id,test,reason,created:new Date().toISOString(),cells:clone(draft)});persist();refreshSelectors();$("base").value=baseline.id;$("target").value=id;render();alert("ブラウザに保存しました。GitHubへ残すにはJSONを書き出してください。");};
+$("export").onclick=()=>{const blob=new Blob([JSON.stringify({schema:1,columns:cols.map(c=>c[1]),items,versions},null,2)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="runjourney-voice-spec-history.json";a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);};
+$("import").onchange=async e=>{const f=e.target.files[0];if(!f)return;try{const obj=JSON.parse(await f.text());if(obj.schema!==1||JSON.stringify(obj.items)!==JSON.stringify(items)||JSON.stringify(obj.columns)!==JSON.stringify(cols.map(c=>c[1]))||!Array.isArray(obj.versions)||!obj.versions.every(valid))throw Error("形式が一致しません");for(const v of obj.versions){if(v.id===baseline.id)continue;const old=versions.find(x=>x.id===v.id);if(old&&JSON.stringify(old)!==JSON.stringify(v))throw Error("既存の改訂番号と内容が競合: "+v.id);if(!old)versions.push(v)}persist();refreshSelectors();render();alert("読み込みました");}catch(err){alert("読み込み失敗: "+err.message)}e.target.value="";};
+$("reset").onclick=()=>{if(!confirm("編集中の案をTest v28基準に戻しますか？保存済み版は残ります。"))return;draft=clone(baseline.cells);$("base").value=baseline.id;$("target").value="draft";render()};
+refreshSelectors();render();
+</script></body></html>
