@@ -16,14 +16,16 @@ function outside(file, existing) {
 }
 try {
   const [mode, value, destination, ...extra] = process.argv.slice(2);
-  if (extra.length || !destination || !['synthetic','replay'].includes(mode)) throw Error('USAGE: gps-private.cjs synthetic MINUTES|replay PRIVATE_JSON NEW_PRIVATE_REPORT');
+  if (extra.length || !destination || !['synthetic','continuous','replay'].includes(mode)) throw Error('USAGE: gps-private.cjs synthetic|continuous MINUTES|replay PRIVATE_JSON NEW_PRIVATE_REPORT');
   const report = outside(destination, false);
   if (fs.existsSync(report)) throw Error('REPORT_ALREADY_EXISTS');
   const env = { ...process.env, RUNJOURNEY_PRIVATE_REPORT: report };
   delete env.RUNJOURNEY_PRIVATE_INPUT; delete env.RUNJOURNEY_PRIVATE_MINUTES;
-  if (mode === 'synthetic') {
+  delete env.RUNJOURNEY_PRIVATE_PROFILE;
+  if (mode === 'synthetic' || mode === 'continuous') {
     if (!/^\d+$/.test(value) || +value < 1 || +value > 240) throw Error('MINUTES_1_TO_240');
     env.RUNJOURNEY_PRIVATE_MINUTES = value;
+    env.RUNJOURNEY_PRIVATE_PROFILE = mode;
   } else {
     env.RUNJOURNEY_PRIVATE_INPUT = outside(value, true);
     if (fs.statSync(env.RUNJOURNEY_PRIVATE_INPUT).size > 32*1024*1024) throw Error('REPLAY_INPUT_LIMIT');

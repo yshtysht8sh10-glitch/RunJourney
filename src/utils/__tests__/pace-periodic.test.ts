@@ -60,7 +60,7 @@ test('pending auto-stop and detector settling keep boundary unacknowledged', () 
   expect(pacePeriodicSnapshots(r, start + 90000, cursor)).toHaveLength(1);
 });
 
-test.each(['gap', 'accuracy', 'missing-end', 'reverse', 'spike'] as const)('GPS %s emits explicit insufficient data without fabricated numbers', condition => {
+test.each(['gap', 'accuracy', 'missing-end', 'reverse', 'spike'] as const)('GPS %s uses recorded cumulative values or explicit broken-clock failure', condition => {
   const r = run();
   if (condition === 'gap') r.points = r.points.filter(p => p.timestamp < start + 20000 || p.timestamp > start + 40000);
   if (condition === 'accuracy') r.points[5].accuracy = 100;
@@ -68,10 +68,12 @@ test.each(['gap', 'accuracy', 'missing-end', 'reverse', 'spike'] as const)('GPS 
   if (condition === 'reverse') r.points[5].timestamp = r.points[4].timestamp;
   if (condition === 'spike') r.points[5].latitude += 1;
   const snapshot = pacePeriodicSnapshots(r, start + 75000, cursor)[0];
-  expect(snapshot.quality).toBe('DATA_INSUFFICIENT');
-  expect(snapshot.message).toContain('データが不足');
-  expect(snapshot.distanceMeters).toBeUndefined();
-  expect(snapshot.savingsSec).toBeUndefined();
+  if(condition==='reverse') {
+    expect(snapshot.quality).toBe('DATA_INSUFFICIENT');expect(snapshot.cumulativeNumeric).toBe(false);expect(snapshot.distanceMeters).toBeUndefined();
+  } else {
+    expect(snapshot.quality).toBe('READY');expect(snapshot.cumulativeNumeric).toBe(true);expect(snapshot.cumulativeQuality).toBe('ESTIMATED');
+    expect(snapshot.message).toContain('約');expect(Number.isFinite(snapshot.savingsSec)).toBe(true);
+  }
 });
 
 test('a just-due interval waits for a delayed bracketing fix instead of permanently reporting missing data', () => {
@@ -83,7 +85,8 @@ test('a just-due interval waits for a delayed bracketing fix instead of permanen
 
 test('boundary interpolation uses bracketing fixes, never latest totals', () => {
   const r = run(); r.points = r.points.map(p => ({ ...p, timestamp: p.timestamp + 2000 }));
-  const first = pacePeriodicSnapshots(r, start + 60000, cursor)[0];
+  expect(pacePeriodicSnapshots(r,start+60000,cursor)).toEqual([]);
+  const first = pacePeriodicSnapshots(r, start + 62000, cursor)[0];
   expect(first.quality).toBe('READY');
   expect(first.distanceMeters).toBeCloseTo(174, 1);
 });

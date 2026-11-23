@@ -1,6 +1,6 @@
-# 音声仕様の正本：main 2026-11-23
+# 音声仕様の正本：main（PACE品質修正 2026-11-24）
 
-対象コード：main `a822da8`（製品コードは`7abd4cd`と同一）。Android Nativeの現行実装を記述する。インストール済みTest v37の`9a9ee26`とは区別する。正本であることは、実機受入済み・全通知の欠落解消済みを意味しない。
+対象コード：本書と同じmainのソース。PACE品質修正の実装・根拠は[#93の修正記録](pace-quality-93-20261124.md)、それ以外の音声基盤は`a822da8`（製品コード`7abd4cd`）を参照。インストール済みTest v37の`9a9ee26`とは区別する。正本であることは、実機受入済み・全通知の欠落解消済みを意味しない。
 
 **現在の仕様を確認する入口は本書。** [対話型マトリクス](voice-spec-interactive.html)の組込みTest v28/v31は歴史的仕様・希望編集用であり、現在mainの周期・TTLを表す版ではない。[歴史資料と原本](voice-history-index.md)を参照。将来の変更は新しい版・対象SHA・変更理由・実走評価を記録し、過去版を上書きしない。
 
@@ -27,7 +27,7 @@
 
 | 正式イベント名 | 主な情報（発話順） | 条件・周期 | priority / 期限・主な取消 |
 |---|---|---|---|
-| PACE_WARNING（新周期） | △区間増減→●累計km→●累計貯金/遅れ。品質不足は不足文のみ | ペース音声ON、RUN開始基準の60秒以上固定周期。分類状態で省略しない | 20 / 旧20秒TTL対象外。停止中保持、OFF/終了/設定epochで明示取消、永続化失敗はその系統を抑止 |
+| PACE_WARNING（新周期） | △区間増減→●累計km→●累計貯金/遅れ。区間不足でも累計を維持。概算・最終有効時点を区別 | ペース音声ON、RUN開始基準の60秒以上固定周期。分類状態で省略しない | 20 / 旧20秒TTL対象外。停止中保持、OFF/終了/設定epochで明示取消、永続化失敗はその系統を抑止 |
 | CURRENT_TIME | ●再生要求時点の時刻 | 独立ON、5/10/15/30分。RUN開始基準 | 30 / 5秒/busy破棄を撤廃。未再生最大1件へ統合、停止中保持、OFF/終了/設定変更取消 |
 | KILOMETER_LAP | ●通過km→△直近ラップ時間/目標差→△累計差 | ペース走有効時の完了1km境界 | 70 / 境界壁時計＋30秒。旧情報defer/recovery対象 |
 | FIVE_MINUTES | △実走時間→△総距離→△直近時間ラップ距離/ペース/速度/フル換算（選択順） | 通常音声ON、完了5分実走境界。実走時間も項目設定で省略可 | 40 / 境界壁時計＋20秒。旧情報defer/recovery対象 |
@@ -54,7 +54,7 @@ FAST/SLOW/ON_TARGET/UNKNOWNは[pace-workout](../src/domain/pace-workout.ts)の�
 
 paceが有限の正値でない場合UNKNOWN。目標sec/km−許容幅より小さい場合FAST、目標＋許容幅より大きい場合SLOW、境界を含む範囲内はON_TARGET。同じraw分類が2回続くまでstatusはUNKNOWN。休止・設定変更・評価間隔40秒超・window品質不足もUNKNOWNになり得る。新PACEはどの分類でも同じ発話形式であり、速い/遅いで読む項目を切り替えない。
 
-区間nはRUN開始＋(n−1)×設定間隔からn×設定間隔。再生遅延で境界を動かさない。境界の有効GPS辺を補間し、未着データは最大15秒確定待ち、欠測/不良品質はDATA_INSUFFICIENT。全休止区間はCANCELLED_NO_RUNNING、設定変更に跨る区間はCONFIG_CHANGED。READY以外の数値を捏造しない。現在停止中の有効snapshotは再開待機する。永続ACK、32slotのbackpressure、epochと計算の詳細は[実装契約](pace-periodic-implementation-20261122.md)。その文書末尾の当時未完了リストは履歴であり、最終結果は[#85統合報告](main-integration-20261123.md)を優先する。
+区間nはRUN開始＋(n−1)×設定間隔からn×設定間隔。再生遅延で境界を動かさない。共通距離モデルの有効GPS辺を補間し、未着境界は15秒待機後に受信済みの距離から概算する。Auto Stop候補の確定待機は従来どおり。過去の精度低下・欠測だけで累計を永久に無効化しない。READYは累計数値がある再生可能なsnapshotを表し、別のintervalQuality/cumulativeQualityで測定・概算・最終有効時点を区別する。距離・時計の根拠がない場合のみDATA_INSUFFICIENT。直近区間だけ不足なら、その旨と累計を発話する。全休止区間はCANCELLED_NO_RUNNING、設定変更に跨る区間はCONFIG_CHANGED。現在停止中の有効snapshotは再開待機する。永続ACK、32slotのbackpressure、epochの[旧実装契約](pace-periodic-implementation-20261122.md)は歴史記録として保持し、品質計算の現行仕様は[#93修正記録](pace-quality-93-20261124.md)を優先する。
 
 ## 4. Native再生・競合・復旧
 

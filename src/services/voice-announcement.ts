@@ -334,7 +334,10 @@ async function updateGuidance(run: ActiveRun, stateOnly: boolean) {
         data: { ...snapshot, pacePeriodicSnapshot: interval } });
       diagnosticLog('PACE_SNAPSHOT_SUBMITTED', id, 'PACE_WARNING', { runId: run.id, submittedAt: now,
         scheduledAt: interval.endAt, sourceAt: interval.endAt, intervalStartAt: interval.startAt,
-        quality: interval.quality, reason: interval.reason });
+        quality: interval.quality, reason: interval.reason,
+        intervalNumeric: interval.intervalNumeric, cumulativeNumeric: interval.cumulativeNumeric,
+        intervalQuality: interval.intervalQuality, cumulativeQuality: interval.cumulativeQuality,
+        asOfAt: interval.asOfAt, qualityReasons: interval.qualityReasons });
     }
     // Also deliver a new schedule when no slot is due yet. Without this the
     // Native fixed-cycle scheduler would never acquire its initial epoch.
