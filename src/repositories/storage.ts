@@ -1,4 +1,4 @@
-// Existing iOS/web storage remains unchanged. Android resolves storage.android.ts.
+// Native settings share the guarded database. Web review uses its independent store.
 import { database } from './database';
 /** Settings only; run history and draft use the typed SQLite repository. */
 export default {

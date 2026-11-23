@@ -63,3 +63,13 @@ test('reinspection accepts committed receipt without a duplicate copy, but detec
   values['@runjourney/new-setting'] = 'unexpected';
   expect((await coordinator.retryStorageCheck()).status).toBe('FAILED');
 });
+test.each(['ios', 'web'])('unsupported %s cannot open SQLite, read legacy data or save defaults', async os => {
+  require('react-native').Platform.OS = os;
+  const sqlite = require('expo-sqlite'); const open = jest.spyOn(sqlite, 'openDatabaseAsync');
+  expect(coordinator.needsCompatibilityCheck()).toBe(true);
+  expect((await coordinator.prepareStorage()).status).toBe('FAILED');
+  await expect(require('../../repositories/database').database()).rejects.toThrow();
+  await expect(require('../../repositories/storage').default.setItem('@runjourney/default', 'value')).rejects.toThrow();
+  expect(open).not.toHaveBeenCalled();expect(native.open).not.toHaveBeenCalled();expect(native.read).not.toHaveBeenCalled();
+  open.mockRestore();
+});

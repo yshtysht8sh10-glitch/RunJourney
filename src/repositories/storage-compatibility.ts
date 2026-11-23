@@ -6,7 +6,7 @@ import { DATABASE_NAME, SqliteStore } from './sqlite-store';
 import { legacyFingerprint, LEGACY_MIGRATION_SOURCE, migrateLegacyPlan, readLegacyPlan } from './legacy-migration';
 
 export type CompatibilityState = { status: 'READY' | 'MIGRATION_REQUIRED' | 'FAILED'; message?: string; keys?: number; fingerprint?: string };
-export const needsCompatibilityCheck = () => Platform.OS === 'android' && Application.applicationId === 'app.runjourney.mobile';
+export const needsCompatibilityCheck = () => Platform.OS !== 'android' || Application.applicationId === 'app.runjourney.mobile';
 let checking: Promise<CompatibilityState> | undefined;
 let migrating: Promise<CompatibilityState> | undefined;
 const failure = (error: unknown): CompatibilityState => ({ status: 'FAILED', message: String(error instanceof Error ? error.message : error) });
@@ -19,6 +19,8 @@ async function withStore<T>(operation: (store: SqliteStore) => Promise<T>) {
   } finally { await connection.closeAsync(); }
 }
 async function inspect(): Promise<CompatibilityState> {
+  if (Platform.OS === 'ios') throw Error('iOSの旧保存形式との互換対応は未完了です。元データを変更せず、計測・履歴・設定の更新を停止しています');
+  if (Platform.OS !== 'android') throw Error('この環境では共通SQLite保存を使用できません。Webの履歴分析画面を使用してください');
   if (!needsCompatibilityCheck()) return { status: 'READY' };
   if (!LegacyStorage.available) throw Error('旧データの読取機能がありません。空の履歴へ切り替えず停止しました');
   const source = await LegacyStorage.open();
