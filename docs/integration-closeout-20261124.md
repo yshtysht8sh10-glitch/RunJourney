@@ -67,3 +67,14 @@
 ## サイクリングへ引き継ぐ既決仕様（未実装）
 
 入口のRunning/Cycling分離、競技別計測/履歴/設定。Runningの既存DB/設定/データを変えず、Cyclingは`runjourney-cycling.sqlite`。GPS/時間/距離/音声/保存を共有し競技プロファイルで調整する。両競技Auto Stop、Cyclingはkm/h中心・5分音声初期ON。同時計測禁止、STARTで競技/保存先を固定し復帰でも維持。将来Wear OSを妨げない責務分離。今回はサイクリングのコード・枝を作成しない。
+
+## 実施結果（#95 / #96）
+
+- 旧13PRは上表の固定head・統合先#85・未受入条件をそれぞれコメントし、closed-unmergedへ整理済み。枝/commit/Issueを連動削除していない。#71/#73/#74/#75/#81/#82/#83等の既整理済みPRも再オープン/再マージしていない。
+- 必要な残実装は#95で統合済み、main `ada0aa3b9e240e5ebe277457a4f7b0e7fcf16453`。独立レビュー担当の最終承認は`ad831bbcffd48a688331a0c0dc0537d2ff3cca6d`、コードの限定承認は`940a4c5`（初回候補`7ed2887`と同一内容）。追加P1/P2なし。#3はOpen。
+- 統合コードの全体Jest **89 suites/649 tests PASS**、focused13、型チェック、Lint成功。新WebView/app Native compile成功、続く完全Android Test `assembleStandaloneTest`成功（908 tasks、2分34秒、arm64-v8a）。生成package差分はbuild-onlyとして記録後restore済み。内部確認用ビルドを承認済みTest v38へ差し替えていない。
+- 保存互換・バックアップ・旧RUN不変・GPS/Auto Stop・音声のJestも全体試験に含む。変更のないNative reader48/announcer169と既存長時間保存5ケース等の証拠は再利用し、実端末更新/移行済みとは主張しない。追加地図にRUN/GPS/時間の保存・判定コード差分なし。Production guardを維持。
+- #96の棚卸し/方針文書は`02d325984545e30a26be6a22dbce6c33db4d739c`で独立承認済み。原本16 blob・旧形式27行・HTML編集/保存/import/export互換検証も独立実行で成功。本結果追記後の固定SHAを再レビューし、mainへ統合して#78の管理scopeを完了する。最終main SHAは#78コメントへ記録する。
+- 初回24 worktreeの未追跡293ファイルは最終照合でも全ハッシュ一致。元追跡差分の状態も一致。ローカルmanifest/検証ログはリポジトリ外に保持しGitHubへアップロードしない。端末アクセスなし。
+- 承認済みTest v38のSHA-256は`91d21a12ed9c8a6c711f648dd6cc5723dabd2da48e3de24b10f7f70b2a5b7d34`のまま、ソース`256cea1`、未インストール。#93はOpen。mainの地図変更を含む新Testとして扱わない。
+- 実装の取りこぼし/競合による未解決のmain統合障害は残っていない。Production旧データ/iOS/実機受入の制約は上記の安全境界・Open Issueへ保持。#78のCloseは管理scopeだけであり、全機能・全受入・Production対応の完了ではない。サイクリング枝作成/着手は引き続きマスターの次の指示待ち。
