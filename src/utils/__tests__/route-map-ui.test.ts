@@ -1,0 +1,55 @@
+import { createElement } from 'react';
+import { act,create,type ReactTestRenderer } from 'react-test-renderer';
+import { Alert,Switch } from 'react-native';
+import { router } from 'expo-router';
+import { RouteMapEntry } from '@/components/route-map-entry';
+import { RouteMapSettingsPanel } from '@/components/route-map-settings';
+import { RouteMapSettings,ROUTE_MAP_KEY } from '@/repositories/route-map-settings';
+import RunMap from '@/app/run-map';
+import { RunRepository } from '@/repositories/run-repository';
+import { sourceFromRun } from '@/domain/pages';
+import { resetNative } from '@/test/native-driver';
+import { database } from '@/repositories/database';
+jest.mock('expo-router',()=>({router:{push:jest.fn(),back:jest.fn()},useLocalSearchParams:()=>({id:'map'}),useFocusEffect:(fn:()=>void)=>jest.requireActual('react').useEffect(fn,[fn])}));
+jest.mock('react-native-webview',()=>({WebView:'WebView'}));
+jest.mock('@/repositories/run-repository',()=>({RunRepository:{pagedSource:jest.fn()}}));
+let tree:ReactTestRenderer;
+beforeEach(()=>{resetNative();jest.clearAllMocks();});
+afterEach(()=>{if(tree)act(()=>tree.unmount());jest.restoreAllMocks();});
+test('default OFF hides entry, writes no default and direct route cannot read GPS',async()=>{
+  await act(async()=>{tree=create(createElement(RouteMapEntry,{id:'map'}));});expect(tree.toJSON()).toBeNull();
+  expect(await(await database()).getSetting(ROUTE_MAP_KEY)).toBeNull();
+  act(()=>tree.unmount());await act(async()=>{tree=create(createElement(RunMap));});
+  expect(RunRepository.pagedSource).not.toHaveBeenCalled();expect(JSON.stringify(tree.toJSON())).toContain('設定でOFF');
+});
+test('ON entry targets saved RUN; offline-first map is read-only and file/GPS access is disabled',async()=>{
+  await RouteMapSettings.save(true);
+  await act(async()=>{tree=create(createElement(RouteMapEntry,{id:'map'}));});
+  act(()=>tree.root.findByProps({testID:'open-route-map'}).props.onPress());expect(router.push).toHaveBeenCalledWith({pathname:'/run-map',params:{id:'map'}});
+  const record={id:'map',startedAt:new Date(0).toISOString(),endedAt:new Date(10000).toISOString(),createdAt:'',updatedAt:'',distanceMeters:10,points:[{latitude:35,longitude:139,timestamp:0},{latitude:35.001,longitude:139,timestamp:5000}]};
+  const before=JSON.stringify(record);jest.mocked(RunRepository.pagedSource).mockReturnValue(sourceFromRun(record));
+  act(()=>tree.unmount());await act(async()=>{tree=create(createElement(RunMap));});
+  await act(async()=>{await new Promise(resolve=>setTimeout(resolve,20));});
+  const web=tree.root.findByProps({testID:'native-route-map'});
+  expect(web.props.geolocationEnabled).toBe(false);expect(web.props.allowFileAccess).toBe(false);expect(web.props.domStorageEnabled).toBe(false);
+  expect(web.props.source.html).toContain('online=false');expect(web.props.onShouldStartLoadWithRequest({url:'https://example.com'})).toBe(false);
+  expect(JSON.stringify(record)).toBe(before);
+});
+test('setting failure leaves OFF; saving touches no unrelated setting',async()=>{
+  await(await database()).setSetting('existing','keep');const alert=jest.spyOn(Alert,'alert').mockImplementation(()=>undefined);
+  await act(async()=>{tree=create(createElement(RouteMapSettingsPanel));});
+  jest.spyOn(RouteMapSettings,'save').mockRejectedValueOnce(Error('disk full'));
+  await act(async()=>{tree.root.findByType(Switch).props.onValueChange(true);});
+  expect(tree.root.findByType(Switch).props.value).toBe(false);expect(alert).toHaveBeenCalled();
+  expect(await(await database()).getSetting('existing')).toBe('keep');
+});
+test('successful toggle persists while existing RUN, trash, settings and protection remain unchanged',async()=>{
+  const db=await database();await db.setSetting('old-setting','keep');
+  await db.complete({id:'retained',startedAt:new Date(0).toISOString(),endedAt:new Date(1000).toISOString(),createdAt:'',updatedAt:'',points:[],distanceMeters:0,trashedAt:1});
+  const before=await db.snapshot();
+  await act(async()=>{tree=create(createElement(RouteMapSettingsPanel));});
+  await act(async()=>{tree.root.findByType(Switch).props.onValueChange(true);});
+  expect(await RouteMapSettings.get()).toBe(true);act(()=>tree.unmount());
+  await act(async()=>{tree=create(createElement(RouteMapSettingsPanel));});expect(tree.root.findByType(Switch).props.value).toBe(true);
+  const after=await db.snapshot();expect(after.runs).toEqual(before.runs);expect(after.protectedIds).toEqual(before.protectedIds);expect(after.settings['old-setting']).toBe('keep');
+});
