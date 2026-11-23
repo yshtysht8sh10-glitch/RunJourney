@@ -19,6 +19,9 @@ test('History Detail displays stop type/duration and both correction actions aft
   jest.mocked(RunRepository.setStopInclusion).mockResolvedValue({ ...run, stopOverrides: { '0:5000:AUTO_STOP': { included: true, updatedAt: '' } } });
   await act(async () => { tree = create(createElement(RunDetail)); });
   const before = JSON.stringify(tree.toJSON());
+  expect(before.indexOf('走行分析')).toBeLessThan(before.indexOf('停止区間'));
+  expect(before.indexOf('停止区間')).toBeLessThan(before.indexOf('Analysis MarkdownをExport'));
+  expect(before.indexOf('Analysis MarkdownをExport')).toBeLessThan(before.indexOf('ごみ箱へ移動'));
   expect(before).toContain('Auto Stop（推定）'); expect(before).toContain('0分5秒'); expect(before).toContain('走行に含める');
   const button = tree.root.findAllByProps({ testID: 'stop-inclusion-0:5000:AUTO_STOP' }).find(n => typeof n.props.onPress === 'function')!;
   await act(async () => { await button.props.onPress(); });

@@ -5,12 +5,12 @@ import { RunRepository } from "../repositories/run-repository";
 import { RunPage, RunSummary, StreamKind, STREAMS } from "../domain/pages";
 import { exportPagedRun } from "../services/paged-export";
 import { pagedLapAnalysis } from "../domain/paged-analysis";
-import { analyzePace } from "../utils/pace-analysis";
+import { RunDetailSummary } from './run-detail-summary';
 import PaceWorkoutReport from './pace-workout-report';
 export default function NativeRunPages({ summary }: { summary: RunSummary }) {
   const [page, setPage] = useState<RunPage | null>(null),
     [busy, setBusy] = useState(false),
-    [message, setMessage] = useState("");
+    [message, setMessage] = useState(""), [analysis, setAnalysis] = useState('');
   const source = RunRepository.pagedSource(summary.id);
   async function work(fn: () => Promise<void>) {
     setBusy(true);
@@ -29,30 +29,25 @@ export default function NativeRunPages({ summary }: { summary: RunSummary }) {
     setPage(await source.read(kind, start));
   }
   const button = (label: string, handler: () => void) => (
-    <Pressable disabled={busy} style={styles.button} onPress={handler}>
+    <Pressable accessibilityRole="button" disabled={busy} style={styles.button} onPress={handler}>
       <Text style={styles.text}>{label}</Text>
     </Pressable>
   );
   return (
     <ScrollView contentContainerStyle={styles.screen}>
+      <Pressable accessibilityRole="button" style={styles.back} onPress={() => router.replace('/history')}><Text style={styles.text}>‹ 履歴に戻る</Text></Pressable>
       <Text style={styles.title}>長時間走行のページ詳細</Text>
+      <RunDetailSummary summary={summary} />
+      <Text style={styles.title}>走行分析</Text>
       <PaceWorkoutReport key={summary.id} runId={summary.id} lazy />
-      <Text style={styles.distance}>
-        {(summary.distanceMeters / 1000).toFixed(2)} km
-      </Text>
-      <Text style={styles.text}>
-        {summary.startedAt} → {summary.endedAt}
-      </Text>
-      <Text style={styles.text}>
-        実走 {Math.floor(summary.activeRunningTime / 60000)}分 / 全経過{" "}
-        {Math.floor(summary.wallClockElapsed / 60000)}分 / 平均時速{" "}
-        {analyzePace(
-          0,
-          summary.activeRunningTime,
-          summary.distanceMeters,
-        ).kmPerHour?.toFixed(2) ?? "—"}{" "}
-        km/h
-      </Text>
+      {button('実走5分ラップを段階解析', () => void work(async () => {
+        const result = await pagedLapAnalysis(source);
+        setAnalysis(result.laps.map((l,i) => `${i+1}: ${(l.distanceMeters/1000).toFixed(2)} km / ${(l.durationMs/60000).toFixed(1)}分`).join('\n'));
+      }))}
+      {!!analysis && <Text style={styles.text}>{analysis}</Text>}
+      <Text style={styles.title}>停止区間・補正情報</Text>
+      <Text style={styles.text}>停止イベントは下のデータ情報でページ閲覧できます。大容量記録の補正・削除はこの画面では提供しません。</Text>
+      <Text style={styles.title}>データ情報・Export</Text>
       <Text style={styles.text}>
         GPS {summary.pointCount}点。1ページ最大128行 /
         64KiB。原GPSを書き換えません。
@@ -86,21 +81,6 @@ export default function NativeRunPages({ summary }: { summary: RunSummary }) {
         </>
       )}
       {button(
-        "5分ラップを段階解析",
-        () =>
-          void work(async () => {
-            const result = await pagedLapAnalysis(source);
-            setMessage(
-              result.laps
-                .map(
-                  (l, i) =>
-                    `${i + 1}: ${(l.distanceMeters / 1000).toFixed(2)} km / ${(l.durationMs / 60000).toFixed(1)}分`,
-                )
-                .join("\n"),
-            );
-          }),
-      )}
-      {button(
         "分割NDJSONをExport（GPS座標を含む）",
         () => void work(() => exportPagedRun(summary.id)),
       )}
@@ -109,7 +89,6 @@ export default function NativeRunPages({ summary }: { summary: RunSummary }) {
       </Text>
       {busy && <Text style={styles.text}>処理中…</Text>}
       {!!message && <Text style={styles.text}>{message}</Text>}
-      {button("履歴へ戻る", () => router.replace("/history"))}
     </ScrollView>
   );
 }
@@ -118,6 +97,6 @@ const styles = StyleSheet.create({
   title: { fontSize: 24, color: "#fff" },
   distance: { fontSize: 44, color: "#E8A975" },
   text: { color: "#d1dcd5", lineHeight: 24 },
-  button: { padding: 16, borderRadius: 8, backgroundColor: "#304d3c" },
+  button: { minHeight: 52, padding: 16, borderRadius: 8, backgroundColor: "#304d3c" }, back: { minHeight: 48, justifyContent: 'center', alignSelf: 'flex-start' },
   raw: { fontSize: 11, color: "#bed3c2", lineHeight: 18 },
 });
