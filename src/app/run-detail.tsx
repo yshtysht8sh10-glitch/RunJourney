@@ -10,6 +10,7 @@ import { exportAnalysis } from '@/services/run-export';
 import { RunSummary } from '@/domain/pages';
 import NativeRunPages from '@/components/native-run-pages';
 import PaceWorkoutReport from '@/components/pace-workout-report';
+import { RunDetailSummary } from '@/components/run-detail-summary';
 
 export default function RunDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -54,23 +55,14 @@ function LegacyRunDetail() {
   const pace = (seconds: number | null) => seconds ? `${Math.floor(Math.round(seconds) / 60)}:${String(Math.round(seconds) % 60).padStart(2, '0')} /km` : '—';
   const laps = effective?.laps() ?? [];
   return <SafeAreaView style={styles.screen}><ScrollView contentContainerStyle={styles.content}>
-    <Pressable accessibilityRole="button" onPress={() => router.replace('/history')} style={styles.button}><Text style={styles.text}>‹ 履歴に戻る</Text></Pressable>
+    <Pressable accessibilityRole="button" onPress={() => router.replace('/history')} style={styles.back}><Text style={styles.text}>‹ 履歴に戻る</Text></Pressable>
     <Text style={styles.title}>走行詳細</Text>
     {!run || !effective ? <Text style={styles.text}>{error || '記録を読み込み中…'}</Text> : <>
-      <Text style={styles.text}>{new Date(run.startedAt).toLocaleString('ja-JP')}</Text>
-      <Text style={styles.metric}>{(effective.distanceMeters / 1000).toFixed(2)} km · {pace(effective.pace.secondsPerKm)}</Text>
-      <Text style={styles.text}>実走 {duration(effective.activeRunningTime)} / 全経過 {duration(effective.wallClockElapsed)}</Text>
-      <Text style={styles.text}>GPSポイント {run.points.length}件</Text>
+      <RunDetailSummary summary={{ ...run, distanceMeters: effective.distanceMeters, activeRunningTime: effective.activeRunningTime, wallClockElapsed: effective.wallClockElapsed, pointCount: run.points.length }} />
+      <Text style={styles.title}>走行分析</Text>
       <PaceWorkoutReport key={run.id} runId={run.id} />
-      <Text style={styles.note}>Analysis Exportには正確な緯度経度は含まれません。走行日時・活動情報は含まれます。</Text>
-      <Pressable testID="analysis-export" accessibilityRole="button" disabled={busy} style={styles.button} onPress={async () => {
-        if (busy) return;
-        setBusy(true);
-        try { await exportAnalysis(run); }
-        catch (err) { Alert.alert('Exportできませんでした', String(err)); }
-        finally { setBusy(false); }
-      }}><Text style={styles.text}>Analysis MarkdownをExport</Text></Pressable>
-      <Pressable testID="move-to-trash" accessibilityRole="button" disabled={busy} onPress={trash} style={[styles.button, busy && styles.disabled]}><Text style={styles.text}>削除</Text></Pressable>
+      <Text style={styles.subheading}>実走5分ラップ</Text>
+      {laps.map((lap, index) => <Text key={index} style={styles.text}>{index + 1} · {duration(lap.durationMs)} · {(lap.distanceMeters / 1000).toFixed(2)} km · {pace(lap.secondsPerKm)}</Text>)}
       <Text style={styles.title}>停止区間</Text>
       {!effective.intervals.length && <Text style={styles.text}>記録された停止区間はありません。</Text>}
       {effective.intervals.map(interval => <View key={interval.id} style={styles.row}>
@@ -82,9 +74,19 @@ function LegacyRunDetail() {
       <Text style={styles.note}>訂正は時間とGPSから再評価した距離へ反映されます。元のGPS・時刻・推定は保持します。GPSが不足する区間や静止中の揺れは、含めても距離が増えないことがあります。</Text>
       <Pressable accessibilityRole="button" onPress={() => router.push({ pathname: './run-recovery', params: { id: run.id } })} style={styles.button}><Text style={styles.text}>GPSデータから履歴を復元</Text></Pressable>
       {run.recovery && <Text style={styles.note}>GPS再解析を適用済みです。表示中の停止区間は元の推定です。停止区間の手動訂正は、元の記録へ戻してから行ってください。</Text>}
-      <Text style={styles.title}>実走5分ラップ</Text>
-      {laps.map((lap, index) => <Text key={index} style={styles.text}>{index + 1} · {duration(lap.durationMs)} · {(lap.distanceMeters / 1000).toFixed(2)} km · {pace(lap.secondsPerKm)}</Text>)}
+      <Text style={styles.title}>データ情報・Export</Text>
+      <Text style={styles.text}>GPSポイント {run.points.length}件</Text>
+      <Text style={styles.note}>Analysis Exportには正確な緯度経度は含まれません。走行日時・活動情報は含まれます。</Text>
+      <Pressable testID="analysis-export" accessibilityRole="button" disabled={busy} style={styles.button} onPress={async () => {
+        if (busy) return;
+        setBusy(true);
+        try { await exportAnalysis(run); }
+        catch (err) { Alert.alert('Exportできませんでした', String(err)); }
+        finally { setBusy(false); }
+      }}><Text style={styles.text}>Analysis MarkdownをExport</Text></Pressable>
       {isStandaloneTest() && <Pressable accessibilityRole="button" onPress={() => router.push({ pathname: '/diagnostics', params: { id: run.id } })} style={styles.button}><Text style={styles.text}>この記録のDiagnostics</Text></Pressable>}
+      <Text style={styles.title}>管理操作</Text>
+      <Pressable testID="move-to-trash" accessibilityRole="button" disabled={busy} onPress={trash} style={[styles.destructive, busy && styles.disabled]}><Text style={styles.text}>ごみ箱へ移動</Text></Pressable>
     </>}
   </ScrollView></SafeAreaView>;
 }
@@ -94,4 +96,6 @@ const styles = StyleSheet.create({
   text: { color: '#F5F2EB', fontSize: 16, lineHeight: 26 }, metric: { color: '#E85D2A', fontSize: 22, marginVertical: 16 },
   note: { color: '#A6A7A9', fontSize: 14, lineHeight: 23, marginTop: 20 }, row: { paddingVertical: 16, borderBottomWidth: 1, borderColor: '#30343A' },
   button: { minHeight: 52, backgroundColor: '#33424C', borderRadius: 12, padding: 14, marginTop: 12 }, disabled: { opacity: 0.5 },
+  back: { minHeight: 48, justifyContent: 'center', alignSelf: 'flex-start' }, subheading: { color: '#F5F2EB', fontSize: 19, marginVertical: 12 },
+  destructive: { minHeight: 52, backgroundColor: '#642D32', borderWidth: 1, borderColor: '#D58B91', borderRadius: 12, padding: 14, marginTop: 12 },
 });
