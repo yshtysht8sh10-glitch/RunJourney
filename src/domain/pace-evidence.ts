@@ -57,8 +57,9 @@ export function paceEvidence(run:ActiveRun,now:number,target:number) {
   function boundary(at:number):PaceEvidenceValue {
     if(cache.has(at))return cache.get(at)!;
     const before=evidenceTimes.findLast(t=>t<=at),after=evidenceTimes.find(t=>t>=at);
-    const streamStale=evidenceTimes.length>0&&now-evidenceTimes[evidenceTimes.length-1]>PACE_STALE_GPS_MS;
-    const stale=before!==undefined&&(streamStale||at>before&&(at-before>PACE_STALE_GPS_MS||after!==undefined&&after-before>PACE_STALE_GPS_MS));
+    // Freshness belongs to this fixed boundary, never to playback/delivery now.
+    // A later outage must not roll an already bracketed earlier boundary back.
+    const stale=before!==undefined&&at>before&&(at-before>=PACE_STALE_GPS_MS||after!==undefined&&after-before>PACE_STALE_GPS_MS);
     const asOfAt=stale?before!:at,activeMs=activeAt(asOfAt),meters=metersAt(asOfAt),savings=target*meters/1000-activeMs/1000;
     const numeric=validClockAt(at)&&before!==undefined&&Number.isFinite(meters)&&meters>=0&&Number.isFinite(savings)&&Number.isFinite(activeMs)&&activeMs>0;
     const value={meters,savings,activeMs,asOfAt,numeric,stale,warnings:warnings(started,asOfAt)};

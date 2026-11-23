@@ -50,3 +50,12 @@ test('no real evidence produces exceptional unknown; future fixes cannot manufac
   expect(s).toMatchObject({cumulativeNumeric:false,quality:'DATA_INSUFFICIENT'});
   expect(s.message).toContain('累計は不明');
 });
+
+test('a later outage never rolls a properly bracketed earlier boundary backwards',()=>{
+  const r=make();r.points=r.points.filter(p=>p.timestamp<=start+65000);
+  const cursor={acceptedThrough:0,activeFromMs:start};
+  const timely=pacePeriodicSnapshots(r,start+75000,cursor)[0];
+  const late=pacePeriodicSnapshots(r,start+180000,cursor);
+  expect(late[0]).toEqual(timely);
+  expect(late[2]).toMatchObject({asOfAt:start+65000,cumulativeQuality:'STALE',cumulativeNumeric:true});
+});
