@@ -9,6 +9,7 @@ import { parseBackup, serializeBackup } from '@/utils/run-backup';
 import { RunRepository } from '@/repositories/run-repository';
 import { RunService } from '@/services/run-service';
 import { router } from 'expo-router';
+import { HistoryDisplaySettings } from '@/repositories/history-display';
 
 jest.mock('expo-router', () => ({ router: { push: jest.fn() },
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -101,4 +102,17 @@ test('restored legacy run retains its metrics and is visible in history', async 
   const speed = effectiveRun(legacy).pace.kmPerHour;
   expect(tree!.root.findAllByType(Text).find(node => node.props.testID === 'history-speed')!.props.children.join('')).toBe(`平均 ${speed!.toFixed(1)} km/h`);
   expect(await AsyncStorage.getItem('@runjourney/runs/v1')).toBe(snapshot);
+});
+
+test('default timestamps and saved elapsed preference render old RUN without changing its raw data', async () => {
+  await AsyncStorage.setItem('@runjourney/runs/v1', JSON.stringify([stopped]));
+  const before = await AsyncStorage.getItem('@runjourney/runs/v1');
+  await act(async () => { tree = create(createElement(HistoryScreen)); });
+  expect(tree!.root.findByProps({ testID: 'history-times' }).props.children).toContain('→');
+  act(() => tree!.unmount());
+  await HistoryDisplaySettings.save('elapsed');
+  await act(async () => { tree = create(createElement(HistoryScreen)); });
+  expect(tree!.root.findByProps({ testID: 'history-times' }).props.children).toBe('経過 32:00');
+  expect(tree!.root.findByProps({ testID: 'history-active-time' }).props.children.join('')).toBe('実走 29分');
+  expect(await AsyncStorage.getItem('@runjourney/runs/v1')).toBe(before);
 });

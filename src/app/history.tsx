@@ -11,6 +11,7 @@ import { historyRows } from '@/domain/history-list';
 import { BuildInfo } from '@/components/build-info';
 import { RunService } from '@/services/run-service';
 import { RunHistoryItem } from '@/types/run';
+import { HistoryDisplaySettings, historyElapsed, type HistoryTimeDisplay } from '@/repositories/history-display';
 
 const dateFormatter = new Intl.DateTimeFormat('ja-JP', {
   year: 'numeric', month: '2-digit', day: '2-digit',
@@ -25,6 +26,7 @@ function formatRunDateTime(value: string | undefined) {
 }
 
 export default function HistoryScreen() {
+  const [timeDisplay, setTimeDisplay] = useState<HistoryTimeDisplay>('timestamps');
   const [runs, setRuns] = useState<RunHistoryItem[]>([]);
   const [groupViews,setGroupViews]=useState<{id:string;value:ReturnType<typeof summarizeGroup>}[]>([]);
   const [hasMore, setHasMore] = useState(true);
@@ -32,7 +34,7 @@ export default function HistoryScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState('');
   const load = useCallback(async () => {
-    try { const page = await RunService.getHistoryPage(); setRuns(page); setHasMore(page.length === 100); setLoadError('');
+    try { const display = await HistoryDisplaySettings.get(); const page = await RunService.getHistoryPage(); setTimeDisplay(display); setRuns(page); setHasMore(page.length === 100); setLoadError('');
       if(Application.applicationId === 'app.runjourney.mobile.test') {
         const groups=await Groups.get();
         const views=await Promise.allSettled(groups.map(async g=>({id:g.id,value:await Groups.preview(g.memberIds,g.continuous)})));
@@ -89,7 +91,7 @@ export default function HistoryScreen() {
                   <Text testID="history-date" style={styles.date}>{started ? dateFormatter.format(started) : '日付不明'}</Text>
                   {group && <Text style={{color:'#A4D8B5',fontSize:12}}>● {group.memberIds.length} RUN</Text>}
                   <Text testID="history-times" style={styles.times}>
-                    {started ? timeFormatter.format(started) : '開始時刻不明'} → {ended ? timeFormatter.format(ended) : '終了時刻不明'}
+                    {timeDisplay === 'elapsed' ? `経過 ${historyElapsed(item.startedAt, group?.endedAt ?? normal!.endedAt)}` : `${started ? timeFormatter.format(started) : '開始時刻不明'} → ${ended ? timeFormatter.format(ended) : '終了時刻不明'}`}
                   </Text>
                   </View>
                   <View testID="history-divider" style={styles.divider} />
