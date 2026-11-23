@@ -64,6 +64,8 @@ flowchart TD
 
 停止兆候は正式判定とは独立した`stopHint`（低速/狭い広がりの連続suffix）で、30秒cooldownがある。`STOP_CANDIDATE_*`の空文診断は発話しない。停止確定/再開確定はpriority100、15秒期限、最新状態・eventIndex一致が必要。兆候案内は80/4秒。専用チャイムは原子的な完了待ち、共通チャイムは取消可能、手動BREAK/RESUMEはチャイムなし。詳細は[現音声正本](voice-current.md)、[JS updateGuidance](../src/services/voice-announcement.ts)、[Native queue/playChime](../modules/run-announcer/android/src/main/java/app/runjourney/announcer/RunAnnouncerService.kt)。
 
+図のTTS準備は「まだreadyでない待機」と「初期化失敗」を区別する。単に未準備ならspeakNextはキューを保持して待つ。初期化失敗でのclear/自動再初期化不足は現行の残課題であり、未準備になっただけですべて捨てるという意味ではない。
+
 `stopHint`は末尾4秒・最大6点から連続低速suffixを選び、3点以上/2秒以上、精度≦12m、provider speedが既知で0〜0.35m/s、隣接間隔0超〜2秒、最新fix鮮度0〜3秒、全点対の広がり≦2mを要求する。正式判定と違いprovider speed欠落でも成立するとは扱わない。根拠は[voice-guidance stopHint](../src/domain/voice-guidance.ts)。
 
 ## 旧図との対応・評価記録
