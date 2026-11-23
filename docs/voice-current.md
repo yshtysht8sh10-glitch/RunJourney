@@ -34,7 +34,7 @@
 | GOAL_WARNING | ●自動終了前の残量 | 自動終了ON、距離/時間目標。独立カウントダウン有効時の重複を抑止 | 60 / 15秒、RUNNING/目標revisionを検査 |
 | TURNAROUND | ●目標半分のkm/分→折返し目安 | 独立初期OFF。目標ごと原則1回、既通過/遅すぎる交差/停止はスキップ | 60 / sample.at＋8秒とGPS鮮度/目標deadlineの最小値。目標変更/終了/非RUNNINGで取消 |
 | GOAL_COUNTDOWN | ●残りm/秒 | 独立初期OFF。距離200→10m、時間60→10秒、10刻み。跨いだ古い数字は飛ばす | 60 / sample.at＋3秒とGPS鮮度/目標deadlineの最小値。最新の有効値のみ、開始期限と本文watchdog分離。RUN停止/終了で取消 |
-| RUN_GOAL_FINISHED | ●終了/労い→△保存済みRUNの距離・実走時間・平均・ラップ | 通常終了/目標自動終了の保存成功後の経路 | 110 / 30秒。終了済みRUNの旧通知は捨て、このイベントのみ許可 |
+| RUN_GOAL_FINISHED | ●終了→●保存済み距離/実走時間→△平均時速/平均ペース→△完了ラップ数/最終ラップ→●労い | 通常終了/目標自動終了の保存成功後の経路。低距離/時間不足では平均等を省略 | 110 / 30秒。終了済みRUNの旧通知は捨て、このイベントのみ許可 |
 | STOP_CANDIDATE_ANNOUNCED | ●「停止を確認しています。」 | 通常音声またはペース音声ON、Auto Stop ON、stopHint成立・30秒cooldown | 80 / 4秒、候補消失/正式状態変更で取消 |
 | AUTO_STOP_CONFIRMED | ●タイマー一時停止 | sensor由来AUTO_STOP、対応音声ON | 100 / confirmedAt（なければ有効時刻）＋15秒、最新eventIndex/状態との不一致で取消 |
 | AUTO_RESUME_CONFIRMED | ●再開検知→タイマー再開 | sensor由来RUNNING、対応音声ON | 100 / 同15秒、最新eventIndex/状態不一致で取消 |
