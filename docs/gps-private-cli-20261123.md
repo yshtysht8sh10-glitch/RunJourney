@@ -62,3 +62,5 @@ node scripts/gps-private.cjs replay D:/private-runjourney/anonymized-input.json 
 実音声、Bluetooth、自然Doze、端末電池/温度/CPU、Native durable ACKとGPS長時間の同時実機評価は未実施。PC CPU/RSSから端末の電池負荷を推測しない。開発用toolを完成しても、実通知欠落#40/#48、Auto Stop改善#28/#43、最後の一括実機#78はOpenのまま。
 
 3秒停止の見逃しや品質劣化時の遅延が再現しても、現在の判定アルゴリズムの観測結果であり、本作業で閾値を変更しない。#49のCloseはtoolの独立承認・最終長時間結果を条件とし、実機受入の代替にしない。Production配布・既存データ操作なし。
+
+独立レビュー：integration_reviewがコード`ed117ef`を限定承認し、最終`ef47c5a6b9cb3abbc4001aea6c8b87f5e431816b`の文書・private最終集計との一致を確認して承認。P1/P2なし。main統合後の#49 Closeを開発toolscopeに限り承認した。レビュー側は3時間試験を再実行せず集計を読取確認した。実機・聴取の承認とは区別する。
