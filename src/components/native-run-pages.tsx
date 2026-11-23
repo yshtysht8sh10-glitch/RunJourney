@@ -6,6 +6,7 @@ import { RunPage, RunSummary, StreamKind, STREAMS } from "../domain/pages";
 import { exportPagedRun } from "../services/paged-export";
 import { pagedLapAnalysis } from "../domain/paged-analysis";
 import { RunDetailSummary } from './run-detail-summary';
+import { RouteMapEntry } from './route-map-entry';
 import PaceWorkoutReport from './pace-workout-report';
 export default function NativeRunPages({ summary }: { summary: RunSummary }) {
   const [page, setPage] = useState<RunPage | null>(null),
@@ -38,6 +39,7 @@ export default function NativeRunPages({ summary }: { summary: RunSummary }) {
       <Pressable accessibilityRole="button" style={styles.back} onPress={() => router.replace('/history')}><Text style={styles.text}>‹ 履歴に戻る</Text></Pressable>
       <Text style={styles.title}>長時間走行のページ詳細</Text>
       <RunDetailSummary summary={summary} />
+      <RouteMapEntry id={summary.id} />
       <Text style={styles.title}>走行分析</Text>
       <PaceWorkoutReport key={summary.id} runId={summary.id} lazy />
       {button('実走5分ラップを段階解析', () => void work(async () => {

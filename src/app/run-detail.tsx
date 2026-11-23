@@ -11,6 +11,7 @@ import { RunSummary } from '@/domain/pages';
 import NativeRunPages from '@/components/native-run-pages';
 import PaceWorkoutReport from '@/components/pace-workout-report';
 import { RunDetailSummary } from '@/components/run-detail-summary';
+import { RouteMapEntry } from '@/components/route-map-entry';
 
 export default function RunDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -59,6 +60,7 @@ function LegacyRunDetail() {
     <Text style={styles.title}>走行詳細</Text>
     {!run || !effective ? <Text style={styles.text}>{error || '記録を読み込み中…'}</Text> : <>
       <RunDetailSummary summary={{ ...run, distanceMeters: effective.distanceMeters, activeRunningTime: effective.activeRunningTime, wallClockElapsed: effective.wallClockElapsed, pointCount: run.points.length }} />
+      <RouteMapEntry id={run.id} />
       <Text style={styles.title}>走行分析</Text>
       <PaceWorkoutReport key={run.id} runId={run.id} />
       <Text style={styles.subheading}>実走5分ラップ</Text>
