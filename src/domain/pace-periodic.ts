@@ -44,6 +44,11 @@ export function pacePeriodicSnapshots(run: ActiveRun, now: number, cursor: PaceP
   const due = Math.floor((now - schedule.startedAt) / schedule.intervalMs);
   const settledAt = run.features?.autoStop ? now - PACE_BOUNDARY_SETTLE_MS : now;
   const candidateAt = run.features?.autoStop ? run.detector?.stillSince : undefined;
+  // The GPS path calls this frequently. Build cumulative evidence only when a
+  // slot can actually be submitted, not once per GPS delivery/heartbeat.
+  const nextEndAt = schedule.startedAt + (cursor.acceptedThrough + 1) * schedule.intervalMs;
+  if (cursor.acceptedThrough >= due || nextEndAt > settledAt || candidateAt !== undefined && candidateAt <= nextEndAt
+    || now < nextEndAt + PACE_BOUNDARY_SETTLE_MS && !run.points.some(p => p.timestamp >= nextEndAt && p.timestamp <= now)) return [];
   const evidence = paceEvidence(run, now, schedule.targetSecPerKm);
   const snapshots: PacePeriodicSnapshot[] = [];
   for (let slot = cursor.acceptedThrough + 1; slot <= due && snapshots.length < PACE_PERIODIC_MAX_BATCH; slot++) {
