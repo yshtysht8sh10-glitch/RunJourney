@@ -56,6 +56,15 @@ export function privateScenario(minutes: number): ReplayInput {
   return { schema: 1, startedAt, batches, stops };
 }
 
+/** Clean five-second GPS, no detector-derived truth or real location data. */
+export function continuousScenario(minutes: number): ReplayInput {
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 240) throw Error('REPLAY_MINUTES_LIMIT');
+  const startedAt=1800000000000;
+  return {schema:1,startedAt,stops:[],batches:Array.from({length:minutes*12+1},(_,i)=>({
+    receivedAt:startedAt+i*5000,appState:'background' as const,locations:[{timestamp:startedAt+i*5000,mocked:true,
+      coords:{latitude:35+i*15/111195,longitude:139,accuracy:5,speed:3,altitude:null,altitudeAccuracy:null,heading:null}}]}))};
+}
+
 export function distribution(values: number[]) {
   const sorted = [...values].sort((a,b) => a-b);
   const q = (p: number) => sorted.length ? sorted[Math.ceil(sorted.length*p)-1] : null;

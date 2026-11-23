@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import native from '../../../modules/run-announcer';
-import { parsePrivateInput, privateScenario, replayStatistics, distribution, type Decision } from '@/test/gps-private-input';
+import { parsePrivateInput, privateScenario, continuousScenario, replayStatistics, distribution, type Decision } from '@/test/gps-private-input';
 import { GpsBatchReplay } from '@/test/gps-batch-replay';
 import { ingestLocationBatch } from '@/tasks/location-task';
 import { RunRepository } from '@/repositories/run-repository';
@@ -21,10 +21,12 @@ test('isolated private runner processes only received input and writes coordinat
   resetNative(); jest.clearAllMocks();
   const file = process.env.RUNJOURNEY_PRIVATE_INPUT;
   if (file && fs.statSync(file).size > 32*1024*1024) throw Error('REPLAY_INPUT_LIMIT');
-  const input = file ? parsePrivateInput(fs.readFileSync(file, 'utf8')) : privateScenario(Number(process.env.RUNJOURNEY_PRIVATE_MINUTES ?? 6));
+  const continuous=process.env.RUNJOURNEY_PRIVATE_PROFILE==='continuous';
+  const input = file ? parsePrivateInput(fs.readFileSync(file, 'utf8')) : (continuous?continuousScenario:privateScenario)(Number(process.env.RUNJOURNEY_PRIVATE_MINUTES ?? 6));
   const replay = new GpsBatchReplay(input.batches, input.startedAt);
   let now = input.startedAt, cursor: { acceptedThrough: number; activeFromMs: number } | undefined;
   let received = 0, slots = 0; const ids = new Set<string>(), quality: Record<string, number> = {};
+  let audibleSlots=0,intervalNumeric=0,cumulativeNumeric=0,staleCumulative=0;
   const clock = jest.spyOn(Date, 'now').mockImplementation(() => now);
   jest.mocked(native.pacePeriodicState!).mockImplementation(() => JSON.stringify(cursor ?? null));
   jest.mocked(native.notifyBatch!).mockImplementation(text => {
@@ -34,6 +36,10 @@ test('isolated private runner processes only received input and writes coordinat
       const s = n.data?.pacePeriodicSnapshot; if (!s) continue;
       if (ids.has(n.id) || s.slot !== cursor!.acceptedThrough+1 || s.endAt > now || s.endAt !== input.startedAt+s.slot*60000) throw Error('PACE_RECEIPT_OR_BOUNDARY_MISMATCH');
       ids.add(n.id); cursor!.acceptedThrough=s.slot; slots++; quality[s.quality]=(quality[s.quality]??0)+1;
+      if(s.quality==='READY'||s.quality==='DATA_INSUFFICIENT'){
+        audibleSlots++;intervalNumeric+=Number(s.intervalNumeric??s.quality==='READY');
+        cumulativeNumeric+=Number(s.cumulativeNumeric??s.quality==='READY');staleCumulative+=Number(s.cumulativeQuality==='STALE');
+      }
     }
   });
   const run: ActiveRun = { id:'PC-PRIVATE-ONLY', startedAt:new Date(now).toISOString(), createdAt:'', updatedAt:'', points:[], distanceMeters:0,
@@ -53,6 +59,7 @@ test('isolated private runner processes only received input and writes coordinat
     const saved=await RunRepository.finishActiveRun(new Date(now).toISOString());
     if (!saved || (await (await database()).list(true)).length !== 1) throw Error('ISOLATION_OR_SAVE_FAILED');
     if (!file && slots < Math.floor((now-input.startedAt)/60000)-1) throw Error('PACE_LONG_RUN_SLOT_GAP');
+    if(continuous&&(intervalNumeric!==audibleSlots||cumulativeNumeric!==audibleSlots||staleCumulative))throw Error('PACE_CONTINUOUS_NUMERIC_REGRESSION');
     const rows=jest.mocked(diagnosticLog).mock.calls.filter(([type,,status])=>type==='STOP_PIPELINE'&&['STOP_CONFIRMED','RESUME_CONFIRMED'].includes(status));
     const decisions: Decision[]=rows.map(([, ,type,data])=>{
       const d=data as { timestamp:number; pipeline:{finishedAt:number} };
@@ -60,7 +67,10 @@ test('isolated private runner processes only received input and writes coordinat
     });
     const cpuUsed=process.cpuUsage(cpu);
     const report={schema:1,mode:file?'private-replay':'synthetic',virtualMinutes:(now-input.startedAt)/60000,inputFixes:received,batches:input.batches.length,
-      savedGpsPoints:saved.points.length,paceSlots:slots,paceSnapshotQuality:quality,inputDeliveryDelayMs:distribution(delays),
+      savedGpsPoints:saved.points.length,paceSlots:slots,paceSnapshotQuality:quality,
+      paceNumeric:{audibleSlots,intervalNumeric,cumulativeNumeric,staleCumulative,
+        intervalRate:audibleSlots?intervalNumeric/audibleSlots:null,cumulativeRate:audibleSlots?cumulativeNumeric/audibleSlots:null},
+      inputDeliveryDelayMs:distribution(delays),
       decisions:decisions.length,truth:replayStatistics(input.stops,decisions),realMs:performance.now()-begin,
       pipelineStages:summarizeStopLatency(jest.mocked(diagnosticLog).mock.calls.map(([type,id,status,data])=>({type,id,status,data:data as Record<string,unknown>,loggedAt:0})),run.id).stages,
       cpuMs:{user:cpuUsed.user/1000,system:cpuUsed.system/1000},sampledPeakRssBytes:Math.max(...rss,process.memoryUsage().rss),

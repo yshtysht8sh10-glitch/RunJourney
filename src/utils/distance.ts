@@ -2,8 +2,15 @@ import { LocationPoint } from '@/types/run';
 
 const EARTH_RADIUS_METERS = 6_371_000;
 const MAX_USABLE_ACCURACY_METERS = 50;
-const MAX_RUNNING_SPEED_METERS_PER_SECOND = 12.5;
+export const MAX_RUNNING_SPEED_METERS_PER_SECOND = 12.5;
 const MIN_MOVEMENT_METERS = 3;
+
+/** Same eligibility as the normal distance model; no speech-specific GPS filter. */
+export function usableDistancePoint(point: LocationPoint): boolean {
+  return Number.isFinite(point.latitude) && Math.abs(point.latitude) <= 90
+    && Number.isFinite(point.longitude) && Math.abs(point.longitude) <= 180
+    && (point.accuracy === undefined || Number.isFinite(point.accuracy) && point.accuracy >= 0 && point.accuracy <= MAX_USABLE_ACCURACY_METERS);
+}
 
 const toRadians = (degrees: number) => (degrees * Math.PI) / 180;
 
@@ -27,11 +34,7 @@ export function calculateDistance(points: LocationPoint[]): number {
     const elapsedSeconds = (current.timestamp - previous.timestamp) / 1000;
 
     if (!Number.isFinite(elapsedSeconds) || elapsedSeconds <= 0) continue;
-    if ([previous, current].some(point => !Number.isFinite(point.latitude) || !Number.isFinite(point.longitude)
-      || Math.abs(point.latitude) > 90 || Math.abs(point.longitude) > 180
-      || point.accuracy !== undefined && (!Number.isFinite(point.accuracy) || point.accuracy < 0))) continue;
-    if ((previous.accuracy ?? 0) > MAX_USABLE_ACCURACY_METERS) continue;
-    if ((current.accuracy ?? 0) > MAX_USABLE_ACCURACY_METERS) continue;
+    if (![previous, current].every(usableDistancePoint)) continue;
 
     const segment = distanceBetween(previous, current);
     if (!Number.isFinite(segment)) continue;
