@@ -29,7 +29,8 @@ for (const file of ['docs/voice-current.md', 'docs/auto-stop-current.md', 'docs/
 const issueIds = text => [...new Set([...text.matchAll(/#(\d+)\b/g)].map(m => Number(m[1])))].sort((a, b) => a - b);
 const ledgerIds = [...read('docs/remaining-work-20261123.md').split('## 残存Issue一覧')[1].matchAll(/^\| #(\d+) \|/gm)].map(m => Number(m[1])).sort((a, b) => a - b);
 assert.equal(ledgerIds.length, 48);
-assert.deepEqual(issueIds(read('docs/pre-cycling-scope-20261123.md')), ledgerIds);
+const scopeTable = read('docs/pre-cycling-scope-20261123.md').split('\n').filter(line => line.startsWith('|')).join('\n');
+assert.deepEqual(issueIds(scopeTable), ledgerIds);
 
 // Minimal DOM models only operations used by this unchanged inline editor.
 function editor(saved = []) {
