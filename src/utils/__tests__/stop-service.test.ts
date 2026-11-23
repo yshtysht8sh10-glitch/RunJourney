@@ -1,13 +1,11 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from '@/test/sqlite-fixture';
 import * as Location from 'expo-location';
 import { RunService } from '@/services/run-service';
 import { RunRepository } from '@/repositories/run-repository';
 import { ActiveRun } from '@/types/run';
 jest.mock('@/tasks/location-task', () => ({ LOCATION_TASK_NAME: 'test-location' }));
-jest.mock('@/services/voice-announcement', () => ({ VoiceAnnouncement: { stop: jest.fn(), restore: jest.fn() } }));
+jest.mock('@/services/voice-announcement', () => ({ VoiceAnnouncement: { goalChanged: jest.fn(), started: jest.fn(), beforeGoal: jest.fn().mockResolvedValue(undefined), stop: jest.fn(), restore: jest.fn() } }));
 jest.mock('expo-location', () => ({ Accuracy: { High: 4 }, ActivityType: { Fitness: 3 }, hasStartedLocationUpdatesAsync: jest.fn(), stopLocationUpdatesAsync: jest.fn(), startLocationUpdatesAsync: jest.fn(), getForegroundPermissionsAsync: jest.fn() }));
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-jest.mock('@react-native-async-storage/async-storage', () => require('@react-native-async-storage/async-storage/jest/async-storage-mock'));
 const draft = (): ActiveRun => ({ id: 'service', startedAt: new Date(0).toISOString(), createdAt: '', updatedAt: '', distanceMeters: 0, points: [] });
 beforeEach(async () => { await AsyncStorage.clear(); jest.clearAllMocks(); await RunRepository.saveActiveRun(draft()); jest.mocked(Location.hasStartedLocationUpdatesAsync).mockResolvedValue(true); });
 afterEach(() => jest.restoreAllMocks());
@@ -34,11 +32,13 @@ test('restoring failed-save snapshot does not restart GPS or request permissions
   expect(Location.getForegroundPermissionsAsync).not.toHaveBeenCalled();
 });
 
-test('GPS stop failure keeps draft and permits retry, no history before success', async () => {
+test('GPS stop failure freezes draft and permits retry without extending its end', async () => {
   jest.mocked(Location.stopLocationUpdatesAsync).mockRejectedValueOnce(new Error('OS failure')).mockResolvedValueOnce();
   await expect(RunService.stopRun()).rejects.toThrow('OS failure');
   expect(await RunRepository.getRuns()).toEqual([]);
-  expect(await RunRepository.getActiveRun()).toEqual(draft());
+  const frozen = (await RunRepository.getActiveRun())!;
+  expect(frozen).toMatchObject({ ...draft(), updatedAt: expect.any(String), endedAt: expect.any(String) });
   await RunService.stopRun();
   expect(await RunRepository.getRuns()).toHaveLength(1);
+  expect((await RunRepository.getRuns())[0].endedAt).toBe(frozen.endedAt);
 });

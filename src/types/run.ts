@@ -8,6 +8,13 @@ export type LocationPoint = {
 };
 
 export type RunRecord = {
+  startClockSettings?: { enabled: boolean; minutes: number };
+  finishGoal?: import('../domain/finish-goal').FinishGoal;
+  finishAutoEnabled?: boolean;
+  goalChanges?: { at: number; before: import('../domain/finish-goal').FinishGoal; after: import('../domain/finish-goal').FinishGoal; autoBefore: boolean; autoAfter: boolean; paceTargetBefore?: import('../domain/pace-workout').PaceSegment['target']; paceTargetAfter?: import('../domain/pace-workout').PaceSegment['target'] }[];
+  achievement?: import('../domain/finish-goal').GoalAchievement;
+  /** Optional bounded guidance metadata; GPS/history remain valid if absent. */
+  paceWorkout?: import('../domain/pace-workout').PaceWorkoutState;
   id: string;
   startedAt: string;
   endedAt: string;
@@ -29,6 +36,7 @@ export type RunState = 'RUNNING' | 'AUTO_STOP' | 'BREAK';
 export type RunEvent = { timestamp: number; state: RunState; source: 'sensor' | 'user'; confirmedAt?: number; reason?: string };
 
 export type ActiveRun = Omit<RunRecord, 'endedAt' | 'trashedAt'> & { endedAt?: string };
+export type RunHistoryItem = { id: string; startedAt: string; endedAt: string; distanceMeters: number; activeRunningTime: number; kmPerHour: number | null };
 
 export const StopReason = {
   SPEED_TOO_HIGH: 'SPEED_TOO_HIGH', DISPLACEMENT_TOO_LARGE: 'DISPLACEMENT_TOO_LARGE',
@@ -40,12 +48,13 @@ export const StopReason = {
 } as const;
 export type StopReasonCode = typeof StopReason[keyof typeof StopReason];
 export type StopDiagnostic = {
+  pipeline?: import('../domain/stop-latency').StopPipelineData;
   timestamp: number; receivedAt?: number; state: RunState; accuracy?: number;
   speed?: number; effectiveSpeed?: number; displacement?: number; originDisplacement?: number;
   intervalMs?: number; candidateStartedAt?: number; candidateAgeMs?: number;
   decision: 'START' | 'CONTINUE' | 'RESET' | 'HOLD' | 'SKIP' | 'STOP_CONFIRMED' | 'RESUME_CONFIRMED';
   inputSource?: 'live-observation' | 'live-persisted' | 'replay';
-  window?: { durationMs: number; validCount: number; displacement: number; pathLength: number; spread: number; speedMedian?: number; coherence: number; displacementSpeed?: number; movingEdgeRatio?: number; stopEvidence?: 'narrow-stillness' | 'bounded-dwell' | 'none' };
+  window?: { durationMs: number; validCount: number; displacement: number; pathLength: number; spread: number; speedMedian?: number; coherence: number; displacementSpeed?: number; movingEdgeRatio?: number; maxEdgeSpeed?: number; firstEdgeSpeed?: number; edgesValid?: boolean; stopEvidence?: 'narrow-stillness' | 'bounded-dwell' | 'none' };
   effectiveTimestamp?: number; confirmedAt?: number;
   reason?: StopReasonCode;
 };

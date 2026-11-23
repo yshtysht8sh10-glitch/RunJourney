@@ -1,0 +1,6 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="app.runjourney.markerprobe">
+  <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="36" />
+  <application android:label="RunJourney Marker Probe" android:testOnly="true" android:allowBackup="false" />
+  <instrumentation android:name="app.runjourney.markerprobe.MarkerProbe" android:targetPackage="app.runjourney.mobile.test" android:functionalTest="true" />
+  <instrumentation android:name="app.runjourney.markerprobe.MarkerInventory" android:targetPackage="app.runjourney.mobile.test" android:functionalTest="true" />
+</manifest>

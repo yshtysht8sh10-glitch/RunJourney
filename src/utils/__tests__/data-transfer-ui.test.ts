@@ -6,9 +6,22 @@ import { RunRepository } from '@/repositories/run-repository';
 import { exportBackup, pickBackup } from '@/services/run-export';
 jest.mock('expo-router', () => ({ router: { back: jest.fn(), push: jest.fn() } }));
 jest.mock('@/services/run-export', () => ({ exportBackup: jest.fn(), pickBackup: jest.fn() }));
-jest.mock('@/repositories/run-repository', () => ({ RunRepository: { getBackupRuns: jest.fn(), importRuns: jest.fn() } }));
+jest.mock('@/repositories/run-repository', () => ({ RunRepository: { getBackupRuns: jest.fn(), importRuns: jest.fn(), restoreSnapshot: jest.fn() } }));
 let tree: ReactTestRenderer;
 const run = { id: 'ui', startedAt: new Date(0).toISOString(), endedAt: new Date(1).toISOString(), createdAt: '', updatedAt: '', points: [], distanceMeters: 0 };
+test('v2 restore explicitly confirms draft/settings and only preview-approved new IDs', async () => {
+  const draft = { ...run, id: 'draft', endedAt: undefined };
+  const fresh = { ...run, id: 'fresh' };
+  jest.mocked(pickBackup).mockResolvedValue({ name: 'v2.json', snapshot: { runs: [run,fresh], draft, settings: {}, protectedIds: ['ui','fresh'] }, backup: { format: 'runjourney-backup', schemaVersion: 1, exportedAt: 1, app: {}, runs: [run,fresh] } });
+  jest.mocked(RunRepository.restoreSnapshot).mockResolvedValue({ added: 1, skipped: 0 });
+  await act(async () => { tree = create(createElement(DataTransfer)); });
+  await press('backup-select'); expect(RunRepository.restoreSnapshot).not.toHaveBeenCalled();
+  expect(JSON.stringify(tree.toJSON())).toContain('SHA-256検証済み');
+  await press('backup-confirm'); expect(RunRepository.restoreSnapshot).not.toHaveBeenCalled();
+  const buttons = jest.mocked(Alert.alert).mock.calls.at(-1)![2]!;
+  await act(async () => { await buttons[1].onPress!(); });
+  expect(RunRepository.restoreSnapshot).toHaveBeenCalledWith({ runs: [fresh], draft, settings: {}, protectedIds: ['fresh'] });
+});
 beforeEach(() => {
   jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
   jest.mocked(RunRepository.getBackupRuns).mockResolvedValue([run]);

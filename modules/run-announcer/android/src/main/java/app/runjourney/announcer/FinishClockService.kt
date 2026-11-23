@@ -1,0 +1,46 @@
+package app.runjourney.announcer
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.Service
+import android.content.Intent
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
+import android.os.PowerManager
+
+/** GPS-independent pulse. JS derives the boundary from the durable active clock.
+ * Does not invent fixes or write history from a second database connection.
+ */
+class FinishClockService : Service() {
+  companion object { var pulse: (() -> Unit)? = null }
+  private var previewUntil = 0L
+  private val handler = Handler(Looper.getMainLooper())
+  private var lock: PowerManager.WakeLock? = null
+  private val tick = object : Runnable {
+    override fun run() {
+      if(previewUntil>0 && android.os.SystemClock.elapsedRealtime()>=previewUntil){stopSelf();return}
+      try { pulse?.invoke() } catch (e: Exception) { android.util.Log.w("RunJourneyClock", "JS pulse unavailable", e) }
+      handler.postDelayed(this, 1000)
+    }
+  }
+  override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    val lease=intent?.getLongExtra("previewMs",0)?:0
+    val upgradingPreview=previewUntil>0 && lease<=0
+    previewUntil=if(lease>0)android.os.SystemClock.elapsedRealtime()+lease.coerceIn(1,if(intent?.getBooleanExtra("journalProbe",false)==true)90000 else 30000) else 0
+    val channel = "runjourney-finish-clock"
+    getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(channel, "走行終了条件", NotificationManager.IMPORTANCE_LOW))
+    startForeground(3801, Notification.Builder(this, channel).setContentTitle("RunJourneyでランニングを記録中")
+      .setContentText("目標達成時に計測を終了します").setSmallIcon(android.R.drawable.ic_menu_mylocation).setOngoing(true).build())
+    if (lock?.isHeld != true || upgradingPreview) {
+      lock?.let {if(it.isHeld)it.release()}
+      lock = getSystemService(PowerManager::class.java)
+        .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "RunJourney:FinishClock").apply { if(previewUntil>0)acquire((previewUntil-android.os.SystemClock.elapsedRealtime()).coerceAtLeast(1)) else acquire() }
+    }
+    handler.removeCallbacks(tick); handler.post(tick)
+    return START_NOT_STICKY
+  }
+  override fun onDestroy() { handler.removeCallbacks(tick); lock?.let { if (it.isHeld) it.release() }; super.onDestroy() }
+  override fun onBind(intent: Intent?): IBinder? = null
+}

@@ -1,6 +1,8 @@
+import { TestDiagnosticStatus } from '@/components/test-diagnostic-status';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { router } from 'expo-router';
-import { Alert, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { PaceWorkoutCard } from '@/components/pace-workout-card';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { StopButton } from '@/components/stop-button';
@@ -9,6 +11,9 @@ import { analyzePace } from '@/utils/pace-analysis';
 import { BuildInfo } from '@/components/build-info';
 import { RunService } from '@/services/run-service';
 import { ActiveRun } from '@/types/run';
+import { StartSettingsSummary } from '@/components/start-settings-summary';
+import { RunGoalEditor } from '@/components/run-goal-editor';
+import { FinishGoalSettings } from '@/components/finish-goal-settings';
 
 function formatElapsed(durationMs: number): string {
   const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
@@ -39,6 +44,11 @@ export default function RunScreen() {
   const [now, setNow] = useState(() => Date.now());
   const [busy, setBusy] = useState(true);
   const [saveError, setSaveError] = useState('');
+  const [finishReady, setFinishReady] = useState(false);
+  useEffect(() => RunService.subscribeFinish?.((saved, error) => {
+    if (saved) { setActiveRun(null); router.replace({ pathname: './run-summary', params: { id: saved.id } }); }
+    else if (error) { setSaveError(String(error)); void RunService.getActiveRun().then(setActiveRun); }
+  }), []);
 
   const showError = useCallback((error: unknown) => {
     const message = error instanceof Error ? error.message : '処理に失敗しました。';
@@ -104,7 +114,8 @@ export default function RunScreen() {
       <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
         <Text style={styles.brand}>RUNJOURNEY</Text>
         <BuildInfo />
-        <View style={styles.content}>
+    <TestDiagnosticStatus compact />
+        <ScrollView contentContainerStyle={styles.content}>
           {activeRun ? (
             <>
               <Text style={styles.eyebrow}>{stateOf(activeRun).replace('_', ' ')}</Text>
@@ -113,6 +124,8 @@ export default function RunScreen() {
               <Text style={styles.elapsed}>{formatElapsed(time!.activeRunningTime)}</Text>
               <Text style={styles.status}>{stateOf(activeRun) === 'AUTO_STOP' ? '停止しています。走り出すと自動再開' : stateOf(activeRun) === 'BREAK' ? `休憩中 ${formatElapsed(time!.breakDuration)}` : pace ? `${Math.floor(pace / 60)}:${String(Math.floor(pace % 60)).padStart(2, '0')} /km` : 'GPSを記録中'}</Text>
               {activeRun.features?.break && !activeRun.endedAt && <Pressable accessibilityRole="button" disabled={busy} onPress={changeState} style={{ width: '100%', minHeight: 64, borderRadius: 16, backgroundColor: '#33424C', alignItems: 'center', justifyContent: 'center', marginBottom: 20 }}><Text style={styles.startButtonText}>{stateOf(activeRun) === 'BREAK' ? '再 開' : '休 憩'}</Text></Pressable>}
+              <PaceWorkoutCard run={activeRun} now={now} />
+              {!activeRun.endedAt && <RunGoalEditor run={activeRun} onSaved={setActiveRun} />}
               {saveError || activeRun.endedAt ? <View style={{ width: '100%' }}>
                 <Text accessibilityRole="alert" style={styles.description}>{saveError || '終了した記録の保存が未完了です。'}</Text>
                 <Pressable testID="retry-save" accessibilityRole="button" disabled={busy} onPress={stop} style={styles.startButton}><Text style={styles.startButtonText}>{busy ? '保存中…' : '保存を再試行'}</Text></Pressable>
@@ -122,12 +135,14 @@ export default function RunScreen() {
             <>
               <Text style={styles.readyTitle}>今日の一歩を{`\n`}記録しよう。</Text>
               <Text style={styles.description}>START後は画面をOFFにしても記録が続きます。位置情報は「常に許可」を選択してください。</Text>
-              <Pressable accessibilityRole="button" disabled={busy} onPress={start} style={({ pressed }) => [styles.startButton, pressed && styles.pressed, busy && styles.disabled]}>
+              <StartSettingsSummary />
+              <FinishGoalSettings onReady={setFinishReady} />
+              <Pressable accessibilityRole="button" disabled={busy || !finishReady} onPress={start} style={({ pressed }) => [styles.startButton, pressed && styles.pressed, (busy || !finishReady) && styles.disabled]}>
                 <Text style={styles.startButtonText}>{busy ? '準備中…' : 'START'}</Text>
               </Pressable>
             </>
           )}
-        </View>
+        </ScrollView>
       </SafeAreaView>
     </View>
   );
@@ -137,7 +152,7 @@ const styles = StyleSheet.create({
   background: { flex: 1, backgroundColor: '#111418' },
   container: { flex: 1, paddingHorizontal: 24 },
   brand: { color: '#E85D2A', fontSize: 15, fontWeight: '800', letterSpacing: 2.5, marginTop: 14 },
-  content: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 50 },
+  content: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 16, paddingBottom: 50 },
   eyebrow: { color: '#E85D2A', fontSize: 16, fontWeight: '800', letterSpacing: 4, marginBottom: 24 },
   distance: { color: '#F5F2EB', fontSize: 92, fontWeight: '200', letterSpacing: -5, lineHeight: 100 },
   unit: { color: '#A6A7A9', fontSize: 24, fontWeight: '500', marginTop: -4 },

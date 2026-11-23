@@ -3,10 +3,14 @@ import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'rea
 import { router, useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { RecoveryExperiment } from '@/components/recovery-experiment';
+import * as Application from 'expo-application';
+import { HistoryGroupsRepository as Groups } from '@/repositories/history-groups';
+import type { summarizeGroup } from '@/domain/history-groups';
+import { historyRows } from '@/domain/history-list';
 import { BuildInfo } from '@/components/build-info';
 import { RunService } from '@/services/run-service';
-import { effectiveRun } from '@/utils/run-model';
-import { RunRecord } from '@/types/run';
+import { RunHistoryItem } from '@/types/run';
 
 const dateFormatter = new Intl.DateTimeFormat('ja-JP', {
   year: 'numeric', month: '2-digit', day: '2-digit',
@@ -21,9 +25,23 @@ function formatRunDateTime(value: string | undefined) {
 }
 
 export default function HistoryScreen() {
-  const [runs, setRuns] = useState<RunRecord[]>([]);
+  const [runs, setRuns] = useState<RunHistoryItem[]>([]);
+  const [groupViews,setGroupViews]=useState<{id:string;value:ReturnType<typeof summarizeGroup>}[]>([]);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const load = useCallback(async () => setRuns(await RunService.getHistory()), []);
+  const [loadError, setLoadError] = useState('');
+  const load = useCallback(async () => {
+    try { const page = await RunService.getHistoryPage(); setRuns(page); setHasMore(page.length === 100); setLoadError('');
+      if(Application.applicationId === 'app.runjourney.mobile.test') {
+        const groups=await Groups.get();
+        const views=await Promise.allSettled(groups.map(async g=>({id:g.id,value:await Groups.preview(g.memberIds,g.continuous)})));
+        setGroupViews(views.filter((r):r is PromiseFulfilledResult<{id:string;value:ReturnType<typeof summarizeGroup>}>=>(r.status==='fulfilled')).map(r=>r.value));
+        if(views.some(r=>r.status==='rejected'))setLoadError('一部グループを確認できないため元RUNを個別表示します。');
+      }
+    }
+    catch (error) { setLoadError(error instanceof Error ? error.message : '履歴を読み込めませんでした'); }
+  }, []);
 
   useFocusEffect(useCallback(() => { load().catch(() => undefined); }, [load]));
 
@@ -31,28 +49,45 @@ export default function HistoryScreen() {
     setRefreshing(true);
     try { await load(); } finally { setRefreshing(false); }
   };
+  const more = async () => {
+    if (!hasMore || loadingMore || refreshing || loadError) return;
+    setLoadingMore(true);
+    try { const page = await RunService.getHistoryPage(100,runs.length); setRuns(current => [...current,...page.filter(row => !current.some(r => r.id === row.id))]); setHasMore(page.length === 100); }
+    catch (error) { setLoadError(error instanceof Error ? error.message : '履歴を読み込めませんでした'); }
+    finally { setLoadingMore(false); }
+  };
 
+  const visibleRows = historyRows(runs, groupViews);
   return (
     <View style={styles.background}>
       <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
         <Text style={styles.title}>履歴</Text>
+        {loadError ? <Text accessibilityRole="alert" style={styles.emptyText}>履歴の読み込みに失敗しました。{loadError}</Text> : null}
         <Pressable testID="open-trash" accessibilityRole="button" onPress={() => router.push('/trash')} style={{ paddingHorizontal: 24, paddingVertical: 14 }}><Text style={styles.date}>ごみ箱 ›</Text></Pressable>
         <View style={styles.buildInfo}><BuildInfo /></View>
         <FlatList
-          data={runs}
+          ListHeaderComponent={Application.applicationId === 'app.runjourney.mobile.test' ? <><Pressable accessibilityRole="button" onPress={()=>router.push('./history-groups')} style={{paddingVertical:16}}><Text style={styles.date}>表示グループを作成・解除 ›</Text></Pressable><RecoveryExperiment /></> : null}
+          data={visibleRows}
           keyExtractor={(item) => item.id}
+          onEndReached={() => { void more(); }}
+          onEndReachedThreshold={0.5}
           contentContainerStyle={runs.length ? styles.list : styles.emptyList}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor="#E85D2A" />}
-          ListEmptyComponent={<View style={styles.empty}><Text style={styles.emptyTitle}>まだ記録がありません</Text><Text style={styles.emptyText}>最初のランニングを始めましょう。</Text></View>}
+          ListEmptyComponent={loadError ? null : <View style={styles.empty}><Text style={styles.emptyTitle}>まだ記録がありません</Text><Text style={styles.emptyText}>最初のランニングを始めましょう。</Text></View>}
           renderItem={({ item }) => {
+            const group = 'groupValue' in item ? item.groupValue : null;
+            const normal = 'groupValue' in item ? null : item;
             const started = formatRunDateTime(item.startedAt);
-            const ended = formatRunDateTime(item.endedAt);
-            const effective = effectiveRun(item);
+            const ended = formatRunDateTime(group?.endedAt ?? normal?.endedAt);
+            const distance = group?.recordedDistanceMeters ?? normal!.distanceMeters;
+            const active = group?.recordedRunningMs ?? normal!.activeRunningTime;
+            const speed = group ? (active > 0 ? distance / active * 3600 : null) : normal!.kmPerHour;
             return (
-              <Pressable accessibilityRole="button" accessibilityLabel="走行履歴の詳細" onPress={() => router.push({ pathname: '/run-detail', params: { id: item.id } })} style={styles.row}>
+              <Pressable accessibilityRole="button" accessibilityLabel={group ? `表示グループ ${group.memberIds.length} RUNの詳細` : '走行履歴の詳細'} onPress={() => router.push(group ? { pathname: './history-group-detail', params: { id: item.id.slice(8) } } : { pathname: '/run-detail', params: { id: item.id } })} style={styles.row}>
                 <View testID="history-when" style={styles.when}>
                   <View style={styles.dateTime}>
                   <Text testID="history-date" style={styles.date}>{started ? dateFormatter.format(started) : '日付不明'}</Text>
+                  {group && <Text style={{color:'#A4D8B5',fontSize:12}}>● {group.memberIds.length} RUN</Text>}
                   <Text testID="history-times" style={styles.times}>
                     {started ? timeFormatter.format(started) : '開始時刻不明'} → {ended ? timeFormatter.format(ended) : '終了時刻不明'}
                   </Text>
@@ -61,9 +96,9 @@ export default function HistoryScreen() {
                   <Text testID="history-details" style={styles.details}>詳細 ›</Text>
                 </View>
                 <View testID="history-primary" style={styles.primary}>
-                  <Text testID="history-active-time" style={styles.activeTime}>実走 {Math.floor(effective.activeRunningTime / 60000)}分</Text>
-                  <Text testID="history-distance" style={styles.distance}>{(effective.distanceMeters / 1000).toFixed(2)} km</Text>
-                  <Text testID="history-speed" style={styles.activeTime}>平均 {effective.pace.kmPerHour !== null && Number.isFinite(effective.pace.kmPerHour) ? effective.pace.kmPerHour.toFixed(1) : '—'} km/h</Text>
+                  <Text testID="history-active-time" style={styles.activeTime}>実走 {Math.floor(active / 60000)}分</Text>
+                  <Text testID="history-distance" style={[styles.distance,group ? {color:'#A4D8B5'} : null]}>{(distance / 1000).toFixed(2)} km</Text>
+                  <Text testID="history-speed" style={styles.activeTime}>平均 {speed !== null && Number.isFinite(speed) ? speed.toFixed(1) : '—'} km/h</Text>
                 </View>
               </Pressable>
             );

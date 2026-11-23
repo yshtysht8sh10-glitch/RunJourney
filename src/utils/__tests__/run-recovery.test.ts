@@ -1,11 +1,9 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from '@/test/sqlite-fixture';
 import { RunRepository } from '@/repositories/run-repository';
 import { RunRecord } from '@/types/run';
 import { effectiveRun } from '@/utils/run-model';
 import { applyRecovery, recoveryPreview, undoRecovery } from '@/utils/run-recovery';
 import { parseBackup, serializeBackup } from '@/utils/run-backup';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-jest.mock('@react-native-async-storage/async-storage', () => require('@react-native-async-storage/async-storage/jest/async-storage-mock'));
 const record = (): RunRecord => ({ id: 'recovery-fixture', startedAt: new Date(0).toISOString(), endedAt: new Date(60000).toISOString(), createdAt: '', updatedAt: '', distanceMeters: 0,
   features: { autoStop: true, break: true }, events: [{ timestamp: 0, confirmedAt: 5000, source: 'sensor', state: 'AUTO_STOP' }],
   points: Array.from({ length: 13 }, (_, i) => ({ timestamp: i * 5000, latitude: 35 + Math.max(0, i * 5 - 15) * 2 / 111195, longitude: 139, accuracy: 5, speed: i <= 3 ? 0 : 2 })),

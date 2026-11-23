@@ -1,0 +1,32 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'app.runjourney.rescue'
+    compileSdk 36
+    defaultConfig {
+        // Access to the existing sandbox requires a separately approved same-ID update.
+        applicationId 'app.runjourney.mobile.test'
+        minSdk 26
+        targetSdk 36
+        versionCode 15
+        versionName '0.1.0-rescue'
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    testOptions {
+        unitTests.includeAndroidResources = true
+        unitTests.all {
+            maxHeapSize = '2g'
+            systemProperty 'robolectric.dependency.repo.url', 'https://repo.maven.apache.org/maven2'
+        }
+    }
+    // PC tests compile the exact production file-store class, without packaging
+    // it into the rescue APK or modifying the preserved rescue artifact.
+    sourceSets.test.java.srcDir '../../withdrawn-v16-storage/android/src/main/java'
+}
+
+// No application dependencies: no Expo, React, AsyncStorage, AndroidX initializer,
+// jobs, migration helpers, network libraries or production application code.
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.16.1'
+}

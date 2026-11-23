@@ -2,12 +2,171 @@ package app.runjourney.announcer
 
 import android.content.Intent
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.Manifest
+import android.content.pm.PackageManager
+import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
 class RunAnnouncerModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("RunAnnouncer")
+    Function("pacePeriodicVersion") { 1 }
+    Function("pacePeriodicState") { runId: String, configKey: String ->
+      PacePeriodicLedger(requireNotNull(appContext.reactContext)).state(runId, configKey)
+    }
+    Function("sensorControl") { action: String, value: String -> SensorDiagnostics.control(requireNotNull(appContext.reactContext), action, value) }
+    Function("sensorNotificationsAllowed") {
+      val c = requireNotNull(appContext.reactContext)
+      SensorDiagnostics.allowed(c) && (Build.VERSION.SDK_INT < 33 || c.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) &&
+        c.getSystemService(android.app.NotificationManager::class.java).let { it.areNotificationsEnabled() && it.getNotificationChannel("sensor-diagnostic-alerts-v36")?.importance != android.app.NotificationManager.IMPORTANCE_NONE }
+    }
+    Function("sensorStats") { SensorDiagnostics.stats(requireNotNull(appContext.reactContext)) }
+    AsyncFunction("diagnosticAuditRead") { promise: Promise -> DiagnosticAudit.read(requireNotNull(appContext.reactContext), promise) }
+    Function("sensorGps") { payload: String -> SensorDiagnostics.gps(requireNotNull(appContext.reactContext), payload) }
+    AsyncFunction("sensorRead") { SensorDiagnostics.read(requireNotNull(appContext.reactContext)) }
+    Events("finishClock")
+    Function("paceAnnouncementBaseline") {
+      requireNotNull(appContext.reactContext).getSharedPreferences(RunAnnouncerService.PREFS, 0)
+        .getString("paceAnnouncementBaseline", "null") ?: "null"
+    }
+    Function("detectorJournalDeviceScreen") {
+      val context=requireNotNull(appContext.reactContext)
+      check(context.packageName=="app.runjourney.mobile.test") { "Test only" }
+      context.getSystemService(android.os.PowerManager::class.java).isInteractive
+    }
+    Function("detectorJournalStats") { DetectorJournalStorage.stats(requireNotNull(appContext.reactContext)) }
+    Function("detectorJournalDeviceClock") {
+      val context=requireNotNull(appContext.reactContext)
+      check(context.packageName=="app.runjourney.mobile.test") { "Test only" }
+      check(!context.getSharedPreferences(RunAnnouncerService.PREFS,0).getBoolean("running",false)) { "Running" }
+      context.startForegroundService(Intent(context,FinishClockService::class.java).putExtra("previewMs",90000L).putExtra("journalProbe",true))
+    }
+    AsyncFunction("detectorJournalOpen") { DetectorJournalStorage.open(requireNotNull(appContext.reactContext)) }
+    Function("detectorJournalOffer") { payload: String -> DetectorJournalStorage.offer(payload) }
+    Function("detectorJournalStop") { DetectorJournalStorage.stop() }
+    AsyncFunction("detectorJournalList") { DetectorJournalStorage.list(requireNotNull(appContext.reactContext)) }
+    AsyncFunction("detectorJournalRead") { id: String, offset: Int ->
+      try { DetectorJournalStorage.read(requireNotNull(appContext.reactContext), id, offset) }
+      catch (_: Exception) { throw IllegalStateException("Diagnostic journal unavailable") }
+    }
+    AsyncFunction("detectorJournalOpenReader") { id: String ->
+      DetectorJournalStorage.openReader(requireNotNull(appContext.reactContext), id)
+    }
+    AsyncFunction("detectorJournalNextPage") { token: String ->
+      try { DetectorJournalStorage.nextPage(requireNotNull(appContext.reactContext), token) }
+      catch (_: Exception) { throw IllegalStateException("Diagnostic journal unavailable") }
+    }
+    AsyncFunction("detectorJournalCloseReader") { token: String ->
+      DetectorJournalStorage.closeReader(requireNotNull(appContext.reactContext), token)
+    }
+    // Durable audio-only fence. No service start and no RUN/goal mutation.
+    Function("finishGoalCues") { runId: String ->
+      GoalCueFence.finish(requireNotNull(appContext.reactContext),runId)
+    }
+    Function("noiseControl") { action: String, runId: String ->
+      val context = requireNotNull(appContext.reactContext)
+      val preferences = context.getSharedPreferences(RunAnnouncerService.PREFS, 0)
+      // Existing v20 users may already have the JS setting ON without this new audit preference.
+      if (action == "start" || action == "preview") preferences.edit().putBoolean("noiseConfigured", true).apply()
+      if (action == "enable") {
+        preferences.edit().putBoolean("noiseUserStopped", false).putBoolean("noiseConfigured", true).apply(); "READY"
+      } else if (action == "pause") {
+        // A lifecycle/voice pause must not impersonate the user's microphone STOP.
+        context.stopService(Intent(context, NoiseMonitorService::class.java)); "PAUSED"
+      } else if (action == "stop") {
+        preferences.edit().putBoolean("noiseUserStopped", true).putBoolean("noiseConfigured", false).apply()
+        context.stopService(Intent(context, NoiseMonitorService::class.java)); "OFF"
+      } else if (action == "finish") {
+        // Only shorten an already-running lease; never start a microphone from background.
+        if (NoiseState.running || NoiseState.status == "STARTING") context.startService(Intent(context, NoiseMonitorService::class.java).setAction("FINISH"))
+        "FINISHING"
+      } else if (action == "start" && preferences.getBoolean("noiseUserStopped", false)) "USER_STOPPED"
+      else if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) "PERMISSION_DENIED"
+      else if (appContext.currentActivity?.hasWindowFocus() != true) "VISIBLE_ACTIVITY_REQUIRED"
+      else try {
+        NoiseState.status = "STARTING"
+        if (action == "preview") preferences.edit().putBoolean("noiseUserStopped", false).apply()
+        val intent = Intent(context, NoiseMonitorService::class.java).putExtra("runId", runId)
+          .putExtra("leaseMs", if (action == "preview") 20000L else 21600000L)
+        context.startForegroundService(intent)
+        if (action == "preview") Handler(Looper.getMainLooper()).postDelayed({
+          val speech = Intent(context, RunAnnouncerService::class.java).setAction(RunAnnouncerService.ACTION_TEST)
+            .putExtra("message", "騒音に合わせた音量のテストです。周囲が騒がしくなると案内の音量を少し上げ、静かになるとゆっくり戻します。音量は端末の設定が上限です。")
+          try { context.startForegroundService(speech) } catch (_: Exception) { NoiseState.audit(context, "PREVIEW_VOICE_START_FAILED", runId) }
+        }, 2500)
+        "STARTING"
+      } catch (_: Exception) { NoiseState.audit(context, "START_RESTRICTED", runId); "START_RESTRICTED" }
+    }
+    Function("noiseDiagnostics") {
+      mapOf("status" to NoiseState.status, "running" to NoiseState.running, "gain" to NoiseState.gain,
+        "dbfs" to NoiseState.dbfs, "baselineDbfs" to NoiseState.baseline, "inputType" to NoiseState.inputType,
+        "outputType" to NoiseState.outputType, "updatedAt" to NoiseState.updatedAt,
+        "summary" to NoiseState.snapshot(requireNotNull(appContext.reactContext)).toString())
+    }
+    Function("appendDiagnostic") { payload: String ->
+      VoiceLogStorage.append(requireNotNull(appContext.reactContext), payload, System.currentTimeMillis())
+    }
+    OnCreate { FinishClockService.pulse = { sendEvent("finishClock", emptyMap<String, Any>()) } }
+    OnDestroy {
+      FinishClockService.pulse = null
+      if (appContext.reactContext?.packageName == "app.runjourney.mobile.test") DetectorJournalStorage.stop()
+    }
+    Function("previewFinishClock") { leaseMs: Double ->
+      val context=requireNotNull(appContext.reactContext)
+      check(context.packageName=="app.runjourney.mobile.test") { "Test only" }
+      check(!context.getSharedPreferences(RunAnnouncerService.PREFS,0).getBoolean("running",false)) { "Running" }
+      val intent=Intent(context,FinishClockService::class.java).putExtra("previewMs",leaseMs.toLong().coerceIn(1,30000))
+      context.startForegroundService(intent)
+    }
+    Function("finishClock") { enabled: Boolean ->
+      val context = requireNotNull(appContext.reactContext)
+      val intent = Intent(context, FinishClockService::class.java)
+      if (enabled) {
+        if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)
+      } else context.stopService(intent)
+      Unit
+    }
+
+    AsyncFunction("voiceLog") { limit: Int, promise: Promise ->
+      VoiceLogStorage.read(requireNotNull(appContext.reactContext), limit, promise)
+    }
+    AsyncFunction("compactVoiceStats") { runId:String,promise:Promise -> VoiceLogStorage.compactStats(requireNotNull(appContext.reactContext),runId,promise) }
+    AsyncFunction("compactVoicePage") { runId:String,offset:Double,end:Double,promise:Promise ->
+      if(!offset.isFinite() || !end.isFinite() || offset<0 || end<0 || offset!=offset.toLong().toDouble() || end!=end.toLong().toDouble())promise.reject("COMPACT_RANGE","Invalid byte range",null)
+      else VoiceLogStorage.compactPage(requireNotNull(appContext.reactContext),runId,offset.toLong(),end.toLong(),promise)
+    }
+    // Dispatch the tiny service intent directly; do not wait on the shared
+    // async-module executor behind database/file work. Playback stays async.
+    Function("markerControl") { action: String -> RunMarkerService.control(requireNotNull(appContext.reactContext), action) }
+    Function("markerStats") { RunMarkerService.stats(requireNotNull(appContext.reactContext)) }
+    AsyncFunction("markerRead") { promise: Promise -> RunMarkerService.read(requireNotNull(appContext.reactContext), promise) }
+    Function("notifyBatch") { payload: String ->
+      val context = requireNotNull(appContext.reactContext)
+      val intent = Intent(context, RunAnnouncerService::class.java).apply {
+        action = RunAnnouncerService.ACTION_BATCH
+        putExtra("payload", payload)
+      }
+      if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)
+      Unit
+    }
+
+    Function("updateWorkout") { key: String, message: String, expiresAt: Double, allowed: Boolean ->
+      val context = requireNotNull(appContext.reactContext)
+      val prefs = context.getSharedPreferences(RunAnnouncerService.PREFS, 0)
+      prefs.edit().putBoolean("workoutAllowed", allowed).apply()
+      if (allowed && message.isNotBlank() && expiresAt > System.currentTimeMillis() && prefs.getString("workoutKey", "") != key) {
+        prefs.edit().putString("workoutKey", key).apply()
+        val intent = Intent(context, RunAnnouncerService::class.java).apply {
+          action = RunAnnouncerService.ACTION_WORKOUT
+          putExtra("message", message)
+          putExtra("expiresAt", expiresAt.toLong())
+        }
+        if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)
+      }
+    }
 
     Function("start") { startedAtMs: Double, intervalMs: Double ->
       val context = requireNotNull(appContext.reactContext)
@@ -71,8 +230,11 @@ class RunAnnouncerModule : Module() {
 
     Function("stop") {
       val context = requireNotNull(appContext.reactContext)
-      context.getSharedPreferences(RunAnnouncerService.PREFS, 0).edit().putBoolean("running", false).apply()
-      context.stopService(Intent(context, RunAnnouncerService::class.java))
+      context.getSharedPreferences(RunAnnouncerService.PREFS, 0).edit().putBoolean("running", false).putBoolean("workoutAllowed", false).apply()
+      // Deliver termination through the queue so an already-started chime can
+      // finish. This never waits for sound before saving the actual run.
+      RunAnnouncerService.stopRunning?.invoke() ?: context.stopService(Intent(context, RunAnnouncerService::class.java))
+      Unit
     }
   }
 }

@@ -1,22 +1,24 @@
 import { createElement } from 'react';
 import { act, create, ReactTestRenderer } from 'react-test-renderer';
-import { Text } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { FlatList, Text } from 'react-native';
+import AsyncStorage from '@/test/sqlite-fixture';
 import HistoryScreen from '@/app/history';
 import { RunRecord } from '@/types/run';
 import { effectiveRun } from '@/utils/run-model';
 import { parseBackup, serializeBackup } from '@/utils/run-backup';
 import { RunRepository } from '@/repositories/run-repository';
+import { RunService } from '@/services/run-service';
 import { router } from 'expo-router';
 
 jest.mock('expo-router', () => ({ router: { push: jest.fn() },
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   useFocusEffect: (callback: () => void) => require('react').useEffect(callback, [callback]) }));
 jest.mock('@/components/build-info', () => ({ BuildInfo: () => null }));
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-jest.mock('@/services/run-service', () => ({ RunService: { getHistory: () => require('@/repositories/run-repository').RunRepository.getRuns() } }));
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-jest.mock('@react-native-async-storage/async-storage', () => require('@react-native-async-storage/async-storage/jest/async-storage-mock'));
+jest.mock('@/services/run-service', () => ({ RunService: { getHistoryPage: async () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const rows = await require('@/repositories/run-repository').RunRepository.getHistoryPage();
+  return rows.map((row: {id:string;started_at:string;ended_at:string;effective_distance:number;effective_time:number}) => ({id:row.id,startedAt:row.started_at,endedAt:row.ended_at,distanceMeters:row.effective_distance,activeRunningTime:row.effective_time,kmPerHour:row.effective_time>0 && row.effective_distance>0 ? row.effective_distance/row.effective_time*3600:null}));
+} } }));
 
 const minute = 60000;
 const legacy: RunRecord = { id: 'history', startedAt: new Date(0).toISOString(), endedAt: new Date(32 * minute).toISOString(),
@@ -32,6 +34,16 @@ const imported = parseBackup(serializeBackup([stopped], {}, 1)).runs[0];
 let tree: ReactTestRenderer | undefined;
 beforeEach(async () => { await AsyncStorage.clear(); });
 afterEach(() => { if (tree) act(() => tree!.unmount()); tree = undefined; });
+
+test('history read failure displays an error instead of an empty-history claim', async () => {
+  const read = jest.spyOn(RunService, 'getHistoryPage').mockRejectedValue(new Error('simulated storage failure'));
+  try {
+    await act(async () => { tree = create(createElement(HistoryScreen)); });
+    const text = tree!.root.findAllByProps({ accessibilityRole: 'alert' })[0].props.children.join('');
+    expect(text).toContain('履歴の読み込みに失敗しました');
+    expect(tree!.root.findByType(FlatList).props.ListEmptyComponent).toBeNull();
+  } finally { read.mockRestore(); }
+});
 
 test.each([
   ['legacy', legacy, 32],
@@ -63,7 +75,7 @@ test.each([
   expect(allText).not.toContain('GPSポイント');
   expect(allText).toContain('詳細 ›');
   expect(tree!.root.findAllByType(Text).filter(node => [node.props.children].flat().join('').includes('実走'))).toHaveLength(1);
-  expect(await AsyncStorage.getItem('@runjourney/runs/v1')).toBe(stored);
+  expect(JSON.parse((await AsyncStorage.getItem('@runjourney/runs/v1'))!)).toEqual(JSON.parse(stored));
   expect(tree!.root.findAllByType(Text).map(node => [node.props.children].flat().join('')).join('')).not.toMatch(/NaN|Infinity/);
   if (record === stopped) {
     expect(speed).not.toBeNull();

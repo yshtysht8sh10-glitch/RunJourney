@@ -1,13 +1,18 @@
 import { Tabs } from 'expo-router';
+import { paceEditorDirty, requestPaceLeave } from '@/services/pace-edit-guard';
 import { StatusBar } from 'expo-status-bar';
+import { StorageCompatibilityGate } from '@/components/storage-compatibility-gate';
 
 import '@/tasks/location-task';
 
 export default function TabLayout() {
   return (
-    <>
+    <StorageCompatibilityGate>
       <StatusBar style="light" />
       <Tabs
+        screenListeners={({ navigation, route }) => ({ tabPress: event => {
+          if (route.name !== 'settings' && paceEditorDirty()) { event.preventDefault(); requestPaceLeave(() => navigation.navigate(route.name)); }
+        } })}
         screenOptions={{
           headerShown: false,
           tabBarActiveTintColor: '#E85D2A',
@@ -17,12 +22,17 @@ export default function TabLayout() {
         <Tabs.Screen name="index" options={{ title: 'ラン' }} />
         <Tabs.Screen name="history" options={{ title: '履歴' }} />
         <Tabs.Screen name="settings" options={{ title: '設定' }} />
+        <Tabs.Screen name="history-groups" options={{ href: null }} />
+        <Tabs.Screen name="history-group-detail" options={{ href: null }} />
         <Tabs.Screen name="run-recovery" options={{ href: null }} />
         <Tabs.Screen name="run-summary" options={{ href: null }} />
         <Tabs.Screen name="run-detail" options={{ href: null }} />
         <Tabs.Screen name="trash" options={{ href: null }} />
         <Tabs.Screen name="diagnostics" options={{ href: null }} />
+        <Tabs.Screen name="marker-poc" options={{ href: null }} />
+        <Tabs.Screen name="sensor-diagnostics" options={{ href: null }} />
+        <Tabs.Screen name="cloud-sync" options={{ href: null }} />
       </Tabs>
-    </>
+    </StorageCompatibilityGate>
   );
 }

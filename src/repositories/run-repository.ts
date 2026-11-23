@@ -1,22 +1,42 @@
 import { applyRecovery, undoRecovery } from '@/utils/run-recovery';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { database } from './database';
+import { SqlitePagedStore } from './paged-store';
+import type { PagedRunSource } from '../domain/pages';
+import { SqlSnapshot } from './sqlite-store';
+import { validateSnapshot } from './sqlite-backup';
 
-import { isExpiredTrash, isTrashedRun, TrashedRun } from '@/utils/run-trash';
+import { isTrashedRun, TrashedRun, TRASH_RETENTION_MS } from '@/utils/run-trash';
 import { ActiveRun, LocationPoint, RunRecord, RunState } from '@/types/run';
-import { detectStop, effectiveDistance, recordDiagnostic, stateOf, stopIntervals, transition } from '@/utils/run-model';
-import { previewImport, validateRuns } from '@/utils/run-backup';
-import { GpsObservationSession, incrementObservationCount, RawLocationObservation } from '@/utils/gps-observation';
+import { detectStop, timeModel, effectiveDistance, recordDiagnostic, stateOf, stopIntervals, transition } from '@/utils/run-model';
+import { validateRuns } from '@/utils/run-backup';
+import { GpsObservationSession, incrementObservationCount, RawLocationObservation, ObservationAdmission } from '@/utils/gps-observation';
+import { validPaceState, segmentReached, safelyAdvancePaceWorkout } from '@/domain/pace-workout';
+import { validFinishGoal, type FinishGoal, goalAchievement } from '@/domain/finish-goal';
+import { StopLatencyTracker, stopDecisionEvidence } from '@/domain/stop-latency';
+import { diagnosticLog } from '@/services/diagnostic-log';
+import { LatestCheckpoint } from './latest-checkpoint';
+import { DetectorJournal } from '@/services/detector-journal';
 
-
-const RUNS_KEY = '@runjourney/runs/v1';
-const ACTIVE_RUN_KEY = '@runjourney/active-run/v1';
 
 let operationQueue: Promise<unknown> = Promise.resolve();
-let observationSession: { active: ActiveRun; observation: GpsObservationSession; needsCheckpoint: boolean } | null = null;
+let observationSession: { active: ActiveRun; observation: GpsObservationSession; needsCheckpoint: boolean; latency: StopLatencyTracker } | null = null;
+let pendingFinish: ActiveRun | null = null;
+const checkpoints = new LatestCheckpoint<ActiveRun>(async active => {
+  const startedAt = Date.now();
+  try {
+    await (await database()).saveDraft(active);
+    diagnosticLog('STOP_CHECKPOINT', active.id + ':checkpoint:' + startedAt, 'COMPLETED', { runId: active.id, startedAt, finishedAt: Date.now(), durationMs: Date.now() - startedAt, sampleAt: active.detector?.last?.timestamp, pointCount: active.points.length });
+  } catch (error) {
+    if (observationSession?.active.id === active.id) observationSession.needsCheckpoint = true;
+    diagnosticLog('STOP_CHECKPOINT', active.id + ':checkpoint:' + startedAt, 'FAILED', { runId: active.id, durationMs: Date.now() - startedAt });
+    throw error;
+  }
+}, error => console.warn('GPS checkpoint failed; RAM snapshot retained for retry', error));
 
 function flushObservation(active: ActiveRun, endMs: number): ActiveRun {
   const pending = observationSession?.observation.latestPoint;
   if (!pending || pending.timestamp > endMs || !observationSession!.observation.gate.accept(pending.timestamp, true)) return active;
+  DetectorJournal.flush(pending.timestamp);
   const updated = { ...active, points: [...active.points, pending] };
   updated.distanceMeters = effectiveDistance(updated);
   observationSession!.active = updated;
@@ -30,258 +50,275 @@ function serialized<T>(operation: () => Promise<T>): Promise<T> {
   return result;
 }
 
-function parseArray<T>(value: string | null): T[] {
-  if (!value) return [];
-  try {
-    const parsed: unknown = JSON.parse(value);
-    return Array.isArray(parsed) ? (parsed as T[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-// Unlike legacy permissive reads, destructive lifecycle operations fail closed on corrupt storage.
-async function readHistory(): Promise<RunRecord[]> {
-  const stored = await AsyncStorage.getItem(RUNS_KEY);
-  if (!stored) return [];
-  const parsed: unknown = JSON.parse(stored);
-  if (!Array.isArray(parsed) || parsed.some(run => !run || typeof run.id !== 'string' || typeof run.endedAt !== 'string')) {
-    throw new Error('履歴データを読み込めませんでした');
-  }
-  return parsed as RunRecord[];
-}
-
-async function loadRetainedRuns(now: number): Promise<RunRecord[]> {
-  const runs = await readHistory();
-  const retained = runs.filter(run => !isExpiredTrash(run, now));
-  if (retained.length !== runs.length) await AsyncStorage.setItem(RUNS_KEY, JSON.stringify(retained));
-  return retained;
-}
-
 export const RunRepository = {
-  /** Read-only snapshot, including expired trash; never invokes lifecycle purge. */
-  getBackupRuns(): Promise<RunRecord[]> {
-    return serialized(readHistory);
+  getReviewPage(limit = 100, offset = 0) { return serialized(async () => new SqlitePagedStore(await database()).list(limit, offset)); },
+  pagedSource(id: string): PagedRunSource { return {
+    summary: async () => new SqlitePagedStore(await database()).source(id).summary(),
+    read: async (kind, start) => new SqlitePagedStore(await database()).source(id).read(kind, start),
+  }; },
+  async getStorageWarning() { return (await database()).diagnosticWarning; },
+  pruneDiagnostics(before = new Date(Date.now()-30*86400000).toISOString()) {
+    return serialized(async () => (await database()).pruneDiagnostics(before));
   },
-
+  restoreSnapshot(snapshot: SqlSnapshot) {
+    validateSnapshot(snapshot); const copy: SqlSnapshot = JSON.parse(JSON.stringify(snapshot));
+    return serialized(async () => (await database()).restore(copy));
+  },
+  getBackupRuns(): Promise<RunRecord[]> { return serialized(async () => (await database()).list(true)); },
   importRuns(incoming: RunRecord[]): Promise<{ added: number; skipped: number }> {
-    // Clone before queueing: later caller mutations cannot change approved input.
     validateRuns(incoming);
     const snapshot: RunRecord[] = JSON.parse(JSON.stringify(incoming));
+    return serialized(async () => (await database()).importRuns(snapshot));
+  },
+  getRun(id: string): Promise<RunRecord | null> {
     return serialized(async () => {
-      validateRuns(snapshot);
-      const current = await readHistory();
-      const { additions, duplicates } = previewImport(snapshot, current);
-      // Protect the identity of an unfinished run, without modifying its storage.
-      const active = await AsyncStorage.getItem(ACTIVE_RUN_KEY);
-      const activeId = active ? JSON.parse(active).id : undefined;
-      if (additions.some(run => run.id === activeId)) throw new Error('進行中の記録とIDが一致します。走行終了後に再確認してください');
-      if (additions.length) await AsyncStorage.setItem(RUNS_KEY, JSON.stringify([...current, ...additions]));
-      return { added: additions.length, skipped: duplicates };
+      const run = await (await database()).getRun(id);
+      return run?.endedAt ? run as RunRecord : null;
     });
   },
-
-  /** Compatibility API: normal consumers only receive active, completed history. */
-  getRuns(): Promise<RunRecord[]> {
-    return RunRepository.getActiveRuns();
+  getHistoryPage(limit = 100, offset = 0) {
+    return serialized(async () => (await database()).summaries(limit, offset));
   },
-
+  getRuns(): Promise<RunRecord[]> { return RunRepository.getActiveRuns(); },
   getActiveRuns(): Promise<RunRecord[]> {
-    return serialized(async () => (await loadRetainedRuns(Date.now())).filter(run => run.trashedAt == null)
-      .sort((a, b) => b.startedAt.localeCompare(a.startedAt)));
-  },
-
-  getTrashedRuns(): Promise<TrashedRun[]> {
-    return serialized(async () => (await loadRetainedRuns(Date.now())).filter(isTrashedRun)
-      .sort((a, b) => b.trashedAt - a.trashedAt));
-  },
-
-  moveToTrash(runId: string): Promise<void> {
     return serialized(async () => {
-      const runs = await readHistory();
-      const run = runs.find(record => record.id === runId);
-      if (!run) throw new Error('記録が見つかりません');
-      if (run.trashedAt != null) return; // Repeated moves never extend retention.
-      run.trashedAt = Date.now();
-      await AsyncStorage.setItem(RUNS_KEY, JSON.stringify(runs));
+      const db = await database(); await db.purgeTrash(Date.now() - TRASH_RETENTION_MS); return db.list();
     });
   },
-
+  getTrashedRuns(): Promise<TrashedRun[]> {
+    return serialized(async () => {
+      const db = await database(); await db.purgeTrash(Date.now() - TRASH_RETENTION_MS);
+      return (await db.list(true, true)).filter(isTrashedRun).sort((a,b) => b.trashedAt-a.trashedAt);
+    });
+  },
+  moveToTrash(runId: string): Promise<void> {
+    return serialized(async () => { await (await database()).update(runId, run => run.trashedAt == null ? { ...run, trashedAt: Date.now() } : run); });
+  },
   restoreFromTrash(runId: string): Promise<void> {
     return serialized(async () => {
-      const runs = await loadRetainedRuns(Date.now());
-      const run = runs.find(record => record.id === runId);
-      if (!run) throw new Error('記録が見つかりません。保持期間を過ぎた記録は復元できません');
-      if (run.trashedAt == null) return;
-      delete run.trashedAt;
-      await AsyncStorage.setItem(RUNS_KEY, JSON.stringify(runs));
+      const db = await database(); await db.purgeTrash(Date.now()-TRASH_RETENTION_MS);
+      await db.update(runId, run => { const { trashedAt: _trash, ...restored } = run; return restored; });
     });
   },
-
-  deletePermanently(runId: string): Promise<void> {
-    return serialized(async () => {
-      const runs = await readHistory();
-      const run = runs.find(record => record.id === runId);
-      if (!run) return;
-      if (run.trashedAt == null) throw new Error('完全削除できるのはごみ箱の記録だけです');
-      await AsyncStorage.setItem(RUNS_KEY, JSON.stringify(runs.filter(record => record.id !== runId)));
-    });
-  },
-
-  purgeExpiredTrash(now = Date.now()): Promise<number> {
-    return serialized(async () => {
-      const runs = await readHistory();
-      const retained = runs.filter(run => !isExpiredTrash(run, now));
-      if (retained.length !== runs.length) await AsyncStorage.setItem(RUNS_KEY, JSON.stringify(retained));
-      return runs.length - retained.length;
-    });
-  },
-
+  deletePermanently(runId: string): Promise<void> { return serialized(async () => (await database()).remove(runId)); },
+  purgeExpiredTrash(now = Date.now()): Promise<number> { return serialized(async () => (await database()).purgeTrash(now-TRASH_RETENTION_MS)); },
   setStopInclusion(runId: string, intervalId: string, included: boolean): Promise<RunRecord> {
-    return serialized(async () => {
-      const runs = parseArray<RunRecord>(await AsyncStorage.getItem(RUNS_KEY));
-      const index = runs.findIndex(run => run.id === runId);
-      const original = runs[index];
-      if (original?.recovery) throw new Error('停止区間を訂正するには先に元の記録へ戻してください');
-      if (!original || original.trashedAt != null || !stopIntervals(original).some(interval => interval.id === intervalId)) throw new Error('停止区間が見つかりません');
-      const updated = { ...original, stopOverrides: { ...original.stopOverrides, [intervalId]: { included, updatedAt: new Date().toISOString() } } };
-      // Original timestamps, events, points and original distance remain intact.
-      runs[index] = updated;
-      await AsyncStorage.setItem(RUNS_KEY, JSON.stringify(runs));
-      return updated;
-    });
+    return serialized(async () => (await database()).update(runId, run => {
+      if (run.recovery) throw new Error('停止区間を訂正するには先に元の記録へ戻してください');
+      if (run.trashedAt != null || !stopIntervals(run).some(interval => interval.id === intervalId)) throw new Error('停止区間が見つかりません');
+      return { ...run, stopOverrides: { ...run.stopOverrides, [intervalId]: { included, updatedAt: new Date().toISOString() } } };
+    }));
   },
-
   setRecovery(runId: string, enabled: boolean): Promise<RunRecord> {
-    return serialized(async () => {
-      const runs = await readHistory();
-      const index = runs.findIndex(r => r.id === runId && r.trashedAt == null);
-      if (index < 0) throw new Error('記録が見つかりません');
-      runs[index] = enabled ? applyRecovery(runs[index]) : undoRecovery(runs[index]);
-      await AsyncStorage.setItem(RUNS_KEY, JSON.stringify(runs));
-      return runs[index];
-    });
+    return serialized(async () => (await database()).update(runId, run => {
+      if (run.trashedAt != null) throw new Error('記録が見つかりません');
+      return enabled ? applyRecovery(run) : undoRecovery(run);
+    }));
   },
-
   diagnosticError(): Promise<void> {
     return serialized(async () => {
-      const stored = await AsyncStorage.getItem(ACTIVE_RUN_KEY);
+      const stored = await (await database()).getDraft();
       if (!stored) return;
-      const run: ActiveRun = observationSession?.active ?? JSON.parse(stored);
+      const run: ActiveRun = observationSession?.active ?? stored;
       if (!run.diagnostics) return;
       run.diagnostics.counts.TASK_ERROR = (run.diagnostics.counts.TASK_ERROR ?? 0) + 1;
-      await AsyncStorage.setItem(ACTIVE_RUN_KEY, JSON.stringify(run));
+      await (await database()).saveDraft(run);
     });
   },
 
   getActiveRun(): Promise<ActiveRun | null> {
     return serialized(async () => {
+      if (pendingFinish) return pendingFinish;
       if (observationSession) return observationSession.active;
-      const stored = await AsyncStorage.getItem(ACTIVE_RUN_KEY);
+      const stored = await (await database()).getDraft();
       if (!stored) return null;
-      try {
-        return JSON.parse(stored) as ActiveRun;
-      } catch {
-        return null;
-      }
+      const run = stored as ActiveRun;
+      if (!run || typeof run.id !== 'string' || !Array.isArray(run.points)) throw new Error('計測中の記録を読み込めませんでした。新規計測を開始せず確認してください');
+      return run;
     });
   },
 
   saveActiveRun(run: ActiveRun): Promise<void> {
-    return serialized(() => { observationSession = null; return AsyncStorage.setItem(ACTIVE_RUN_KEY, JSON.stringify(run)); });
+    return serialized(async () => { await checkpoints.flush(); await (await database()).saveDraft(run); DetectorJournal.boundary('SAVE_OR_RESTORE', run, true); observationSession = null; pendingFinish = null; });
+  },
+
+  updateFinishGoal(runId: string, goal: FinishGoal, autoEnabled: boolean): Promise<ActiveRun> {
+    return serialized(async () => {
+      await checkpoints.flush();
+      const db = await database();
+      const active = pendingFinish ?? observationSession?.active ?? await db.getDraft();
+      if (!active || active.id !== runId || active.endedAt) throw new Error('終了処理が始まっています。履歴を確認してください。');
+      if (!validFinishGoal(goal) || typeof autoEnabled !== 'boolean') throw new Error('距離0.1〜200km、時間1〜2880分で指定してください');
+      if ((active.goalChanges?.length ?? 0) >= 256) throw new Error('このRUNの目標変更上限256回に達しました');
+      const at = Date.now();
+      const next: ActiveRun = { ...active, finishGoal: { ...goal }, finishAutoEnabled: autoEnabled, updatedAt: new Date(at).toISOString() };
+      if (autoEnabled && goalAchievement(next, at)) throw new Error('既に到達済みの目標です。自動終了をOFFにして保存するか、先の目標を指定してください。');
+      if (goal.kind !== 'manual' && validPaceState(active.paceWorkout)) {
+        const segment = { ...active.paceWorkout.workout.segments[0], target: goal.kind === 'distance' ? { type: 'distance' as const, meters: goal.meters } : { type: 'duration' as const, seconds: goal.activeMs / 1000 } };
+        next.paceWorkout = { ...active.paceWorkout, workout: { ...active.paceWorkout.workout, segments: [segment] }, notice: undefined,
+          reached: segmentReached(segment, active.distanceMeters, timeModel(active, at).activeRunningTime / 1000) };
+      }
+      next.goalChanges = [...(active.goalChanges ?? []), { at, before: active.finishGoal ?? { kind: 'manual' }, after: { ...goal }, autoBefore: active.finishAutoEnabled !== false && active.finishGoal?.kind !== 'manual', autoAfter: autoEnabled, paceTargetBefore: active.paceWorkout?.workout.segments[0]?.target, paceTargetAfter: next.paceWorkout?.workout.segments[0]?.target }];
+      await db.saveDraft(next);
+      if (observationSession) observationSession.active = next;
+      DetectorJournal.boundary('GOAL_CHANGE', next);
+      diagnosticLog('RUN_GOAL_CHANGED', runId + ':goal:' + next.goalChanges.length, 'SAVED_AND_APPLIED', { runId, ...next.goalChanges.at(-1), distanceMeters: next.distanceMeters });
+      return next;
+    });
   },
 
   clearActiveRun(): Promise<void> {
-    return serialized(() => { observationSession = null; return AsyncStorage.removeItem(ACTIVE_RUN_KEY); });
+    return serialized(async () => { await checkpoints.flush(); DetectorJournal.stop(); observationSession = null; pendingFinish = null; return database().then(db => db.clearDraft()); });
   },
 
   /** Test PoC entry point: RAM observations, shared detector, throttled GPS/storage. */
-  appendActiveObservations(raws: RawLocationObservation[], appState = 'unknown'): Promise<ActiveRun | null> {
+  appendActiveObservations(raws: RawLocationObservation[], appState = 'unknown', onObserved?: (run: ActiveRun) => void): Promise<ActiveRun | null> {
+    const submittedAt = Date.now();
     return serialized(async () => {
+      const enteredAt = Date.now();
+      if (pendingFinish) return pendingFinish;
       if (!observationSession) {
-        const stored = await AsyncStorage.getItem(ACTIVE_RUN_KEY);
+        const stored = await (await database()).getDraft();
         if (!stored) return null;
-        const active: ActiveRun = JSON.parse(stored);
+        const active: ActiveRun = stored;
         const counts = { ...(active.diagnostics?.counts ?? {}) };
         incrementObservationCount(counts, 'SEGMENTS');
         active.diagnostics = { ...active.diagnostics, entries: active.diagnostics?.entries ?? [], processed: active.diagnostics?.processed ?? 0, counts };
-        observationSession = { active, observation: new GpsObservationSession(active.points.at(-1)?.timestamp, counts.GPS_OBS_LAST_TIMESTAMP), needsCheckpoint: false };
+        observationSession = { active, observation: new GpsObservationSession(active.points.at(-1)?.timestamp, counts.GPS_OBS_LAST_TIMESTAMP), needsCheckpoint: false, latency: new StopLatencyTracker() };
+        DetectorJournal.begin(active, active.points.at(-1)?.timestamp, counts.GPS_OBS_LAST_TIMESTAMP);
       }
       let active = observationSession.active;
         if (active.endedAt) return active;
       const previousEventCount = active.events?.length ?? 0;
       const counts = { ...active.diagnostics!.counts };
-      const incoming = observationSession.observation.ingest(raws, counts, appState, Date.parse(active.startedAt));
+      DetectorJournal.input(active, raws, appState);
+      const admissions: ObservationAdmission[] | undefined = DetectorJournal.recording ? [] : undefined;
+      const incoming = observationSession.observation.ingest(raws, counts, appState, Date.parse(active.startedAt), admissions ? entry => admissions.push(entry) : undefined);
+      if (admissions) DetectorJournal.admission(admissions);
       active = { ...active, diagnostics: { ...active.diagnostics!, counts } };
       const persisted: LocationPoint[] = [];
-      for (const { point, persist, window } of incoming) {
+      for (const input of incoming) {
+        const { point, persist, window, receivedAt } = input;
+        const evaluatedAt = Date.now();
         active = detectStop(active, point, 'live-observation', window);
+        DetectorJournal.output(input, active);
+        const entry = active.diagnostics?.entries.at(-1);
+        if (entry?.timestamp === point.timestamp && active.diagnostics) {
+          const annotated = observationSession.latency.annotate(active.id, entry, { callbackAt: receivedAt, submittedAt, enteredAt, evaluatedAt, finishedAt: Date.now() });
+          active = { ...active, diagnostics: { ...active.diagnostics, entries: [...active.diagnostics.entries.slice(0, -1), annotated], trace: active.diagnostics.trace?.map(e => e === entry ? annotated : e) } };
+          diagnosticLog('STOP_PIPELINE', `${active.id}:sample:${point.timestamp}`, annotated.decision,
+            { runId: active.id, appState, pipeline: annotated.pipeline, evidence: stopDecisionEvidence(annotated) });
+        }
         if (persist) persisted.push(point);
       }
+      DetectorJournal.batchEnd(active);
       active = { ...active, points: [...active.points, ...persisted], updatedAt: new Date().toISOString() };
       if (persisted.length || (active.events?.length ?? 0) !== previousEventCount) {
         active.distanceMeters = effectiveDistance(active);
+        const previousEvaluation = active.paceWorkout?.evaluatedAt;
+        active = safelyAdvancePaceWorkout(active, incoming.at(-1)?.point.timestamp ?? Date.now());
+        const pace = active.paceWorkout;
+        if (pace && pace.evaluatedAt !== previousEvaluation) diagnosticLog('PACE_EVALUATION', active.id + ':pace:' + pace.evaluatedAt,
+          pace.notice ? 'CREATED' : !pace.voice ? 'VOICE_OFF' : stateOf(active) !== 'RUNNING' ? 'PAUSED' : pace.status === 'UNKNOWN' ? 'UNKNOWN_QUALITY' : 'INTERVAL_OR_STATE_CONDITION',
+          { runId: active.id, evaluatedAt: pace.evaluatedAt, voice: pace.voice, minimumIntervalSec: pace.voiceIntervalSec, status: pace.status, lastVoiceAt: pace.lastVoiceAt, noticeId: pace.notice?.key ?? null });
         observationSession.needsCheckpoint = true;
       }
       observationSession.active = active;
+      // Optional audio feedback sees RAM state before the checkpoint; failures
+      // cannot cancel or delay durable GPS storage or change detector results.
+      try { onObserved?.(active); } catch (error) { console.warn('Observation feedback failed', error); }
       if (observationSession.needsCheckpoint) {
-        await AsyncStorage.setItem(ACTIVE_RUN_KEY, JSON.stringify(active));
+        checkpoints.schedule(active);
         observationSession.needsCheckpoint = false;
       }
       return active;
     });
   },
 
+  flushCheckpoint() { return checkpoints.flush(); },
+
   getRecentObservations(windowMs = 10_000, now = Date.now()) {
-    return serialized(async () => observationSession?.observation.buffer.getRecent(windowMs, now) ?? []);
+    // RAM-only immutable snapshot must not wait behind SQLite checkpoints.
+    return Promise.resolve(observationSession?.observation.buffer.getRecent(windowMs, now) ?? []);
   },
 
   appendActivePoints(points: LocationPoint[]): Promise<ActiveRun | null> {
     return serialized(async () => {
-      const stored = await AsyncStorage.getItem(ACTIVE_RUN_KEY);
+      if (pendingFinish) return pendingFinish;
+      const stored = await (await database()).getDraft();
       if (!stored) return null;
 
-      let active = JSON.parse(stored) as ActiveRun;
+      let active = stored as ActiveRun;
         if (active.endedAt) return active;
       const seen = new Set(active.points.map((point) => point.timestamp));
       const incoming = points.filter(point => { if (seen.has(point.timestamp)) return false; seen.add(point.timestamp); return true; });
       const merged = [...active.points, ...incoming]
         .sort((a, b) => a.timestamp - b.timestamp);
       for (const point of incoming.sort((a, b) => a.timestamp - b.timestamp).filter(p => p.timestamp >= (active.points.at(-1)?.timestamp ?? Date.parse(active.startedAt)))) active = detectStop(active, point, 'live-persisted');
-      const updated: ActiveRun = {
+      let updated: ActiveRun = {
         ...active,
         points: merged,
         distanceMeters: effectiveDistance({ ...active, points: merged }),
         updatedAt: new Date().toISOString(),
       };
-      await AsyncStorage.setItem(ACTIVE_RUN_KEY, JSON.stringify(updated));
+      updated = safelyAdvancePaceWorkout(updated, incoming.at(-1)?.timestamp ?? Date.now());
+      await (await database()).saveDraft(updated);
       return updated;
     });
   },
 
   transition(state: RunState, timestamp: number): Promise<ActiveRun | null> {
     return serialized(async () => {
-      const stored = await AsyncStorage.getItem(ACTIVE_RUN_KEY);
+      await checkpoints.flush();
+      if (pendingFinish) return pendingFinish;
+      const stored = await (await database()).getDraft();
       if (!stored) return null;
-      const original: ActiveRun = flushObservation(observationSession?.active ?? JSON.parse(stored), timestamp);
+      const original: ActiveRun = flushObservation(observationSession?.active ?? stored, timestamp);
       if (original.endedAt) return original;
       let run = transition(original, state, timestamp, 'user');
       if (stateOf(run) !== stateOf(original)) run = recordDiagnostic(run, { timestamp, state: stateOf(run), decision: 'RESET', reason: 'STATE_CHANGED' });
       if (observationSession) run.distanceMeters = effectiveDistance(run);
-      await AsyncStorage.setItem(ACTIVE_RUN_KEY, JSON.stringify(run));
+      run = safelyAdvancePaceWorkout(run, timestamp, true);
+      await (await database()).saveDraft(run);
       if (observationSession) observationSession.active = run;
+      DetectorJournal.boundary('USER_TRANSITION', run);
       return run;
+    });
+  },
+
+  /** Serialized with GPS writes: freeze before waiting for OS tracking shutdown. */
+  prepareFinish(endedAt: string, automatic = false, expectedId?: string): Promise<ActiveRun | null> {
+    return serialized(async () => {
+      await checkpoints.flush();
+      const stored = await (await database()).getDraft();
+      if (!stored || expectedId && stored.id !== expectedId) return null;
+      const draft = pendingFinish ?? observationSession?.active ?? stored;
+      if (draft.endedAt) { await (await database()).saveDraft(draft); return draft; }
+      const now = Date.parse(endedAt);
+      const active = flushObservation(draft, now);
+      const achievement = goalAchievement(active, now);
+      if (automatic && !achievement) return null;
+      const end = achievement ? new Date(achievement.reachedAt).toISOString() : endedAt;
+      const frozen = { ...active, endedAt: end, ...(achievement ? { achievement } : {}), updatedAt: end };
+      frozen.distanceMeters = effectiveDistance(frozen);
+      // Retain a retryable RAM snapshot even if the first durable freeze fails.
+      if (observationSession) observationSession.active = frozen;
+      pendingFinish = frozen;
+      await (await database()).saveDraft(frozen);
+      DetectorJournal.boundary('PREPARE_FINISH', frozen);
+      return frozen;
     });
   },
 
   finishActiveRun(endedAt: string): Promise<RunRecord | null> {
     return serialized(async () => {
-      const stored = await AsyncStorage.getItem(ACTIVE_RUN_KEY);
+      await checkpoints.flush();
+      const stored = await (await database()).getDraft();
       if (!stored) return null;
 
-      const draft: ActiveRun = observationSession?.active ?? JSON.parse(stored);
+      const draft: ActiveRun = pendingFinish ?? observationSession?.active ?? stored;
       endedAt = draft.endedAt ?? endedAt;
-      const active = flushObservation(draft, Date.parse(endedAt));
+      const active = safelyAdvancePaceWorkout(flushObservation(draft, Date.parse(endedAt)), Date.parse(endedAt), true);
       const record: RunRecord = {
         ...active,
         detector: active.detector ? { ...active.detector, window: undefined } : undefined,
@@ -291,17 +328,13 @@ export const RunRepository = {
       };
       // Freeze the STOP snapshot durably before writing history. Failed writes
       // can be retried after a restart without counting the retry wait as running.
-      await AsyncStorage.setItem(ACTIVE_RUN_KEY, JSON.stringify(record));
+      await (await database()).saveDraft(record);
       if (observationSession) observationSession.active = record;
-      const runs = await readHistory();
-      const alreadySaved = runs.find(run => run.id === record.id);
-      const withoutDuplicate = runs.filter((run) => run.id !== record.id);
-      await AsyncStorage.multiSet([
-        [RUNS_KEY, JSON.stringify([alreadySaved ?? record, ...withoutDuplicate])],
-      ]);
-      await AsyncStorage.removeItem(ACTIVE_RUN_KEY);
+      const saved = await (await database()).complete(record);
+      DetectorJournal.end(record);
       observationSession = null;
-      return alreadySaved ?? record;
+      pendingFinish = null;
+      return saved;
     });
   },
 };
