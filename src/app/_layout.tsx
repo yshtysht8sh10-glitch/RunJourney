@@ -27,6 +27,7 @@ export default function TabLayout() {
         <Tabs.Screen name="run-recovery" options={{ href: null }} />
         <Tabs.Screen name="run-summary" options={{ href: null }} />
         <Tabs.Screen name="run-detail" options={{ href: null }} />
+        <Tabs.Screen name="run-map" options={{ href: null }} />
         <Tabs.Screen name="trash" options={{ href: null }} />
         <Tabs.Screen name="diagnostics" options={{ href: null }} />
         <Tabs.Screen name="marker-poc" options={{ href: null }} />

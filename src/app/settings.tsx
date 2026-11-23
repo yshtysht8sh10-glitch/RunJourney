@@ -16,6 +16,7 @@ import { NoiseVolumeSettings } from '@/components/noise-volume-settings';
 import { RecoverySettings } from '@/components/recovery-settings';
 import { GoalCueSettingsPanel } from '@/components/goal-cue-settings';
 import { HistoryDisplaySettingsPanel } from '@/components/history-display-settings';
+import { RouteMapSettingsPanel } from '@/components/route-map-settings';
 
 export default function SettingsScreen() {
   const [features, setFeatures] = useState(DEFAULT_RUN_FEATURES);
@@ -65,6 +66,7 @@ export default function SettingsScreen() {
     <Text style={styles.title}>設定</Text>
     <PaceWorkoutSettings />
     <HistoryDisplaySettingsPanel />
+    <RouteMapSettingsPanel />
     <Pressable accessibilityRole="button" onPress={() => requestPaceLeave(() => router.push('./data-transfer'))} style={styles.testButton}><Text style={styles.label}>データ / Export・Import</Text></Pressable>
     <Text style={styles.section}>走行中の機能（次のSTARTから適用）</Text>
     <View style={styles.row}><View style={styles.copy}><Text style={styles.label}>自動停止（Auto Stop）</Text><Text style={styles.detail}>信号待ちなどで停止すると、走行時計を自動的に停止します。走り出すと自動的に再開します。</Text></View><Switch value={features.autoStop} disabled={busy} onValueChange={value => changeFeature('autoStop', value)} /></View>
