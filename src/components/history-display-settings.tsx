@@ -10,7 +10,12 @@ export function HistoryDisplaySettingsPanel() {
     catch { setFailed(true); }
     finally { setBusy(false); }
   };
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    let mounted = true;
+    void HistoryDisplaySettings.get().then(next => { if (mounted) setValue(next); })
+      .catch(() => { if (mounted) setFailed(true); }).finally(() => { if (mounted) setBusy(false); });
+    return () => { mounted = false; };
+  }, []);
   const save = async (elapsed: boolean) => {
     setBusy(true);
     try { const next = elapsed ? 'elapsed' : 'timestamps'; await HistoryDisplaySettings.save(next); setValue(next); }
