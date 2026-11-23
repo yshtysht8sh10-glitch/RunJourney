@@ -1,0 +1,4 @@
+# Historical evidence is hashed against original Git blobs, including line endings.
+docs/archive/pr71-test-v28/** -text
+docs/archive/pr74-test-v28/** -text
+docs/archive/pr75-test-v31/** -text

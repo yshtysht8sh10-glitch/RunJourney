@@ -1,3 +1,5 @@
+> 歴史的資料：本文の対象SHA・Test版当時の仕様/評価です。最新音声仕様の正本は[voice-current.md](voice-current.md)、v28原本と参照関係は[voice-history-index.md](voice-history-index.md)を参照。Auto Stop判定を今回変更していません。
+
 # Auto Stop：現行フローと設計レビュー資料（#43）
 
 対象コード：Test v21実走時72f82b4系、現行332edff。今回の実装でAuto Stopの閾値・状態遷移・通知文言・優先度は変更していない。以下の「現行」と「改善候補」は別物。#38の目標達成時のRUN終了はこの停止/再開判定とは独立する。
