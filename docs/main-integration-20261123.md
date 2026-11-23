@@ -26,6 +26,8 @@ New platform-guard tests cover iOS/Web failures before SQLite open, native legac
 
 Independent review by the separate integration_review agent approves the storage/platform/config combination, subject to final checks. This is a separate-agent code review, not a claim of a GitHub approval from another account or physical acceptance.
 
+Final code SHA `3cdd21570b4362a8a840a6a8e8d08f8a0d82a549`: 79 Jest suites / 609 tests passed, including the 95-minute GPS simulator; TypeScript, Expo Lint and Web static export passed. Five synthetic long-run/paged-storage scenarios (30 minutes x11, 10/12/24 hours at 5-second GPS, 24 hours at 1-second GPS) passed. All 12 real Gradle task-graph Production guard fixtures passed after supplying the required GRADLE_BIN; the initial missing-variable invocation did not execute the fixtures. No Production artifact was built. The separate reviewer approved this exact code SHA with no additional P1/P2 findings. Native tree identities match the prior evidence: announcer `7805039ff87407af8315b420ea7f98c4715ba6db`, legacy reader `238510a5c58656136309dcbfdb90b088d4a9b2fb`. Only this results paragraph is appended after the code review.
+
 ## Preservation and remaining work
 
 No device operations are needed for this integration. Reuse the private v37 preservation report: all original 73 RUN rows and 35,713 GPS rows retained through the update, 21 trash records, existing settings unchanged, and 533 prior diagnostic/audio payload hashes unchanged. A new short validation RUN and its settings key are retained. Backups, coordinates and keys stay outside GitHub/CI. These are earlier v37 results, not a new APK-update test of this main commit.
