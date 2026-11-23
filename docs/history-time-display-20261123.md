@@ -12,3 +12,5 @@
 検証：history-display/history-ui/history-list/history-groups-uiの4 suites **27 tests PASS**、型/Lint/diff-check PASS。既存日時初期表示、切替後の32分経過と29分実走の区別、raw履歴不変、設定再open、既存設定非干渉、別key非干渉、保存/読取失敗、年跨ぎ/長時間/無効時刻を確認。PC SQLite/React rendererの自動試験であり、実Android画面の視覚確認ではない。本人操作は延期し、必要な実機受入が残るとのレビュー判断ならOpen維持。
 
 Expo SDK57/Routerの公式資料を確認し、既存Switch/useFocusEffectパターンを使用。依存追加なし。APK更新・端末データ操作・Production配布なし。固定SHAの独立レビュー後、条件を満たす場合のみ#4をCloseする。
+
+独立レビュー：integration_reviewが固定SHA `cd2b1b3fc0f45f113c8bb0463274df881d3384e8`を承認、P1/P2なし。history-display/history-uiの21件も独立再実行PASS。Issueの表示/保存済みRUN適用/元日時保持の条件を満たすため、main統合後のCloseを承認した。実Android視覚確認は未実施と明記して#78の一括評価へ保持し、実機検証済みとは扱わない。
