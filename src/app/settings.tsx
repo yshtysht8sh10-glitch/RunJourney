@@ -15,6 +15,7 @@ import { CurrentTimeSettings } from '@/components/clock-settings';
 import { NoiseVolumeSettings } from '@/components/noise-volume-settings';
 import { RecoverySettings } from '@/components/recovery-settings';
 import { GoalCueSettingsPanel } from '@/components/goal-cue-settings';
+import { HistoryDisplaySettingsPanel } from '@/components/history-display-settings';
 
 export default function SettingsScreen() {
   const [features, setFeatures] = useState(DEFAULT_RUN_FEATURES);
@@ -63,6 +64,7 @@ export default function SettingsScreen() {
     <Pressable onPress={() => requestPaceLeave(() => router.push('./cloud-sync'))} accessibilityRole="button"><Text style={{ color: '#A4D8B5', paddingVertical: 16 }}>Cloud Sync（本番Firebase・手動同期）</Text></Pressable>
     <Text style={styles.title}>設定</Text>
     <PaceWorkoutSettings />
+    <HistoryDisplaySettingsPanel />
     <Pressable accessibilityRole="button" onPress={() => requestPaceLeave(() => router.push('./data-transfer'))} style={styles.testButton}><Text style={styles.label}>データ / Export・Import</Text></Pressable>
     <Text style={styles.section}>走行中の機能（次のSTARTから適用）</Text>
     <View style={styles.row}><View style={styles.copy}><Text style={styles.label}>自動停止（Auto Stop）</Text><Text style={styles.detail}>信号待ちなどで停止すると、走行時計を自動的に停止します。走り出すと自動的に再開します。</Text></View><Switch value={features.autoStop} disabled={busy} onValueChange={value => changeFeature('autoStop', value)} /></View>
