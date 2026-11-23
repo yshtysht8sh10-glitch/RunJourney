@@ -22,3 +22,13 @@ Expo package major57と[SDK57 WebView資料](https://docs.expo.dev/versions/v57.
 ## 未受入とIssue状態
 
 **#3はOpen維持。** 新Native moduleを含むTest APKビルドとAndroid実表示、地図通信/キャッシュ/操作/小画面の一括評価を最後に実施する。コード統合と受入済みを区別し、本人へ新たな操作を依頼しない。Production配布・OTA・APK更新・既存データ操作・サイクリング開発は行っていない。
+
+## 統合整理による追記（マスターの新方針）
+
+既存候補`7ed2887`をmain `256cea1`上の`940a4c5`へそのまま取り込み、PR #95で統合する。上記の初回未実施記録は履歴として保持。今回は新規機能を広げず、既存成果物の統合のみを進めた。
+
+- 独立レビュー担当は`940a4c5fbc79a67e120df35e2835918ca2155956`をAPPROVED。既承認候補と実装・依存lockが一致、追加P1/P2なし。
+- focused 5 suites/13 tests、TypeScript、Expo Lint成功。統合点の全体Jestは**89 suites/649 tests PASS**（158.7秒）。保存互換・backup・元RUN不変・GPS/Auto Stop・音声等を含む。
+- WebViewとappのNative Kotlinコンパイル成功。続いてAndroid `assembleStandaloneTest`も成功（908 tasks、2分34秒、arm64-v8a）。この内部ビルドは依存/Native link/パッケージング確認用で、承認済みTest v38 APKを差し替えず、端末へのインストールもしない。Production artifactは生成していない。
+- 既存SQLite合成互換・Android reader試験は以前の成功証拠を再利用。保存/判定コードに差分なし。実端末driver・地図の描画/通信/cache/操作/小画面は未受入。
+- #3は引き続きOpen。main統合や内部アセンブル成功をマスターの実機受入と扱わない。旧枝/未追跡exportやログは保持する。
