@@ -19,7 +19,7 @@ for (const item of manifest) {
 assert.equal(manifest.length, 16);
 assert.equal(script(html), script(read('docs/archive/pr75-test-v31/docs/voice-spec-interactive.html.txt')));
 assert.ok(html.includes('href="voice-current.md"'));
-for (const file of ['docs/voice-current.md', 'docs/voice-history-index.md', 'docs/pre-cycling-scope-20261123.md']) {
+for (const file of ['docs/voice-current.md', 'docs/auto-stop-current.md', 'docs/voice-history-index.md', 'docs/pre-cycling-scope-20261123.md']) {
   for (const match of read(file).matchAll(/\]\(([^)]+)\)/g)) {
     const target = match[1].split('#')[0];
     if (!target || /^https?:/.test(target)) continue;
