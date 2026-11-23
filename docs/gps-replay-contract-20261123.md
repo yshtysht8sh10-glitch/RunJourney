@@ -15,9 +15,11 @@
 1. 6分seed49の通常走行→25秒停止→低速再開を、active/backgroundの受信状態付きbatchとして生成し、replay→`ingestLocationBatch`→実repository/detector/Pace Analysis/VoiceAnnouncement/PC Native SQLiteへ通す。初回設定handshakeと最新`pacePeriodicVersion=1`/cursor契約をfake Nativeで受理する。5区間以上、境界固定、連続slot受理、重複なし、READYあり、旧20秒TTLなし、保存済み履歴隔離・入力不変をassert。
 2. fix順が逆/重複の入力をそのまま返すこと、pause時計、input/outputの独立コピー、終了、開始より古い受信時計の拒否を確認する。
 
-このNativeは**非永続の受理cursor fake**で、Android ledgerの暗号/永続ACK/再生/音声フォーカス/聴取を検証していない。6分試験も自然なOSバックグラウンドやDozeではない。新契約を通ったJS→SQLiteの合成証拠として、旧capability fallbackだけだった従来95分試験を補う。Nativeの既成功fixtureをこのfakeで置き換えない。
+このNativeは**非永続の受理cursor fake**で、Android ledgerの永続ACK/再生/音声フォーカス/聴取を検証していない。PACE ledgerのAtomicFile永続化と#72の暗号診断を区別する。6分試験も自然なOSバックグラウンドやDozeではない。新契約を通ったJS→SQLiteの合成証拠として、旧capability fallbackだけだった従来95分試験を補う。Nativeの既成功fixtureをこのfakeで置き換えない。
 
 実行：`npx jest --runInBand gps-simulator-contract.test.ts pace-periodic-voice.test.ts --silent`。型/Lint/diff-checkも実施する。製品全体/95分/Nativeの不要な再実行はしない。
+
+結果：上記2 suites/9 tests、型/Lint/diff-check PASS。独立レビュー担当integration_reviewが固定SHA `0538543`を限定承認し、新規2 testsも独立再実行PASS。追加P1/P2なし。これはNative永続化/実機受入/Issue全体のClose承認ではない。
 
 ## Open維持する条件
 
