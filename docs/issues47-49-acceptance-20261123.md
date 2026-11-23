@@ -41,3 +41,5 @@
 ## レビュー・統合・Closeの扱い
 
 実装・テスト・main統合・Issue Closeは別段階。固定SHAで独立レビューし、#47も条件未達との判断ならOpenのまま追跡する。今回#49の不足を過去の全体成功で埋めた扱いにはしない。サイクリング、Auto Stop変更、外部AI送信、Production配布へ進まない。
+
+独立レビュー：integration_reviewが固定SHA `a9967df`を限定承認、追加P1/P2なし。新navigationとguardの6 testsを独立再実行し成功。**#47は非実機条件のみ承認、実Androidの戻る/タブ/背景復帰/START適用確認を一括評価に残すためOpen維持**。#49も上記不足によりOpen維持。main統合可だがIssue Closeの承認ではない。
