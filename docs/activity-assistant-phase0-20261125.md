@@ -158,3 +158,12 @@ Cycling音声は5分**実走時間**ごと・初期ONを候補とし、例「5�
 
 SDK57のインストール済みversionをpackage.jsonで確認。資料の推奨patchが違っても今回依存更新はしない。
 [Expo Location SDK57](https://docs.expo.dev/versions/v57.0.0/sdk/location/)（要求間隔/OS終了制限）、[SQLite SDK57](https://docs.expo.dev/versions/v57.0.0/sdk/sqlite/)、[Routerのネスト](https://docs.expo.dev/router/advanced/nesting-navigators/)、[route notation](https://docs.expo.dev/router/basics/notation/)。実コードの数値と提案値を上記で分離した。
+
+## Phase 0の検証・独立レビュー結果
+
+- 設計初稿`c8aa400`に対し、独立レビュー担当からP2を3件受領した。Android標準corruption handlerの削除リスク、generation照会だけでは防げないwrite競合、新規/更新判別前のgate空DB作成を指摘。
+- `abdbdb193b75518b69826910c0b0ac9b226c5daa`で、既承認AndroidX read-only/throw-only方式、Native write-lease＋STOPPING drain barrier、gate前evidenceのatomic確定を設計と故障テスト計画へ追記。再レビューでPhase0設計限定APPROVED、追加P1/P2なし。
+- TypeScript、Expo Lint、diff-check、文書リンク/コード囲み/呼称の検証成功。既存音声文書検証も原本16 blob・旧27行・編集/保存/import/export互換で成功。基準mainの649 testsは再利用した証拠で、今回はアプリ本体差分がないため全体試験/ビルド/実機を再実行していない。
+- 変更はこの設計3文書だけ。アプリ本体・依存・DB schema・Running設定・GPS/Auto Stop/音声・backup/cloud・端末・Production・旧worktree/未追跡成果へ変更なし。mainへは未統合。
+- 親#97、Phase0 #98、Phase1 #99、Phase2 #100、Phase3 #101、Phase4 #102、Phase5 #103、Phase6 #104を登録。#13の既存構想を参照し範囲を勝手に縮小しない。親/子はOpen、#98は設計判断待ちとして維持。
+- Testv38のソース/hash/署名を維持し未install、#93はOpen。この設計承認はマスターの実装開始許可、実機受入、main統合、Production反映を意味しない。結果提出後に停止する。
