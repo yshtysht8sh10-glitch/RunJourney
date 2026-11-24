@@ -102,6 +102,8 @@ ON時:「アシスタント利用中は時間計測が必要です」
 
 新規インストールはアシスタントOFF・汎用時間OFFを推奨。更新は既存DB/設定/legacy痕跡又はdraftがあればアシスタントON（時間ON固定）を推奨し、初回に「ランニングはアシスタント内に移動しました」と一度説明する。既存データを移行・書き換えて判別しない。判別不能/設定破損はOFF初期値を上書きせず、再確認可能な安全画面とRunning入口を保持し、新STARTを保留する。
 
+判別用のinstallation evidenceは**StorageCompatibilityGate/prepareStorage/SQLite.initializeが動く前**に取得する。既存TOP設定がなければ、DB/legacy/sessionの存在等をopen/createせず確認し、新しい小さいbootstrap evidenceファイルへ原子的に確定してから既存gateをmountする。gateが新規空Running DBを作っても、後から更新ユーザーへ再分類しない。gate後TOP設定の保存前に落ちても、確定済みevidenceで同じ初期値を再試行する。evidence保存失敗ならgateの副作用へ進まず、旧データに触れず再試行する。初期値そのものは提案であり、この順序は誤分類防止の必須条件。
+
 保存案は独立`top-settings.v1.json`（app-private・小容量の原子的保存）。既存Runningの`SettingsStorage`を流用しない。値は`version/assistantEnabled/genericTimeEnabled/onboardingSeen`。有効時間設定は`assistantEnabled || genericTimeEnabled`の派生値とし、ON固定中にもgenericTimeEnabledを上書きしない。OFFへ戻すと元の汎用時間設定へ戻る。TOP設定は競技backupに紛れ込ませない。
 
 | 現在 | 操作 | 結果 |

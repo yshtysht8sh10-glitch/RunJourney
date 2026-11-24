@@ -34,6 +34,8 @@ DB名/パスを外部routeや任意文字列から採用せず、用途と既知
 
 UIのbusy/JS Promiseだけではheadless callback・プロセス復旧の排他を証明できない。app sandbox内の新しいNative `SessionCoordinator`を1つ設け、小さなAtomicFileのdescriptorと世代番号を単一workerで直列化する。全JS runtime/ServiceのSTART/STOPを同じ入口へ集約し、ファイルロック/単一Native所有者で多重書込みを防ぐ。ファイルは履歴DBではない。既存RunningのSTART/STOP順序を包むadapterを先に検証する。
 
+`settingsSnapshot`は計測用の許可fieldだけを保持し、認証token/メール/クラウド秘密情報/既存backup本文を含めない。bindingはDB allowlistとprofileの整合を検証してから渡す。
+
 ```mermaid
 stateDiagram-v2
   [*] --> BOOTSTRAP
@@ -71,6 +73,10 @@ Runningの既存task名は維持し、新規generic/cyclingは固定の用途別
 
 callbackには開始requestのtokenが入ると仮定しない。処理開始時にbindingをcaptureし、commit直前にもgeneration/statusを検証する。STOPPING/旧用途/旧世代は拒否。遅れて来た同用途旧batchも開始前のGPS時刻を排除する。受信遅延とGPS欠測を区別し、未受信の値や未来点を利用しない。既存Runningの入力順序/フィルターを変更する新規規則は、無断で追加せず互換adapter試験で扱う。
 
+ただし「最終generation照会→JSで書込む」だけではTOCTOUが残る。Nativeは同じ状態lock内で世代検証と**write-lease/in-flight登録**を原子的に行う。leaseのbindingを固定store/処理queueへ渡し、成功/失敗/合流による置換のいずれでもfinallyで1回解放する。遅延checkpointもenqueue時に予約したticketで追跡し、ingestのreturnだけで未保存writeを完了扱いしない。
+
+STOPは同じlockでSTOPPINGへ遷移し新leaseを禁止→既存lease・予約checkpoint・queueをdrain→GPS停止確認/最終flush/競技保存ACK→descriptor IDLE確定・所有権解放のbarrierとする。既存leaseは固定した旧storeへだけ完了でき、排他確認直後に別STARTが割り込むことはない。drain失敗/不明はロックを時間だけで解放しない。自動終了のcheckGoalは入力leaseを解放した後に終了要求をqueueへ渡し、自分のleaseを待つdeadlockを避ける。JS runtime再生成で残ったticketの成否が不明ならRECOVERY_REQUIREDとし、TTLだけで新用途を許可しない。
+
 ## 3. 汎用checkpointは履歴ではない
 
 - 新app-private `noBackupFilesDir/activity-session-v1/`に1つの現在descriptor/checkpointのみ。上限32KiB、座標は直近anchor等最大3点、累計距離・重複防止cursor・時間anchor・品質/欠落数。全軌跡/セッション一覧/終了履歴は保持しない。
@@ -105,7 +111,11 @@ Native音声のqueue/ledgerやTest診断もrecordId単独で混同しない。Ru
 
 generic計測処理のDB open/writeゼロは、共通bootstrapで旧所有者を確認し終えた後の処理境界で測る。起動安全確認の既存draft header/互換確認まで「読取りゼロ」と偽らない。ただし起動確認に履歴全件/GPSや期限処理は使わず、generic自体はRunningの通常storeを開かない。
 
-Androidでは新しいbounded metadata readerを提案する。既知DBの既存fileにだけOSの`OPEN_READONLY`で接続し、schema versionと必要な列を確認、許可したSELECTだけを実行する。Nativeの一般SQL実行口は公開しない。存在しないCycling DBは0件（readで新設しない）、存在するDBの読取失敗/未対応schemaはエラー。Production互換ゲートはTOPで迂回しない。新しい列/index/PRAGMA user_version変更が必要なら実装前にマスターへ相談する。
+Androidでは新しいbounded metadata readerを提案する。#81の`LegacyStorageReader`が使う既承認のAndroidX `BundledSQLiteDriver`/`SQLITE_OPEN_READONLY`/`BEGIN DEFERRED`の方式を再利用し、既知DBの既存fileにだけ接続する。Android標準SQLiteDatabaseのdefault corruption handler（破損時に原DBを削除し得る）へ戻さない。schema versionと必要な列を確認、許可したSELECTだけを実行し、一般SQL実行口は公開しない。アプリからrepair/delete/checkpoint/locale metadata更新/PRAGMA変更を行わず、失敗はthrow-onlyで原本を保持する。
+
+WAL/SHMの作成やruntime共有状態はSQLite自身の管理範囲とし、アプリがsidecarを削除/切詰め/移動しない。既存main/WALの不変をquiescent fixtureでhash照合し、破損・WAL状態・sidecar有無・開いた後の失敗・中止/close・期限切れを故障注入する。別writerが稼働中のWAL変化をreaderによる書換えと混同しない。通常接続のinitialize/移行処理へfallbackしない。
+
+未作成のCycling DBは0件（readで新設しない）、存在するDBの読取失敗/未対応schemaはエラー。新しいapp control領域にDB作成済みmarkerがあるのにfileがない場合も0件とせず欠落エラー。Production互換ゲートはTOPで迂回しない。新しい列/index/PRAGMA user_version変更が必要なら実装前にマスターへ相談する。
 
 取得列はid/started_at/ended_at/effective_distance/effective_time/status/trashed_at等だけ。completed・非trashだけを対象とする。表示IDは`{activity,id}`、全route/編集/削除/復元/backupにも用途を明示する。履歴詳細は対応競技の既存経路へ渡し、統合画面に更新APIを増やさない。グループ表示で元RUNとグループを二重集計せず、元completed RUNのheaderを1件ずつ数える。
 
@@ -133,4 +143,4 @@ Running DBのDDL/設定key/既存backup/cloud schemaに変更が必要と判明�
 
 設計で原子性/耐障害性を提案したことは、実装・検証が済んだ証拠ではない。重大な誤保存（generic→運動DB、Running→Cycle DB）を故障注入で再現できないことが後続の必須受入。現段階の検証は文書/ソース照合のみ。
 
-一次資料：[SQLiteDatabase OPEN_READONLY](https://developer.android.com/reference/android/database/sqlite/SQLiteDatabase#OPEN_READONLY)、[AtomicFile](https://developer.android.com/reference/android/util/AtomicFile)（原子的置換は排他lockとは別）、[SystemClock](https://developer.android.com/reference/android/os/SystemClock#elapsedRealtime())。これらを使った新Native実装はまだない。
+一次資料：[DefaultDatabaseErrorHandler](https://developer.android.com/reference/android/database/DefaultDatabaseErrorHandler)、[AtomicFile](https://developer.android.com/reference/android/util/AtomicFile)（原子的置換は排他lockとは別）、[SystemClock](https://developer.android.com/reference/android/os/SystemClock#elapsedRealtime())。具体的なread-only方式の根拠は既存`modules/legacy-storage-reader/.../LegacyStorageReader.kt`。これらを使った新Native実装はまだない。

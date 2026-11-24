@@ -50,6 +50,8 @@ Phase0設計の概算は調査/文書/独立レビューで1～2作業日相当�
 | summary | 同日2競技、週/月/年/DST/zone変更/日跨ぎ、ゴミ箱/補正/復元、group | 設計の開始日帰属/実走時間と一致。個別指標を単純平均しない。部分結果はcomplete=false |
 | 性能 | 10万件header、巨大GPSを持つRUN、順次ページ/中止/WAL、24時間相当GPS | 原GPS読込0、JSページ128/64KiB、可視cache約500、checkpoint32KiB、過大入力/時間budgetで明示中止。性能値は測定後に提出 |
 
+独立レビューで追加した必須故障試験：新規判別evidence前/後・gate空DB作成後・TOP設定ACK前killでも新規/更新が変わらないこと、2runtimeで最終generation検証直後にSTOP/STARTを挿入してもlease drain前に所有権が移らないこと、AutoGoalが自身のlease待ちでdeadlockしないこと、checkpoint ticketの置換/失敗で二重解放しないこと。metadata readerは既承認AndroidX read-only方式とし、破損/WAL/SHM/sidecar/途中失敗でmainと既存WALを削除・変更しないことを合格条件にする。
+
 PC合成試験は一時的な専用DB/アプリsandbox/匿名生成GPSだけを使う。旧データの復元や保持期限起動を手軽な後片付けに使わない。private CLIは既存の正規`ingestLocationBatch`経路をRunning回帰に再利用し、Cycling/Genericにはbindingを持つ新adapterを追加する。シミュレーション記録は通常RUNへ混ぜない。
 
 ## 実機受入計画（今回は未実施）
