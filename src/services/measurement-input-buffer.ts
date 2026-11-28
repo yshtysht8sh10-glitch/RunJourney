@@ -58,6 +58,19 @@ export function createMeasurementInputBuffer(port: Port, options: {
           remove(e);
           if (e.error) e.reject(e.error); else e.resolve(e.value);
         } catch (error) {
+          // A different durable owner proves this ticket cannot still fence the
+          // old session. Do not let a lost old ACK block the new session's FIFO.
+          // If this read also fails, retain the receipt and retry conservatively.
+          let superseded = false;
+          try { const active = await port.read(); superseded = !!e.owner && (!active || key(active) !== key(e.owner)); }
+          catch { /* No evidence of a new owner: keep the old input/receipt. */ }
+          if (superseded) {
+            report(e.written ? 'RELEASE_SUPERSEDED' : 'BINDING_CHANGED', 1); remove(e);
+            // Storage already performed is retained, but do not deliver an old
+            // snapshot to voice/auto-goal callbacks belonging to the new owner.
+            if (e.error) e.reject(e.error); else e.resolve(null);
+            continue;
+          }
           const expired = now() - e.submitted >= (options.maxAgeMs ?? 60000);
           if (expired && !e.token) {
             report('ADMISSION_EXPIRED', 1);

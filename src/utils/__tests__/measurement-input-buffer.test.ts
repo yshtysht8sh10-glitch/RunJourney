@@ -76,3 +76,17 @@ test('STOP timeout never executes its caller early or clears an uncertain input 
   f.port.release.mockResolvedValue(undefined); await jest.advanceTimersByTimeAsync(1000);
   expect(await result).toBe(1); expect(write).toHaveBeenCalledTimes(1);
 });
+test.each([false, true])('a superseded ticket never blocks new-generation input (already written=%s)', async written => {
+  const f = fixture(); let current = owner;
+  f.port.read.mockImplementation(async () => current);
+  const next = { ...owner, generation: 2, startedAt: 2000 };
+  const stage = written ? f.port.release : f.port.acquire;
+  stage.mockImplementationOnce(async () => { current = next; throw Error('ACK lost / old generation'); });
+  const oldWrite = jest.fn(async () => 1), newWrite = jest.fn(async () => 2);
+  const old = f.queue.submit('running', owner, 2000, 10, oldWrite);
+  const fresh = f.queue.submit('running', next, 2100, 10, newWrite);
+  await jest.advanceTimersByTimeAsync(20);
+  expect(await old).toBeNull(); expect(await fresh).toBe(2);
+  expect(oldWrite).toHaveBeenCalledTimes(written ? 1 : 0); expect(newWrite).toHaveBeenCalledTimes(1);
+  expect(f.queue.pendingCount).toBe(0);
+});
