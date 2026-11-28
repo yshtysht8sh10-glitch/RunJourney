@@ -27,8 +27,13 @@ function toPoint(location: Location.LocationObject): LocationPoint {
 
 /** Both device TaskManager and the isolated PC simulator enter this adapter. */
 export async function ingestLocationBatch(locations: Location.LocationObject[], receivedAt = Date.now(), appState = AppState.currentState ?? 'unknown') {
+  locations = locations.map(location => ({ ...location, coords: { ...location.coords } }));
   const guarded = measurementOwnershipAvailable();
-  const ingest = async () => {
+  const ingest = async (owner?: import('@/services/measurement-ownership').MeasurementBinding) => {
+    if (owner) {
+      const active = await RunRepository.getActiveRun();
+      if (!active || active.id !== owner.sessionId || Date.parse(active.startedAt) !== owner.startedAt) throw Error('ランニングの保存先所有権が一致しません');
+    }
     SensorDiagnostics.gps(locations, receivedAt);
 
     const updated = isStandaloneTest()
@@ -41,7 +46,7 @@ export async function ingestLocationBatch(locations: Location.LocationObject[], 
     if (guarded) await RunRepository.flushCheckpoint();
     return updated;
   };
-  const updated = guarded ? await MeasurementSessions.withInput('running', ingest) : await ingest();
+  const updated = guarded ? await MeasurementSessions.withBufferedInput('running', receivedAt, JSON.stringify(locations).length * 2, ingest) : await ingest();
     // Auto-goal requests STOP only after the input lease is released, preventing
     // a finish barrier from waiting for its own write lease.
     if (updated) {

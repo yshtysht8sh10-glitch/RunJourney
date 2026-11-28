@@ -49,6 +49,18 @@ export function createMeasurementOwnership(port: OwnershipPort) {
     async failed(owner: MeasurementBinding) { return state(await command('failed', binding(owner))); },
     /** Invoke only after OS tracking stop AND the bound sink's final durable ACK. */
     async finish(owner: MeasurementBinding) { return state(await command('finish', binding(owner))); },
+    async inputToken(owner: MeasurementBinding) {
+      const value = JSON.parse(await command('inputToken', binding(owner))) as { token: string };
+      if (typeof value.token !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(value.token)) throw Error('GPS受付トークンが不正です');
+      return value.token;
+    },
+    async acquireInput(owner: MeasurementBinding, token: string) {
+      const value = JSON.parse(await command('inputLease', { ...binding(owner), token })) as { token: string; binding: MeasurementBinding };
+      const fixed = binding(value.binding);
+      if (value.token !== token || fixed.sessionId !== owner.sessionId || fixed.generation !== owner.generation
+        || fixed.purpose !== owner.purpose || fixed.startedAt !== owner.startedAt) throw Error('GPS受付ACKが一致しません');
+    },
+    async releaseInput(owner: MeasurementBinding, token: string) { state(await command('releaseInput', { ...binding(owner), token })); },
     async withWriteLease<T>(owner: MeasurementBinding, write: (fixed: MeasurementBinding) => Promise<T>, recovering = false): Promise<T> {
       const lease = JSON.parse(await command(recovering ? 'recoveryLease' : 'lease', binding(owner))) as { token: string; binding: MeasurementBinding };
       const fixed = binding(lease.binding);

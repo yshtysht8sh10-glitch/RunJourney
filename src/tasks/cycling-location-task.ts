@@ -7,7 +7,8 @@ import { CyclingVoice } from '@/services/cycling-voice';
 
 export const CYCLING_LOCATION_TASK_NAME = 'runjourney-cycling-location';
 export async function ingestCyclingLocationBatch(locations: Location.LocationObject[], receivedAt = Date.now(), appState = AppState.currentState ?? 'unknown') {
-  const updated = await MeasurementSessions.withInput('cycling', async owner => {
+  locations = locations.map(location => ({ ...location, coords: { ...location.coords } }));
+  const updated = await MeasurementSessions.withBufferedInput('cycling', receivedAt, JSON.stringify(locations).length * 2, async owner => {
     const active = await CyclingRepository.getActive();
     if (!active || active.id !== owner.sessionId || Date.parse(active.startedAt) !== owner.startedAt) throw Error('サイクリングの保存先所有権が一致しません');
     return CyclingRepository.ingest(locations.map(({ coords, timestamp }) => ({ timestamp, receivedAt,

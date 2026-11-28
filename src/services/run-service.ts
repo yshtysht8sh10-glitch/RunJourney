@@ -213,16 +213,19 @@ export const RunService = {
       completionLog('JOIN_IN_FLIGHT', { automatic, expectedId }); return stopInFlight;
     }
     const endedAt = new Date().toISOString();
+    if (measurementOwnershipAvailable()) MeasurementSessions.requestInputStop('running');
     manualStopAt = automatic ? null : endedAt;
     completionLog('FINISH_STARTED', { automatic, expectedId, requestedAt: endedAt });
     stopInFlight = (async () => {
       const owner = measurementOwnershipAvailable() ? await MeasurementSessions.reconcile() : null;
       if (owner && owner.purpose !== 'running') throw Error('別用途の計測中です。ランニングの終了操作はできません');
+      if (owner) await MeasurementSessions.closeInputs(owner);
       let frozen = await RunRepository.prepareFinish(endedAt, automatic, expectedId);
       // A newly confirmed stop can retract a provisional time-goal result.
       // A concurrent, explicit manual STOP must still be honored in that case.
       if (!frozen && manualStopAt) frozen = await RunRepository.prepareFinish(manualStopAt, false, expectedId);
       if (!frozen) {
+        if (owner && !manualStopAt) MeasurementSessions.reopenInputs(owner);
         if (owner && lastFinished?.id === owner.sessionId) {
           await MeasurementSessions.freeze(owner);
           if (await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME)) await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);

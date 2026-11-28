@@ -25,6 +25,9 @@ jest.mock('@/services/measurement-sessions', () => ({ measurementOwnershipAvaila
   forStart: async () => { if (mockOwner && mockOwner.purpose !== 'cycling') throw Error('other purpose'); return mockOwner; },
   ensure: async (purpose: string, sessionId: string, startedAt: number) => mockOwner ??= { purpose, sessionId, startedAt, generation: 1, status: 'STARTING' },
   activate: async () => { mockOwner!.status = 'ACTIVE'; }, reconcile: async () => mockOwner,
+  requestInputStop: jest.fn(),
+  withBufferedInput: async (purpose: string, _receivedAt: number, _bytes: number, operation: (owner: unknown) => Promise<unknown>) =>
+    mockOwner?.purpose === purpose && mockOwner.status === 'ACTIVE' ? operation(mockOwner) : null,
   withInput: async (purpose: string, operation: (owner: unknown) => Promise<unknown>) => mockOwner?.purpose === purpose && mockOwner.status === 'ACTIVE' ? operation(mockOwner) : null,
   freeze: async () => { mockOwner!.status = 'STOPPING'; mockOrder.push('FREEZE'); },
   finish: async () => { mockOrder.push('OWNER_ACK'); mockOwner = null; },

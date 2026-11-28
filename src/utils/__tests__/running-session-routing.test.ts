@@ -12,6 +12,9 @@ const mockOwner = { sessionId: 'synthetic-running', purpose: 'running', startedA
 jest.mock('@/services/measurement-sessions', () => ({ measurementOwnershipAvailable: () => true, MeasurementSessions: {
   forStart: jest.fn(async () => null), ensure: jest.fn(async () => mockOwner), activate: jest.fn(async () => mockOwner),
   reconcile: jest.fn(async () => mockOwner), finish: jest.fn(async () => { mockOrder.push('FINISH_ACK'); }),
+  requestInputStop: jest.fn(), closeInputs: jest.fn(async () => undefined), reopenInputs: jest.fn(),
+  withBufferedInput: jest.fn(async (_purpose, _receivedAt, _bytes, write) => { mockLease = true; mockOrder.push('LEASE');
+    try { return await write(mockOwner); } finally { mockLease = false; mockOrder.push('RELEASE'); } }),
   freeze: jest.fn(async () => { if (mockLease) throw Error('STOP cannot wait for its own lease'); mockOrder.push('FREEZE'); }),
   withInput: jest.fn(async (_purpose, write) => { mockLease = true; mockOrder.push('LEASE'); try { return await write(mockOwner); }
     finally { mockLease = false; mockOrder.push('RELEASE'); } }),

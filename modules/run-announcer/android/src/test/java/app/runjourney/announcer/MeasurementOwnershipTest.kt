@@ -41,6 +41,22 @@ class MeasurementOwnershipTest {
     owner.command("finish", b.toString()); claim()
     rejected { owner.command("recoveryLease", b.toString()) }
   }
+  @Test fun inputTicketsSurviveAcquireAndReleaseAckLossWithoutDuplicateLeases() {
+    val b = claim(); owner.command("activate", b.toString())
+    val token = JSONObject(owner.command("inputToken", b.toString())).getString("token")
+    val ticket = JSONObject(b.toString()).put("token", token).toString()
+    val interrupted = newOwner(ioCheck = { if(it == "DIRECTORY_SYNC") throw java.io.IOException("after rename before ACK") })
+    try { interrupted.command("inputLease", ticket); fail("Expected lost ACK") } catch (_: java.io.IOException) { }
+    owner.command("inputLease", ticket)
+    assertEquals(1, JSONObject(owner.command("read")).getJSONObject("leases").length())
+    owner.command("stop", b.toString())
+    owner.command("inputLease", ticket) // Existing in-flight ticket can finish under STOPPING.
+    try { interrupted.command("releaseInput", ticket); fail("Expected lost ACK") } catch (_: java.io.IOException) { }
+    owner.command("releaseInput", ticket)
+    assertEquals(0, JSONObject(owner.command("read")).getJSONObject("leases").length())
+    owner.command("finish", b.toString()); claim()
+    rejected { owner.command("inputLease", ticket) }; rejected { owner.command("releaseInput", ticket) }
+  }
   @Test fun durableClaimLocksOtherPurposesAndBindsDestination() {
     val b = claim()
     assertEquals("STARTING", b.getString("status"))

@@ -13,8 +13,9 @@ function fixture(recovery?: CompletionRecovery) {
     } else if (action === 'activate') state.binding = { ...state.binding!, status: 'ACTIVE' };
     else if (action === 'stop') state.binding = { ...state.binding!, status: 'STOPPING' };
     else if (action === 'finish') { if (Object.keys(state.leases).length) throw Error('pending writes'); state.binding = null; }
-    else if (action === 'lease' || action === 'recoveryLease') { state.leases.ticket = state.generation; return JSON.stringify({ token: 'ticket', binding: state.binding }); }
-    else if (action === 'release') delete state.leases.ticket;
+    else if (action === 'inputToken') return JSON.stringify({ token: 'ticket' });
+    else if (action === 'lease' || action === 'recoveryLease' || action === 'inputLease') { state.leases.ticket = state.generation; return JSON.stringify({ token: 'ticket', binding: state.binding }); }
+    else if (action === 'release' || action === 'releaseInput') delete state.leases.ticket;
     return JSON.stringify(state);
   });
   const drafts: DraftInspection = { running: null, cycling: null, unownedTracking: false };
@@ -83,4 +84,14 @@ test('failed OS stop after completion preserves the same owner for another recov
   await expect(f.sessions.reconcile()).rejects.toThrow('OS stop failed');
   expect(f.current().binding?.sessionId).toBe('saved');
   expect(await f.sessions.reconcile()).toBeNull(); expect(stopTracking).toHaveBeenCalledTimes(2);
+});
+test('buffered input uses a durable fixed ticket and is drained before STOPPING', async () => {
+  const f = fixture(); const owner = await f.sessions.ensure('cycling', 'buffered', 1000); await f.sessions.activate(owner);
+  const work = jest.fn(async () => 1);
+  const input = f.sessions.withBufferedInput('cycling', 2000, 20, work);
+  f.sessions.requestInputStop('cycling');
+  await f.sessions.freeze(owner); expect(await input).toBe(1);
+  expect(f.calls.indexOf('releaseInput')).toBeLessThan(f.calls.indexOf('stop'));
+  expect(await f.sessions.withBufferedInput('cycling', 2100, 20, work)).toBeNull();
+  expect(work).toHaveBeenCalledTimes(1);
 });

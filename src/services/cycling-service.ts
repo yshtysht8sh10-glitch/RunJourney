@@ -64,6 +64,7 @@ export const CyclingService = {
   stop(): Promise<RunRecord | null> {
     if (stopping) return stopping;
     const endedAt = new Date().toISOString();
+    MeasurementSessions.requestInputStop('cycling');
     stopping = (async () => {
       const owner = await MeasurementSessions.reconcile();
       if (!owner) return lastSaved;

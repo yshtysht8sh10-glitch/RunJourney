@@ -168,6 +168,24 @@ class MeasurementOwnership(private val context: Context, private val ioCheck: (S
         val current = checkNotNull(binding) { "OWNERSHIP_IDLE" }
         check(request.get("sessionId") is String && current.getString("sessionId") == request.getString("sessionId") && current.getLong("generation") == integer(request.get("generation"))) { "OWNERSHIP_STALE" }
         when (action) {
+          "inputToken" -> return@synchronized JSONObject().put("token", UUID.randomUUID().toString()).toString()
+          "inputLease" -> {
+            val token = request.getString("token")
+            check(Regex("[a-zA-Z0-9-]{1,80}").matches(token)) { "OWNERSHIP_TOKEN" }
+            if(!leases.has(token)) {
+              check(current.getString("status") == "ACTIVE" && leases.length() < 128) { "OWNERSHIP_NOT_ACTIVE" }
+              leases.put(token, current.getLong("generation"))
+            }
+            // Retry the same durable ticket after a commit whose ACK was lost.
+            save(state)
+            return@synchronized JSONObject().put("token", token).put("binding", current).toString()
+          }
+          "releaseInput" -> {
+            val token = request.getString("token")
+            check(Regex("[a-zA-Z0-9-]{1,80}").matches(token)) { "OWNERSHIP_TOKEN" }
+            leases.remove(token); save(state)
+            return@synchronized state.toString()
+          }
           "activate" -> {
             check(current.getString("status") == "STARTING") { "OWNERSHIP_STATUS" }
             current.put("status", "ACTIVE")

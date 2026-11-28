@@ -1,5 +1,7 @@
 import type { MeasurementPurpose } from '@/domain/measurement-profile';
 import { createMeasurementOwnership, MeasurementOwnership, type MeasurementBinding } from './measurement-ownership';
+import { createMeasurementInputBuffer } from './measurement-input-buffer';
+import { diagnosticLog } from './diagnostic-log';
 
 type DraftHeader = { id: string; startedAt: string; endedAt: string | null };
 export type DraftInspection = { running: DraftHeader | null; cycling: DraftHeader | null; unownedTracking: boolean; trackingPurposes?: MeasurementPurpose[] };
@@ -13,8 +15,15 @@ export type CompletionRecovery = {
  * Inspection is read-only and never clears competing drafts or unowned GPS registrations.
  */
 export function createMeasurementSessions(client: Client, inspect: () => Promise<DraftInspection>, recovery?: CompletionRecovery) {
+  let knownOwner: MeasurementBinding | null = null;
+  const inputs = createMeasurementInputBuffer({ read: async () => (await client.read()).binding,
+    token: owner => client.inputToken(owner), acquire: (owner, token) => client.acquireInput(owner, token),
+    release: (owner, token) => client.releaseInput(owner, token) }, {
+    report: (reason, count) => diagnosticLog('GPS_INPUT_RETENTION', knownOwner?.sessionId ?? 'unbound', reason, { count }),
+  });
   const reconcile = async (): Promise<MeasurementBinding | null> => {
     const current = await client.read();
+    knownOwner = current.binding;
     const drafts = await inspect();
     if (drafts.running && drafts.cycling) throw Error('両競技に未終了記録があります。新規開始せず確認してください');
     const kind = drafts.running ? 'running' : drafts.cycling ? 'cycling' : null;
@@ -29,7 +38,7 @@ export function createMeasurementSessions(client: Client, inspect: () => Promise
         // stop a newer session's registration before discovering its old generation.
         await client.withWriteLease(current.binding, async fixed => recovery.stopTracking(fixed.purpose), true);
         await client.stop(current.binding); await client.finish(current.binding);
-        return null;
+        knownOwner = null; return null;
       }
       return current.binding;
     }
@@ -42,7 +51,7 @@ export function createMeasurementSessions(client: Client, inspect: () => Promise
     if (!Number.isFinite(startedAt)) throw Error('未終了記録の開始日時を確認できません');
     const adopted = await client.claim(kind, draft.id, startedAt, true);
     const result = draft.endedAt ? await client.stop(adopted) : await client.activate(adopted);
-    return result.binding;
+    knownOwner = result.binding; return result.binding;
   };
   return {
     reconcile,
@@ -57,13 +66,13 @@ export function createMeasurementSessions(client: Client, inspect: () => Promise
         if (active.purpose !== purpose || active.sessionId !== id || active.startedAt !== startedAt) throw Error('別用途・別IDへの計測切替はできません');
         return active;
       }
-      return client.claim(purpose, id, startedAt);
+      knownOwner = await client.claim(purpose, id, startedAt); inputs.reopen(knownOwner); return knownOwner;
     },
     async activate(owner: MeasurementBinding) {
       const active = (await client.read()).binding;
       if (!active || active.sessionId !== owner.sessionId || active.generation !== owner.generation) throw Error('計測所有権が変更されています');
-      if (active.status === 'ACTIVE') return active;
-      const result = await client.activate(owner); return result.binding!;
+      if (active.status === 'ACTIVE') { knownOwner = active; return active; }
+      const result = await client.activate(owner); knownOwner = result.binding; return result.binding!;
     },
     async withInput<T>(purpose: MeasurementPurpose, write: (owner: MeasurementBinding) => Promise<T>) {
       // The hot path needs only the atomic owner, not two SQLite opens per fix.
@@ -73,6 +82,7 @@ export function createMeasurementSessions(client: Client, inspect: () => Promise
       return client.withWriteLease(active, write);
     },
     async freeze(owner: MeasurementBinding) {
+      await inputs.close(owner);
       await client.stop(owner);
       // A timeout reports uncertainty and leaves STOPPING fenced; it never releases ownership.
       for (let attempt = 0; attempt < 100; attempt++) {
@@ -83,7 +93,12 @@ export function createMeasurementSessions(client: Client, inspect: () => Promise
       }
       throw Error('GPS書込みの完了を確認できません。所有権を保持して終了を再試行してください');
     },
-    finish: (owner: MeasurementBinding) => client.finish(owner),
+    withBufferedInput: <T>(purpose: MeasurementPurpose, receivedAt: number, bytes: number, write: (owner: MeasurementBinding) => Promise<T>) =>
+      inputs.submit(purpose, knownOwner, receivedAt, bytes, write),
+    closeInputs: (owner: MeasurementBinding) => inputs.close(owner),
+    requestInputStop: (purpose: MeasurementPurpose) => inputs.requestStop(purpose),
+    reopenInputs: (owner: MeasurementBinding) => inputs.reopen(owner),
+    async finish(owner: MeasurementBinding) { const result = await client.finish(owner); knownOwner = result.binding; return result; },
   };
 }
 
