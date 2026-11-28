@@ -7,10 +7,25 @@ import java.io.File
 
 /** Fixed app-private destinations, metadata only. No schema init, purge or repair. */
 internal class ActivityMetadataReader(private val context: Context) {
+  private val absoluteDate = Regex("""^(\d{4})-(\d{2})-(\d{2})(?:[Tt ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?([Zz]|[+-]\d{2}:\d{2})?)?$""")
+  private fun validAbsoluteDate(value: String): Boolean {
+    val match = absoluteDate.matchEntire(value) ?: return false
+    val g = match.groupValues
+    val zone = g[8]
+    if(zone.length > 1 && (zone.substring(1,3).toInt() > 23 || zone.substring(4,6).toInt() > 59)) return false
+    return try {
+      java.util.GregorianCalendar(java.util.TimeZone.getTimeZone("UTC")).apply {
+        isLenient = false; clear()
+        set(g[1].toInt(), g[2].toInt()-1, g[3].toInt(), g[4].ifEmpty { "0" }.toInt(),
+          g[5].ifEmpty { "0" }.toInt(), g[6].ifEmpty { "0" }.toInt())
+        set(java.util.Calendar.MILLISECOND, g[7].padEnd(3,'0').ifEmpty { "0" }.toInt())
+      }.timeInMillis; true
+    } catch (_: IllegalArgumentException) { false }
+  }
   // Zone-bearing ISO values are absolute. Zone-less datetimes use device local
   // time; date-only values follow JS's UTC date convention. Unsupported legacy
   // strings are rejected visibly, never rewritten or silently coerced to epoch zero.
-  private fun instant(column: String) = "CASE WHEN length($column)=10 OR $column GLOB '*Z' OR $column GLOB '*z' OR substr($column,-6,1) IN ('+','-') THEN julianday($column) ELSE julianday($column,'utc') END"
+  private fun instant(column: String) = "CASE WHEN $column NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*' THEN NULL WHEN length($column)=10 OR $column GLOB '*Z' OR $column GLOB '*z' OR substr($column,-6,1) IN ('+','-') THEN julianday($column) ELSE julianday($column,'utc') END"
   fun read(kind: String, mode: String, limit: Int, offset: Int): Map<String, Any?> {
     val name = when(kind) { "running" -> "runjourney.sqlite"; "cycling" -> "runjourney-cycling.sqlite"; else -> error("LEGACY_ACTIVITY_INVALID") }
     check(mode in listOf("draft", "history")) { "LEGACY_ACTIVITY_MODE" }
@@ -44,7 +59,7 @@ internal class ActivityMetadataReader(private val context: Context) {
             val endedAt = if(cursor.isNull(2)) null else cursor.getText(2)
             check(endedAt == null || endedAt.length <= 64) { "LEGACY_ACTIVITY_HEADER" }
             if(mode == "history") {
-              check(endedAt != null && !cursor.isNull(10) && !cursor.isNull(11)
+              check(validAbsoluteDate(startedAt) && endedAt != null && validAbsoluteDate(endedAt) && !cursor.isNull(10) && !cursor.isNull(11)
                 && cursor.getDouble(10) >= 2440587.5 && cursor.getDouble(11) >= cursor.getDouble(10)) { "LEGACY_ACTIVITY_HEADER_DATE" }
             }
             rows.add(mapOf("id" to id, "startedAt" to startedAt, "endedAt" to endedAt,

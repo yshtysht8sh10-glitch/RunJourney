@@ -97,4 +97,12 @@ class ActivityMetadataReaderTest {
     try { reader.read("running", "history", 1, 0); fail("Must reject header") } catch (_: IllegalStateException) { }
     assertArrayEquals(before, file.readBytes())
   }
+  @Test fun relativeNowCannotBeAcceptedAsAStoredAbsoluteDate() {
+    fixture().use { it.execSQL("INSERT INTO runs VALUES('bad','completed','now','now',1,1,NULL)") }
+    try { reader.read("running", "history", 1, 0); fail("Must reject now") } catch (_: IllegalStateException) { }
+  }
+  @Test fun timeOnlyCannotBeAcceptedAsAStoredAbsoluteDate() {
+    fixture().use { it.execSQL("INSERT INTO runs VALUES('bad','completed','12:00:00','12:00:01',1,1,NULL)") }
+    try { reader.read("running", "history", 1, 0); fail("Must reject time without date") } catch (_: IllegalStateException) { }
+  }
 }
