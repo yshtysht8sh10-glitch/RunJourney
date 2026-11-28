@@ -2,6 +2,7 @@ import { ActiveRun, LocationPoint, RunRecord, RunState, StopDiagnostic, StopReas
 import { calculateDistance, distanceBetween } from '@/utils/distance';
 import { inferMovement, usableObservation } from '@/utils/movement-inference';
 import { analyzePace, DEFAULT_LAP_MS, timeLapRanges } from '@/utils/pace-analysis';
+import type { DistancePolicy } from '@/domain/measurement-profile';
 
 export const RUN_CONTROL = {
   holdMs: 1500, stopSpeed: 0.6, resumeSpeed: 1.2,
@@ -93,11 +94,11 @@ export function effectivePoints(run: DistanceRun): LocationPoint[] {
   });
   return selected;
 }
-export function effectiveDistance(run: DistanceRun) { return effectiveEdges(run).reduce((sum, edge) => sum + edge.distanceMeters, 0); }
+export function effectiveDistance(run: DistanceRun, policy?: DistancePolicy) { return effectiveEdges(run, undefined, policy).reduce((sum, edge) => sum + edge.distanceMeters, 0); }
 
 // Filter edges in raw GPS time, then place them on the shared effective clock.
 // Every lap/total uses these same edges, including interpolated lap boundaries.
-export function effectiveEdges(run: DistanceRun, now?: number) {
+export function effectiveEdges(run: DistanceRun, now?: number, policy?: DistancePolicy) {
   const points = effectivePoints(run), start = Date.parse(run.startedAt);
   const end = run.endedAt ? Date.parse(run.endedAt) : now ?? points.at(-1)?.timestamp ?? start;
   if (!Number.isFinite(start) || !Number.isFinite(end)) return [];
@@ -108,12 +109,12 @@ export function effectiveEdges(run: DistanceRun, now?: number) {
     return {
       startMs: paceTime({ ...run, endedAt: undefined }, clippedStart),
       endMs: paceTime({ ...run, endedAt: undefined }, clippedEnd),
-      distanceMeters: calculateDistance([previous, point]) * (clippedEnd - clippedStart) / rawDuration,
+      distanceMeters: calculateDistance([previous, point], policy) * (clippedEnd - clippedStart) / rawDuration,
     };
   }).filter(edge => edge.endMs > edge.startMs && edge.distanceMeters > 0);
 }
-export function effectiveRun(run: ActiveRun, now = Date.now()) {
-  const time = timeModel(run, now), edges = effectiveEdges(run, now);
+export function effectiveRun(run: ActiveRun, now = Date.now(), policy?: DistancePolicy) {
+  const time = timeModel(run, now), edges = effectiveEdges(run, now, policy);
   const distanceBetweenTimes = (startMs: number, endMs: number) => edges.reduce((sum, edge) => sum + edge.distanceMeters *
     Math.max(0, Math.min(endMs, edge.endMs) - Math.max(startMs, edge.startMs)) / (edge.endMs - edge.startMs), 0);
   const distanceMeters = edges.reduce((sum, edge) => sum + edge.distanceMeters, 0);
