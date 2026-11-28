@@ -47,3 +47,21 @@ Robolectric covers eight simultaneous claimants, recreation, stop/drain/stale ge
 double release, corrupt control file and failed write. It is not a device/process-kill test.
 Generated ignored Android files were created by Expo prebuild for unit tests only; no APK
 was installed or distributed. Existing module audio paths are not invoked by this port.
+
+### Independent review correction (PR #107)
+
+The initial 13739e9 implementation was CHANGES_REQUESTED: AtomicFile.finishWrite may swallow
+sync errors, and JSONObject.getInt/getLong coerced fractional control values. It is not
+approved for integration or use. The corrected port uses explicit checked file sync,
+throwing rename, directory sync and readback; no AtomicFile success assumption remains.
+Schema/profile/generation/lease/request integers require numeric, integral, safe ranges.
+Invalid raw control is not rewritten. A post-rename sync failure is an unknown outcome,
+never success, and any visible committed owner continues to block another START.
+
+13 Robolectric tests now pass, including checked file-sync/rename/directory-sync faults and
+fractional/string/unsafe integers; JS nine tests/typecheck/Lint evidence remains applicable
+because the JS port is unchanged. Windows Robolectric cannot implement Android directory
+sync/Os.rename: tests use an explicit directory-sync double and a real host ATOMIC_MOVE;
+real file sync, locks, corruption and raw-file comparisons are exercised. Android syscall
+execution/power-loss semantics still require device acceptance. No device update occurred.
+Final fixed-SHA rereview is required before the primitive is integrated with START.

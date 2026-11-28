@@ -8,11 +8,18 @@ import java.io.File
 import java.io.RandomAccessFile
 import java.util.UUID
 
-/** Durable cross-runtime ownership. No coordinates, history, settings or audio are stored here.
+/** Durable cross-runtime ownership with checked sync/rename ACK. No coordinates, history,
+ * settings or audio are stored here.
  * A lease never expires by time: uncertain writes block the next START until reconciled.
  * This port does not start GPS or decide whether legacy drafts can be adopted.
  */
 class MeasurementOwnership(context: Context, private val ioCheck: (String) -> Unit = {},
+  private val atomicReplace: (File, File) -> Unit = { source, target -> Os.rename(source.absolutePath, target.absolutePath) },
+  private val directorySync: (File) -> Unit = { folder ->
+    check(folder.isDirectory) { "OWNERSHIP_DIRECTORY" }
+    val descriptor = Os.open(folder.absolutePath, OsConstants.O_RDONLY, 0)
+    try { Os.fsync(descriptor) } finally { Os.close(descriptor) }
+  },
   private val allowWrite: () -> Boolean = { true }) {
   private val directory = File(context.noBackupFilesDir, "measurement-ownership-v1")
   private val stateFile get() = File(directory, "owner.json")
@@ -78,15 +85,14 @@ class MeasurementOwnership(context: Context, private val ioCheck: (String) -> Un
     pending.outputStream().use { output ->
       output.write(bytes); ioCheck("FILE_SYNC"); output.fd.sync()
     }
-    ioCheck("RENAME"); Os.rename(pending.absolutePath, file.absolutePath)
+    ioCheck("RENAME"); atomicReplace(pending, file)
     syncDirectory(directory)
     check(file.readBytes().contentEquals(bytes)) { "OWNERSHIP_READBACK" }
   }
 
   private fun syncDirectory(folder: File) {
     ioCheck("DIRECTORY_SYNC")
-    val descriptor = Os.open(folder.absolutePath, OsConstants.O_RDONLY or OsConstants.O_DIRECTORY, 0)
-    try { Os.fsync(descriptor) } finally { Os.close(descriptor) }
+    directorySync(folder)
   }
 
   fun command(action: String, payload: String = "{}"): String = synchronized(monitor) {
