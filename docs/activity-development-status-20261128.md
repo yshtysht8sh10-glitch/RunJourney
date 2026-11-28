@@ -94,3 +94,22 @@ The port is not mounted in the root layout yet. The actual bootstrap-before-gate
 and legacy draft adoption must be connected and tested before enabling another purpose.
 12 related JS tests and 17 synthetic Robolectric tests passed; typecheck/Lint passed.
 The same explicitly documented host syscall doubles apply. No real installation was changed.
+
+## Sixth increment: session routing and Running adapter (#99)
+
+Read-only reconciliation adopts a single old Running draft, blocks dual/orphan/unowned
+tracking conditions, and never switches a bound ID/destination. The input hot path reads
+only Native ownership; it does not open two metadata readers per GPS fix. Running startup
+and restore connect to the Native owner only on compatible new binaries. Old Running-only
+binaries retain their existing path; Cycling will require the new ownership capability.
+
+On new binaries the Running input lease now includes flushCheckpoint before release.
+This preserves sample timestamps/filters while adding a durability wait; device latency/I/O
+comparison remains required. Automatic goal STOP runs after the input lease is released.
+Final ownership release follows fixed-store completion and OS tracking stop. An uncertain
+lease or failed final ACK fences a new purpose; no time-based forced recovery is provided.
+
+Focused lifecycle/Running/PACE tests: 23 passed; typecheck/Lint passed. Two tests execute
+the real Running SQLite path with a JS ownership/OS double, including goal completion without
+self-drain deadlock. Five controller tests are contract simulations. Neither category is a
+physical-device test. Full integrated regression and independent review are still required.

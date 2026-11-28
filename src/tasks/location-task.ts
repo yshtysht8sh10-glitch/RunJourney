@@ -7,6 +7,7 @@ import { VoiceAnnouncement } from '@/services/voice-announcement';
 import { isStandaloneTest } from '@/utils/build';
 import { AppState } from 'react-native';
 import { SensorDiagnostics } from '@/services/sensor-diagnostics';
+import { MeasurementSessions, measurementOwnershipAvailable } from '@/services/measurement-sessions';
 
 export const LOCATION_TASK_NAME = 'runjourney-background-location';
 
@@ -26,6 +27,8 @@ function toPoint(location: Location.LocationObject): LocationPoint {
 
 /** Both device TaskManager and the isolated PC simulator enter this adapter. */
 export async function ingestLocationBatch(locations: Location.LocationObject[], receivedAt = Date.now(), appState = AppState.currentState ?? 'unknown') {
+  const guarded = measurementOwnershipAvailable();
+  const ingest = async () => {
     SensorDiagnostics.gps(locations, receivedAt);
 
     const updated = isStandaloneTest()
@@ -33,6 +36,14 @@ export async function ingestLocationBatch(locations: Location.LocationObject[], 
         accuracy: location.coords.accuracy, speed: location.coords.speed, receivedAt })), appState,
         observed => { void VoiceAnnouncement.updateState(observed); })
       : await RunRepository.appendActivePoints(locations.map(toPoint));
+    // The Native input lease includes delayed SQLite checkpoints. STOP cannot
+    // release this purpose while a checkpoint is still writing its fixed store.
+    if (guarded) await RunRepository.flushCheckpoint();
+    return updated;
+  };
+  const updated = guarded ? await MeasurementSessions.withInput('running', ingest) : await ingest();
+    // Auto-goal requests STOP only after the input lease is released, preventing
+    // a finish barrier from waiting for its own write lease.
     if (updated) {
       if (updated.endedAt) return;
       if (updated.finishGoal && updated.finishGoal.kind !== 'manual') {
@@ -48,7 +59,11 @@ export async function ingestLocationBatch(locations: Location.LocationObject[], 
 }
 if (!TaskManager.isTaskDefined(LOCATION_TASK_NAME)) {
   TaskManager.defineTask<LocationTaskData>(LOCATION_TASK_NAME, async ({ data, error }) => {
-    if (error) { await RunRepository.diagnosticError(); return; }
+    if (error) {
+      if (measurementOwnershipAvailable()) await MeasurementSessions.withInput('running', () => RunRepository.diagnosticError());
+      else await RunRepository.diagnosticError();
+      return;
+    }
     if (data?.locations?.length) await ingestLocationBatch(data.locations);
   });
 }
