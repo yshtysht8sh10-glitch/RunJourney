@@ -16,17 +16,23 @@ class MeasurementOwnershipTest {
   private lateinit var owner: MeasurementOwnership
   private fun request(purpose: String = "cycling", id: String = "cycle1", db: String = "runjourney-cycling.sqlite") = JSONObject()
     .put("sessionId", id).put("purpose", purpose).put("profileVersion", 1).put("databaseKey", db).put("startedAt", 1000)
+  // Windows Robolectric cannot perform the Android directory/rename syscalls.
+  // Keep real file sync/locking and use an actual host atomic rename, not a no-op.
+  private fun newOwner(ioCheck: (String) -> Unit = {}, allowWrite: () -> Boolean = { true }) =
+    MeasurementOwnership(context, ioCheck = ioCheck, directorySync = {}, allowWrite = allowWrite,
+      atomicReplace = { source, target -> java.nio.file.Files.move(source.toPath(), target.toPath(),
+        java.nio.file.StandardCopyOption.ATOMIC_MOVE, java.nio.file.StandardCopyOption.REPLACE_EXISTING); Unit })
   private fun claim() = JSONObject(owner.command("claim", request().toString())).getJSONObject("binding")
   private fun rejected(action: () -> Unit) { try { action(); fail("Expected ownership rejection") } catch (_: IllegalStateException) { } }
   @Before fun setup() {
     // Synthetic Robolectric sandbox only. Never exposed as a device reset API.
     File(context.noBackupFilesDir, "measurement-ownership-v1").deleteRecursively()
-    owner = MeasurementOwnership(context)
+    owner = newOwner()
   }
   @Test fun durableClaimLocksOtherPurposesAndBindsDestination() {
     val b = claim()
     assertEquals("STARTING", b.getString("status"))
-    val reopened = MeasurementOwnership(context)
+    val reopened = newOwner()
     assertEquals("cycle1", JSONObject(reopened.command("read")).getJSONObject("binding").getString("sessionId"))
     rejected { reopened.command("claim", request("running", "run1", "runjourney.sqlite").toString()) }
     assertEquals("runjourney-cycling.sqlite", b.getString("databaseKey"))
@@ -57,7 +63,7 @@ class MeasurementOwnershipTest {
   }
   @Test fun leaseSurvivesRecreationAndNoTimeoutMayReleaseIt() {
     val b = claim(); owner.command("activate", b.toString()); owner.command("lease", b.toString())
-    val reopened = MeasurementOwnership(context)
+    val reopened = newOwner()
     assertEquals(1, JSONObject(reopened.command("read")).getJSONObject("leases").length())
     reopened.command("stop", b.toString())
     rejected { reopened.command("finish", b.toString()) }
@@ -72,7 +78,7 @@ class MeasurementOwnershipTest {
   }
   @Test fun failedWriteDoesNotAcknowledgeOrChangeCommittedOwner() {
     val b = claim()
-    val failed = MeasurementOwnership(context) { false }
+    val failed = newOwner() { false }
     rejected { failed.command("activate", b.toString()) }
     assertEquals("STARTING", JSONObject(owner.command("read")).getJSONObject("binding").getString("status"))
   }
@@ -89,7 +95,7 @@ class MeasurementOwnershipTest {
     val gate = java.util.concurrent.CountDownLatch(1)
     val threads = (1..8).map { index -> Thread {
       gate.await()
-      try { MeasurementOwnership(context).command("claim", request(id="c$index").toString()); winners.incrementAndGet() }
+      try { newOwner().command("claim", request(id="c$index").toString()); winners.incrementAndGet() }
       catch (_: IllegalStateException) { }
     }.also { it.start() } }
     gate.countDown(); threads.forEach { it.join() }; assertEquals(1, winners.get())
@@ -110,7 +116,7 @@ class MeasurementOwnershipTest {
   }
   @Test fun checkedFileSyncOrRenameFailureNeverAcknowledgesClaim() {
     listOf("FILE_SYNC", "RENAME").forEach { stage ->
-      val failed = MeasurementOwnership(context, ioCheck = { if(it == stage) throw java.io.IOException("injected") })
+      val failed = newOwner(ioCheck = { if(it == stage) throw java.io.IOException("injected") })
       var acknowledged = false
       try { failed.command("claim", request().toString()); acknowledged = true } catch (_: java.io.IOException) { }
       assertFalse(acknowledged); assertTrue(JSONObject(owner.command("read")).isNull("binding"))
@@ -118,7 +124,7 @@ class MeasurementOwnershipTest {
   }
   @Test fun postRenameDirectorySyncFailureIsUnknownAndFencesAnotherStart() {
     owner.command("read") // Parent directory sync already confirmed in this synthetic process.
-    val failed = MeasurementOwnership(context, ioCheck = { if(it == "DIRECTORY_SYNC") throw java.io.IOException("injected") })
+    val failed = newOwner(ioCheck = { if(it == "DIRECTORY_SYNC") throw java.io.IOException("injected") })
     var acknowledged = false
     try { failed.command("claim", request().toString()); acknowledged = true } catch (_: java.io.IOException) { }
     assertFalse(acknowledged)
