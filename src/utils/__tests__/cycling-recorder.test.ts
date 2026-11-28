@@ -24,6 +24,24 @@ beforeEach(() => {
 });
 afterEach(() => { native.close(); });
 
+test('95-minute Cycling input retains high-speed distance, restores and completes its synthetic DB', async () => {
+  await recorder.create('synthetic-95min', new Date(origin).toISOString(), DEFAULT_CYCLING_SETTINGS);
+  for (let second = 0; second <= 5700; second += 5) {
+    await recorder.ingest(Array.from({ length: second ? 5 : 1 }, (_, i) => {
+      const at = second ? second - 4 + i : 0; return raw(at, at * 15);
+    }), 'background');
+    if (second === 2850) recorder = new CyclingRecorder(async () => store);
+  }
+  const active = (await recorder.getActive())!;
+  expect(active.distanceMeters).toBeCloseTo(85500, -1);
+  expect(active.points).toHaveLength(1141);
+  await recorder.prepareFinish(new Date(origin + 5700000).toISOString());
+  const saved = (await recorder.finish())!;
+  expect(saved.distanceMeters).toBeCloseTo(active.distanceMeters, 3);
+  expect(timeModel(saved).activeRunningTime).toBe(5700000);
+  expect((await store.getRun(saved.id))?.points).toHaveLength(1141);
+}, 120000);
+
 test('Cycling defaults are independent and malformed settings do not silently reset', () => {
   expect(DEFAULT_CYCLING_SETTINGS).toEqual({ version: 1, autoStop: false, voice: true, map: false });
   expect(() => validateCyclingSettings({ ...DEFAULT_CYCLING_SETTINGS, version: 2 } as never)).toThrow();
