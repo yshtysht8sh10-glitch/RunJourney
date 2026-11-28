@@ -11,8 +11,15 @@ import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
 class RunAnnouncerModule : Module() {
+  private val ownershipWorker = java.util.concurrent.Executors.newSingleThreadExecutor()
   override fun definition() = ModuleDefinition {
     Name("RunAnnouncer")
+    AsyncFunction("measurementOwnership") { action: String, payload: String, promise: Promise ->
+      ownershipWorker.execute {
+        try { promise.resolve(MeasurementOwnership(requireNotNull(appContext.reactContext)).command(action, payload)) }
+        catch (error: Exception) { promise.reject("ERR_MEASUREMENT_OWNERSHIP", error.message?.takeIf { it.matches(Regex("OWNERSHIP_[A-Z_]+")) } ?: "OWNERSHIP_STORAGE_FAILED", null) }
+      }
+    }
     Function("pacePeriodicVersion") { 1 }
     Function("pacePeriodicState") { runId: String, configKey: String ->
       PacePeriodicLedger(requireNotNull(appContext.reactContext)).state(runId, configKey)
@@ -111,6 +118,7 @@ class RunAnnouncerModule : Module() {
     }
     OnCreate { FinishClockService.pulse = { sendEvent("finishClock", emptyMap<String, Any>()) } }
     OnDestroy {
+      ownershipWorker.shutdown()
       FinishClockService.pulse = null
       if (appContext.reactContext?.packageName == "app.runjourney.mobile.test") DetectorJournalStorage.stop()
     }

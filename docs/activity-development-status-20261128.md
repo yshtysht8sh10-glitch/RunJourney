@@ -27,3 +27,23 @@ rejected it. The test now uses trash then deletion; no product deletion guard wa
 
 No Issue is complete based on this increment. No device acceptance, installation or Production
 delivery has occurred. Test v38 and Issue #93 remain separate and unchanged.
+
+## Second increment: durable ownership port (#99 prerequisite)
+
+`MeasurementOwnership` is a new Native port within the existing local module. It uses a
+separate no-backup control file, AtomicFile ACK, process-wide monitor and cross-process file
+lock. Purpose/destination/profile/generation are allowlisted. Persisted write leases block
+STOP completion and next START; unknown, corrupt or failed states do not become IDLE.
+No timeout releases uncertain writes. A failed final sink ACK retains ownership.
+
+The TypeScript adapter validates Native replies and passes immutable binding into each
+write callback, releasing its lease in finally. No JS-only lock fallback is available.
+Both ports remain disconnected from GPS/UI/Running until legacy draft reconciliation and
+the shared START/STOP adapters are implemented. A primitive alone is not cross-mode safety.
+Settings snapshots, startup evidence and recovery of orphan leases remain integration work.
+
+Validation: 9 JS tests and 9 Android Robolectric tests, typecheck/Lint/diff checks passed.
+Robolectric covers eight simultaneous claimants, recreation, stop/drain/stale generation,
+double release, corrupt control file and failed write. It is not a device/process-kill test.
+Generated ignored Android files were created by Expo prebuild for unit tests only; no APK
+was installed or distributed. Existing module audio paths are not invoked by this port.
