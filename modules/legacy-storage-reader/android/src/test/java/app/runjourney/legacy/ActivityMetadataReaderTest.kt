@@ -105,4 +105,12 @@ class ActivityMetadataReaderTest {
     fixture().use { it.execSQL("INSERT INTO runs VALUES('bad','completed','12:00:00','12:00:01',1,1,NULL)") }
     try { reader.read("running", "history", 1, 0); fail("Must reject time without date") } catch (_: IllegalStateException) { }
   }
+  @Test fun completedLookupIsScopedReadOnlyAndCannotConfuseASecondDatabaseSameId() {
+    fixture().use { add(it, "same") }
+    fixture("runjourney-cycling.sqlite").use { add(it, "other") }
+    val file = File(root, "SQLite/runjourney.sqlite"); val before = file.readBytes()
+    assertEquals(1, (reader.read("running", "record", 1, 0, "same")["rows"] as List<*>).size)
+    assertTrue((reader.read("cycling", "record", 1, 0, "same")["rows"] as List<*>).isEmpty())
+    assertArrayEquals(before, file.readBytes())
+  }
 }

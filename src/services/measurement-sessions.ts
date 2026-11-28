@@ -4,11 +4,15 @@ import { createMeasurementOwnership, MeasurementOwnership, type MeasurementBindi
 type DraftHeader = { id: string; startedAt: string; endedAt: string | null };
 export type DraftInspection = { running: DraftHeader | null; cycling: DraftHeader | null; unownedTracking: boolean; trackingPurposes?: MeasurementPurpose[] };
 type Client = ReturnType<typeof createMeasurementOwnership>;
+export type CompletionRecovery = {
+  completed(owner: MeasurementBinding): Promise<boolean>;
+  stopTracking(purpose: MeasurementPurpose): Promise<void>;
+};
 
 /** No mutable selected-sport global. A bound ID/destination survives route changes.
  * Inspection is read-only and never clears competing drafts or unowned GPS registrations.
  */
-export function createMeasurementSessions(client: Client, inspect: () => Promise<DraftInspection>) {
+export function createMeasurementSessions(client: Client, inspect: () => Promise<DraftInspection>, recovery?: CompletionRecovery) {
   const reconcile = async (): Promise<MeasurementBinding | null> => {
     const current = await client.read();
     const drafts = await inspect();
@@ -18,6 +22,13 @@ export function createMeasurementSessions(client: Client, inspect: () => Promise
     if (current.binding) {
       if (drafts.trackingPurposes?.some(purpose => purpose !== current.binding!.purpose)) throw Error('GPS登録と計測用途が一致しません。新規開始せず確認してください');
       if (draft && (current.binding.purpose !== kind || current.binding.sessionId !== draft.id)) throw Error('計測所有権と未終了記録が一致しません');
+      if (!draft && recovery && ['STOPPING', 'FINISH_FAILED'].includes(current.binding.status)) {
+        if (Object.keys(current.leases).length) throw Error('終了書込みの成否が未確定です。記録と所有権を保持しています');
+        if (!(await recovery.completed(current.binding))) throw Error('保存済みの終了記録を照合できません。削除・初期化せず確認してください');
+        await recovery.stopTracking(current.binding.purpose);
+        await client.stop(current.binding); await client.finish(current.binding);
+        return null;
+      }
       return current.binding;
     }
     if (!draft || !kind) {
@@ -96,4 +107,23 @@ export const MeasurementSessions = createMeasurementSessions(MeasurementOwnershi
   return { running: running.rows[0] ?? null, cycling: cycling.rows[0] ?? null,
     trackingPurposes: (['running', 'cycling'] as const).filter((_purpose, index) => registrations[index]),
     unownedTracking: !running.rows.length && !cycling.rows.length && registrations.some(Boolean) };
+}, {
+  async completed(owner) {
+    if (owner.purpose !== 'running' && owner.purpose !== 'cycling') return false;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const reader = require('../../modules/legacy-storage-reader').default as typeof import('../../modules/legacy-storage-reader').default;
+    const result = await reader.activityRecordHeader(owner.purpose, owner.sessionId);
+    const record = result.rows[0];
+    return result.exists && result.rows.length === 1 && record.id === owner.sessionId
+      && Date.parse(record.startedAt) === owner.startedAt && record.endedAt !== null
+      && Number.isFinite(Date.parse(record.endedAt)) && Date.parse(record.endedAt) >= owner.startedAt;
+  },
+  async stopTracking(purpose) {
+    if (purpose !== 'running' && purpose !== 'cycling') throw Error('この用途の終了復旧には未対応です');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const location = require('expo-location') as typeof import('expo-location');
+    const task = purpose === 'running' ? 'runjourney-background-location' : 'runjourney-cycling-location';
+    if (await location.hasStartedLocationUpdatesAsync(task)) await location.stopLocationUpdatesAsync(task);
+    if (await location.hasStartedLocationUpdatesAsync(task)) throw Error('保存済みですがGPS停止を確認できません。所有権を保持しています');
+  },
 });

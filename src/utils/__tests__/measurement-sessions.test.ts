@@ -1,7 +1,7 @@
-import { createMeasurementSessions, type DraftInspection } from '@/services/measurement-sessions';
+import { createMeasurementSessions, type CompletionRecovery, type DraftInspection } from '@/services/measurement-sessions';
 import { createMeasurementOwnership, type MeasurementBinding, type OwnershipState } from '@/services/measurement-ownership';
 
-function fixture() {
+function fixture(recovery?: CompletionRecovery) {
   let state: OwnershipState = { version: 1, generation: 0, binding: null, leases: {} };
   const calls: string[] = [];
   // JS lifecycle contract double only. Actual atomic ownership is tested separately in Kotlin.
@@ -18,8 +18,8 @@ function fixture() {
     return JSON.stringify(state);
   });
   const drafts: DraftInspection = { running: null, cycling: null, unownedTracking: false };
-  const sessions = createMeasurementSessions(client, async () => drafts);
-  return { sessions, drafts, calls, current: () => state };
+  const sessions = createMeasurementSessions(client, async () => drafts, recovery);
+  return { sessions, drafts, calls, client, current: () => state };
 }
 test('legacy Running draft is adopted before another sport can start, without modifying the draft', async () => {
   const f = fixture(); f.drafts.running = { id: 'legacy', startedAt: new Date(1000).toISOString(), endedAt: null };
@@ -58,4 +58,29 @@ test('a competing OS GPS registration cannot be hidden by an existing owner/draf
   f.drafts.trackingPurposes = ['running'];
   await expect(f.sessions.forStart('cycling')).rejects.toThrow('GPS登録');
   expect(f.current().binding?.purpose).toBe('cycling');
+});
+test('a new JS coordinator recovers SQL-completed STOPPING without RAM lastFinished or a data write', async () => {
+  const completed = jest.fn(async () => true), stopTracking = jest.fn(async () => undefined);
+  const f = fixture(); const owner = await f.sessions.ensure('running', 'saved', 1000);
+  await f.sessions.activate(owner); await f.sessions.freeze(owner);
+  const restarted = createMeasurementSessions(f.client, async () => f.drafts, { completed, stopTracking });
+  expect(await restarted.forStart('cycling')).toBeNull();
+  expect(completed).toHaveBeenCalledWith(expect.objectContaining({ purpose: 'running', sessionId: 'saved', startedAt: 1000 }));
+  expect(stopTracking).toHaveBeenCalledWith('running'); expect(f.current().binding).toBeNull();
+});
+test('unmatched history or uncertain writes never release STOPPING ownership', async () => {
+  const completed = jest.fn(async () => false), stopTracking = jest.fn(async () => undefined);
+  const f = fixture({ completed, stopTracking }); const owner = await f.sessions.ensure('cycling', 'unmatched', 1000);
+  await f.sessions.activate(owner); await f.sessions.freeze(owner);
+  await expect(f.sessions.reconcile()).rejects.toThrow('照合'); expect(f.current().binding?.status).toBe('STOPPING');
+  completed.mockResolvedValue(true); f.current().leases.unknown = owner.generation;
+  await expect(f.sessions.reconcile()).rejects.toThrow('未確定'); expect(stopTracking).not.toHaveBeenCalled();
+});
+test('failed OS stop after completion preserves the same owner for another recovery attempt', async () => {
+  const stopTracking = jest.fn(async () => undefined).mockRejectedValueOnce(Error('OS stop failed'));
+  const f = fixture({ completed: async () => true, stopTracking }); const owner = await f.sessions.ensure('running', 'saved', 1000);
+  await f.sessions.activate(owner); await f.sessions.freeze(owner);
+  await expect(f.sessions.reconcile()).rejects.toThrow('OS stop failed');
+  expect(f.current().binding?.sessionId).toBe('saved');
+  expect(await f.sessions.reconcile()).toBeNull(); expect(stopTracking).toHaveBeenCalledTimes(2);
 });

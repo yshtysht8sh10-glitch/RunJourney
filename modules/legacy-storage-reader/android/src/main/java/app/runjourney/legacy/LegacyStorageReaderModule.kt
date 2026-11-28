@@ -39,6 +39,9 @@ class LegacyStorageReaderModule : Module() {
     AsyncFunction("activityMetadata") { kind: String, mode: String, limit: Int, offset: Int, promise: Promise ->
       dispatch(promise) { ActivityMetadataReader(requireNotNull(appContext.reactContext)).read(kind, mode, limit, offset) }
     }
+    AsyncFunction("activityRecordHeader") { kind: String, id: String, promise: Promise ->
+      dispatch(promise) { ActivityMetadataReader(requireNotNull(appContext.reactContext)).read(kind, "record", 1, 0, id) }
+    }
     OnDestroy {
       worker.execute { try { reader?.closeAll() } finally { worker.shutdown() } }
     }
