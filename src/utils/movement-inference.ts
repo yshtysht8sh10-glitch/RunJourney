@@ -25,7 +25,7 @@ export const usableObservation = (p: LocationPoint) => Number.isFinite(p.timesta
   && Number.isFinite(p.accuracy) && p.accuracy! >= 0 && p.accuracy! <= 20;
 
 /** Position evidence is primary. Provider speed alone cannot prove translation. */
-export function inferMovement(points: LocationPoint[]) {
+export function inferMovement(points: LocationPoint[], maxEdgeSpeed = 12.5) {
   const durationMs = points.length > 1 ? points.at(-1)!.timestamp - points[0].timestamp : 0;
   const distances = points.slice(1).map((p, i) => distanceBetween(points[i], p));
   const rates = distances.map((d, i) => d / ((points[i + 1].timestamp - points[i].timestamp) / 1000));
@@ -37,7 +37,7 @@ export function inferMovement(points: LocationPoint[]) {
   const coherence = pathLength ? displacement / pathLength : 0;
   const displacementSpeed = durationMs > 0 ? displacement / (durationMs / 1000) : 0;
   const movingEdgeRatio = rates.length ? rates.filter(r => r >= 0.5).length / rates.length : 0;
-  const covered = durationMs >= 5000 && points.length >= 2 && rates.every(r => Number.isFinite(r) && r <= 12.5);
+  const covered = durationMs >= 5000 && points.length >= 2 && rates.every(r => Number.isFinite(r) && r <= maxEdgeSpeed);
   const moving = covered && points.length >= 3 && displacement / (durationMs / 1000) >= 0.7
     && coherence >= 0.7 && rates.filter(r => r >= 0.5).length >= Math.ceil(rates.length * 0.7);
   const stationary = covered && spread <= 3 && displacement / (durationMs / 1000) <= 0.35;
@@ -48,7 +48,7 @@ export function inferMovement(points: LocationPoint[]) {
     && spread <= 8 && displacementSpeed <= 0.35 && coherence <= 0.35 && !moving;
   const summary = { durationMs, validCount: points.length, displacement, pathLength, spread, speedMedian, coherence,
     displacementSpeed, movingEdgeRatio, maxEdgeSpeed: Math.max(0, ...rates), firstEdgeSpeed: rates[0] ?? 0,
-    edgesValid: rates.every(r => Number.isFinite(r) && r <= 12.5),
+    edgesValid: rates.every(r => Number.isFinite(r) && r <= maxEdgeSpeed),
     stopEvidence: stationary ? 'narrow-stillness' as const : boundedDwell ? 'bounded-dwell' as const : 'none' as const };
   return { summary, moving, boundedDwell, stationary: stationary || boundedDwell };
 

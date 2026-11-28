@@ -47,3 +47,21 @@ Robolectric covers eight simultaneous claimants, recreation, stop/drain/stale ge
 double release, corrupt control file and failed write. It is not a device/process-kill test.
 Generated ignored Android files were created by Expo prebuild for unit tests only; no APK
 was installed or distributed. Existing module audio paths are not invoked by this port.
+
+## Third increment: Cycling recorder (#101, #102 prerequisite)
+
+Fixed Cycling DB connection and independent settings plus a recorder built from the existing
+SqliteStore, observation buffer/persistence gate, distance/time model and detector. Cycling
+adds no Running schema columns. Optional detector edge-speed parameter keeps the exact
+12.5m/s default; Cycling explicitly uses 30m/s. Remaining detector thresholds are unchanged.
+No PACE, cloud or Running diagnostic journal is invoked by the Cycling recorder.
+
+Each required checkpoint is awaited, so an eventual surrounding write lease can cover its
+entire I/O lifetime; no untracked delayed checkpoint is introduced. Failed I/O retains a
+cumulative RAM snapshot for retry, and final latest GPS is flushed before completion.
+The recorder alone is not connected to START/task/UI and does not prove mutual exclusion.
+
+Focused Cycling/Running/movement/PACE tests: 48 passed; typecheck/Lint passed. The manual
+resume test initially assumed a permissive distance edge; it now explicitly asserts the
+existing conservative boundary model (25m in that fixture). No production threshold or
+boundary handling was relaxed. All SQLite test data are disposable in-memory synthetic data.

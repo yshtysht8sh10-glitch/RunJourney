@@ -142,7 +142,7 @@ export function recordDiagnostic(run: ActiveRun, entry: StopDiagnostic): ActiveR
     processed: run.diagnostics.processed + 1, counts: { ...run.diagnostics.counts, [key]: (run.diagnostics.counts[key] ?? 0) + 1 } } };
 }
 
-export function detectStop(run: ActiveRun, point: LocationPoint, inputSource: StopDiagnostic['inputSource'] = 'live-persisted', observations?: LocationPoint[]): ActiveRun {
+export function detectStop(run: ActiveRun, point: LocationPoint, inputSource: StopDiagnostic['inputSource'] = 'live-persisted', observations?: LocationPoint[], maxSpeed: number = RUN_CONTROL.maxSpeed): ActiveRun {
   const state = stateOf(run), prior = run.detector?.version === 4 ? run.detector : {};
   const last = prior.last;
   const detail: Omit<StopDiagnostic, 'decision'> = { timestamp: point.timestamp, receivedAt: Date.now(), state,
@@ -162,7 +162,7 @@ export function detectStop(run: ActiveRun, point: LocationPoint, inputSource: St
   }
   const gap = last && point.timestamp - last.timestamp > RUN_CONTROL.maxGapMs;
   // Reject a jump without allowing it to replace the last reliable position.
-  if (!gap && last && distanceBetween(last, point) / ((point.timestamp - last.timestamp) / 1000) > RUN_CONTROL.maxSpeed)
+  if (!gap && last && distanceBetween(last, point) / ((point.timestamp - last.timestamp) / 1000) > maxSpeed)
     return report(run, 'HOLD', StopReason.SPEED_SPIKE);
   const rawWindow = observations ?? [...(prior.window ?? []), point];
   const available = rawWindow.filter(p => usableObservation(p) && p.timestamp >= Math.max(boundary, point.timestamp - 15000) && p.timestamp <= point.timestamp);
@@ -172,25 +172,25 @@ export function detectStop(run: ActiveRun, point: LocationPoint, inputSource: St
   let window = gap ? [point] : recent.length >= 3 ? recent : available.slice(-3);
   window = [...new Map(window.map(p => [p.timestamp, p])).values()].sort((a, b) => a.timestamp - b.timestamp).slice(-256);
   // A bad fix in the rolling source must not create an outlier edge later.
-  window = window.filter((p, i, all) => !i || distanceBetween(all[i - 1], p) / ((p.timestamp - all[i - 1].timestamp) / 1000) <= RUN_CONTROL.maxSpeed);
+  window = window.filter((p, i, all) => !i || distanceBetween(all[i - 1], p) / ((p.timestamp - all[i - 1].timestamp) / 1000) <= maxSpeed);
   // Earliest qualifying suffix is the evidence onset, not the confirmation time.
   const target = state === 'AUTO_STOP' ? 'moving' : 'stationary';
   let candidate: LocationPoint[] | undefined;
   for (let i = 0; i < window.length - 1; i++) {
-    const suffix = window.slice(i), inference = inferMovement(suffix);
+    const suffix = window.slice(i), inference = inferMovement(suffix, maxSpeed);
     if (!inference[target]) continue;
     if (target === 'stationary' && !inference.boundedDwell && distanceBetween(suffix[0], suffix[1]) / ((suffix[1].timestamp - suffix[0].timestamp) / 1000) > 0.5) continue;
     if (target === 'moving' && distanceBetween(suffix[0], suffix[1]) / ((suffix[1].timestamp - suffix[0].timestamp) / 1000) < 0.5) continue;
     candidate = suffix; break;
   }
-  const inference = inferMovement(candidate ?? window);
+  const inference = inferMovement(candidate ?? window, maxSpeed);
   detail.window = inference.summary;
   const first = window[0];
-  const provisionalStill = state === 'RUNNING' && first && (inferMovement(window).summary.spread <= 3 || inferMovement(window).stationary) ? first.timestamp : undefined;
+  const provisionalStill = state === 'RUNNING' && first && (inferMovement(window, maxSpeed).summary.spread <= 3 || inferMovement(window, maxSpeed).stationary) ? first.timestamp : undefined;
   const movingStart = state === 'AUTO_STOP' ? window.find((p, i) => {
     const next = window[i + 1];
     return next && distanceBetween(p, next) / ((next.timestamp - p.timestamp) / 1000) >= 0.5
-      && inferMovement(window.slice(i)).summary.coherence >= 0.7;
+      && inferMovement(window.slice(i), maxSpeed).summary.coherence >= 0.7;
   }) : undefined;
   const movement = movingStart ? { startedAt: movingStart.timestamp, origin: movingStart, fixes: window.filter(p => p.timestamp >= movingStart.timestamp).length } : undefined;
   const updated: ActiveRun = { ...run, detector: { version: 4, last: point, window, stillSince: provisionalStill, movement } };
