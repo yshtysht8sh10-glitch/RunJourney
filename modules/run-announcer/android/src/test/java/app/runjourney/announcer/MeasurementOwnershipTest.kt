@@ -131,4 +131,39 @@ class MeasurementOwnershipTest {
     assertEquals("cycle1", JSONObject(owner.command("read")).getJSONObject("binding").getString("sessionId"))
     rejected { claim() }
   }
+  @Test fun newInstallTopDefaultsSurviveStorageGateCreatingAnEmptyDatabase() {
+    val sqlite = File(context.filesDir, "SQLite/runjourney.sqlite")
+    sqlite.delete()
+    assertFalse(JSONObject(owner.command("topRead")).getBoolean("assistantEnabled"))
+    sqlite.parentFile!!.mkdirs(); sqlite.writeText("synthetic empty gate-created DB")
+    assertFalse(JSONObject(newOwner().command("topRead")).getBoolean("assistantEnabled"))
+    sqlite.delete()
+  }
+  @Test fun bootstrapEvidenceSurvivesFailureBeforeTopSettingsAck() {
+    val sqlite = File(context.filesDir, "SQLite/runjourney.sqlite"); sqlite.delete()
+    var renames = 0
+    val interrupted = newOwner(ioCheck = { if(it == "RENAME" && ++renames == 2) throw java.io.IOException("after evidence ACK") })
+    try { interrupted.command("topRead"); fail("Expected interrupted settings write") } catch (_: java.io.IOException) { }
+    sqlite.parentFile!!.mkdirs(); sqlite.writeText("synthetic gate-created DB")
+    assertFalse(JSONObject(newOwner().command("topRead")).getBoolean("assistantEnabled"))
+    sqlite.delete()
+  }
+  @Test fun upgradeDefaultsOnAndGenericTimePreferenceIsNotDestroyed() {
+    val sqlite = File(context.filesDir, "SQLite/runjourney.sqlite")
+    sqlite.parentFile!!.mkdirs(); sqlite.writeText("synthetic pre-existing file")
+    val top = JSONObject(owner.command("topRead"))
+    assertTrue(top.getBoolean("assistantEnabled")); assertFalse(top.getBoolean("genericTimeEnabled"))
+    top.put("assistantEnabled", false).put("genericTimeEnabled", true)
+    owner.command("topSave", top.toString()); top.put("assistantEnabled", true)
+    owner.command("topSave", top.toString())
+    assertTrue(JSONObject(owner.command("topRead")).getBoolean("genericTimeEnabled"))
+    sqlite.delete()
+  }
+  @Test fun topSaveCannotRaceWithActiveClaimOrReplaceUnknownSettings() {
+    val top = owner.command("topRead"); claim()
+    rejected { owner.command("topSave", top) }
+    val file = File(context.noBackupFilesDir, "measurement-ownership-v1/top-settings.json")
+    val unknown = "{\"version\":2}"
+    file.writeText(unknown); rejected { owner.command("topRead") }; assertEquals(unknown, file.readText())
+  }
 }

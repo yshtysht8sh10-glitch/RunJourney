@@ -80,3 +80,17 @@ history/trash exclusion, draft inspection without GPS tables, orphan refusal, co
 preservation and invalid capability/page refusal. Typecheck/Lint passed. Existing WAL behavior
 is inherited from the previously reviewed read-only driver; new device/WAL acceptance is not
 claimed by these six focused tests.
+
+## Fifth increment: independent TOP settings and bootstrap evidence (#99)
+
+Native TOP settings use the same cross-process ownership lock and checked durable writer.
+They do not use Running's settings table. New installation defaults OFF/time OFF; an existing
+Running/Cycling/RKStorage file selects assistant ON. Evidence is persisted before settings,
+so storage-gate creation of an empty DB after interruption cannot reclassify a new install.
+Assistant ON derives effective time ON without overwriting genericTimeEnabled. Active
+ownership prevents TOP saves. Corrupt/unknown settings are preserved and rejected.
+
+The port is not mounted in the root layout yet. The actual bootstrap-before-gate sequence
+and legacy draft adoption must be connected and tested before enabling another purpose.
+12 related JS tests and 17 synthetic Robolectric tests passed; typecheck/Lint passed.
+The same explicitly documented host syscall doubles apply. No real installation was changed.

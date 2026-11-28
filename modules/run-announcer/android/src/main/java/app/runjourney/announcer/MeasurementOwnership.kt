@@ -12,7 +12,7 @@ import java.util.UUID
  * A lease never expires by time: uncertain writes block the next START until reconciled.
  * This port does not start GPS or decide whether legacy drafts can be adopted.
  */
-class MeasurementOwnership(context: Context, private val ioCheck: (String) -> Unit = {},
+class MeasurementOwnership(private val context: Context, private val ioCheck: (String) -> Unit = {},
   private val atomicReplace: (File, File) -> Unit = { source, target -> Os.rename(source.absolutePath, target.absolutePath) },
   private val directorySync: (File) -> Unit = { folder ->
     check(folder.isDirectory) { "OWNERSHIP_DIRECTORY" }
@@ -74,13 +74,13 @@ class MeasurementOwnership(context: Context, private val ioCheck: (String) -> Un
     return state
   }
 
-  private fun save(state: JSONObject) {
+  private fun save(state: JSONObject, file: File = stateFile) {
     check(allowWrite()) { "OWNERSHIP_WRITE_FAILED" }
     val bytes = state.toString().toByteArray(Charsets.UTF_8)
     check(bytes.size <= 32768) { "OWNERSHIP_SIZE" }
     // AtomicFile.finishWrite silently logs some sync/rename failures. A safety
     // ownership ACK instead uses checked syscalls: file sync -> rename -> dir sync.
-    val file = stateFile; val pending = File(file.path + ".new")
+    val pending = File(file.path + ".new")
     pending.outputStream().use { output ->
       output.write(bytes); ioCheck("FILE_SYNC"); output.fd.sync()
     }
@@ -94,6 +94,35 @@ class MeasurementOwnership(context: Context, private val ioCheck: (String) -> Un
     directorySync(folder)
   }
 
+  private fun readJson(file: File): JSONObject {
+    check(file.length() <= 4096 && !File(file.path + ".bak").exists()) { "OWNERSHIP_SETTINGS_CORRUPT" }
+    return JSONObject(file.readText(Charsets.UTF_8))
+  }
+
+  private fun validateTop(value: JSONObject) {
+    check(integer(value.get("version")) == 1L && listOf("assistantEnabled", "genericTimeEnabled", "onboardingSeen").all { value.get(it) is Boolean }) { "OWNERSHIP_SETTINGS_CORRUPT" }
+    check(value.length() == 4) { "OWNERSHIP_SETTINGS_CORRUPT" }
+  }
+
+  private fun topSettings(): JSONObject {
+    val settings = File(directory, "top-settings.json")
+    check(!File(settings.path + ".bak").exists()) { "OWNERSHIP_SETTINGS_CORRUPT" }
+    if(settings.exists()) return readJson(settings).also { validateTop(it) }
+    val bootstrap = File(directory, "installation-evidence.json")
+    check(!File(bootstrap.path + ".bak").exists()) { "OWNERSHIP_SETTINGS_CORRUPT" }
+    val evidence = if(bootstrap.exists()) readJson(bootstrap) else {
+      // Must be called before the ordinary storage gate can initialize any DB.
+      val sqlite = File(context.filesDir, "SQLite")
+      JSONObject().put("version", 1).put("existingInstallation", listOf(
+        File(sqlite, "runjourney.sqlite"), File(sqlite, "runjourney-cycling.sqlite"), context.getDatabasePath("RKStorage")
+      ).any { it.exists() }).also { save(it, bootstrap) }
+    }
+    check(integer(evidence.get("version")) == 1L && evidence.get("existingInstallation") is Boolean) { "OWNERSHIP_SETTINGS_CORRUPT" }
+    val initial = JSONObject().put("version", 1).put("assistantEnabled", evidence.getBoolean("existingInstallation"))
+      .put("genericTimeEnabled", false).put("onboardingSeen", false)
+    save(initial, settings); return initial
+  }
+
   fun command(action: String, payload: String = "{}"): String = synchronized(monitor) {
     check(payload.length <= 4096) { "OWNERSHIP_SIZE" }
     val created = !directory.isDirectory
@@ -105,6 +134,13 @@ class MeasurementOwnership(context: Context, private val ioCheck: (String) -> Un
     RandomAccessFile(File(directory, "owner.lock"), "rw").use { lockFile ->
       lockFile.channel.lock().use {
         val state = load(); val request = JSONObject(payload)
+        if (action == "topRead") return@synchronized topSettings().toString()
+        if (action == "topSave") {
+          check(state.isNull("binding")) { "OWNERSHIP_BUSY" }
+          // A corrupt/unknown existing settings file must not be silently reset.
+          topSettings(); validateTop(request)
+          save(request, File(directory, "top-settings.json")); return@synchronized request.toString()
+        }
         if (action == "read") return@synchronized state.toString()
         var binding = if (state.isNull("binding")) null else state.getJSONObject("binding")
         val leases = state.getJSONObject("leases")
