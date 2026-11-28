@@ -88,3 +88,26 @@ test('Auto Stop is opt-in; same detector can resume at Cycling speed without Run
   expect((await recorder.getActive())?.diagnostics?.counts.STOP_CONFIRMED).toBe(1);
   expect((await recorder.getActive())?.diagnostics?.counts.RESUME_CONFIRMED).toBe(1);
 });
+test('failed prepareFinish must keep failing until its original end and tail are durably ACKed', async () => {
+  await recorder.create('end-retry', new Date(origin).toISOString(), DEFAULT_CYCLING_SETTINGS);
+  for (let second = 0; second <= 13; second++) await recorder.ingest([raw(second, second * 20)]);
+  fail = true;
+  await expect(recorder.prepareFinish(new Date(origin + 14000).toISOString())).rejects.toThrow();
+  await expect(recorder.prepareFinish(new Date(origin + 30000).toISOString())).rejects.toThrow();
+  expect((await store.getDraft())?.endedAt).toBeUndefined();
+  fail = false; await recorder.prepareFinish(new Date(origin + 50000).toISOString());
+  const stored = (await store.getDraft())!;
+  expect(stored.endedAt).toBe(new Date(origin + 14000).toISOString());
+  expect(stored.points.at(-1)?.timestamp).toBe(origin + 13000);
+});
+test('pause flushes received pre-pause raw tail and retains it across save failure and retry', async () => {
+  await recorder.create('pause-tail', new Date(origin).toISOString(), DEFAULT_CYCLING_SETTINGS);
+  for (let second = 0; second <= 9; second++) await recorder.ingest([raw(second, second * 20)]);
+  fail = true; await expect(recorder.pause(true, origin + 10000)).rejects.toThrow();
+  expect((await recorder.getActive())?.points.at(-1)?.timestamp).toBe(origin + 9000);
+  fail = false; await recorder.pause(true, origin + 10000);
+  await recorder.ingest([raw(10, 180), raw(15, 180)]);
+  await recorder.prepareFinish(new Date(origin + 16000).toISOString()); const saved = (await recorder.finish())!;
+  expect(saved.points.filter(p => p.timestamp === origin + 9000)).toHaveLength(1);
+  expect(saved.distanceMeters).toBeCloseTo(180, 0);
+});

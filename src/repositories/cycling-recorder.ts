@@ -69,15 +69,25 @@ export class CyclingRecorder {
   pause(paused: boolean, at: number) {
     return this.serialized(async () => {
       const active = await this.restore(); if (!active || active.endedAt) return active;
-      let updated = transition(active, paused ? 'BREAK' : 'RUNNING', at, 'user') as CyclingDraft;
+      const tail = this.observation?.latestPoint;
+      const points = tail && tail.timestamp <= at && this.observation!.gate.accept(tail.timestamp, true)
+        ? [...active.points, tail] : active.points;
+      // Preserve the pre-boundary raw tail in RAM even if the pause save fails.
+      const flushed = { ...active, points };
+      flushed.distanceMeters = effectiveDistance(flushed, CYCLING_PROFILE.distance);
+      this.active = flushed; this.pending = flushed;
+      let updated = transition(flushed, paused ? 'BREAK' : 'RUNNING', at, 'user') as CyclingDraft;
       updated = { ...updated, distanceMeters: effectiveDistance(updated, CYCLING_PROFILE.distance) };
-      await (await this.open()).saveDraft(updated); this.active = updated; return updated;
+      await (await this.open()).saveDraft(updated); this.active = updated; this.pending = null; return updated;
     });
   }
   prepareFinish(at: string) {
     return this.serialized(async () => {
       const active = await this.restore(); if (!active) return null;
-      if (active.endedAt) return active;
+      if (active.endedAt) {
+        // A frozen RAM value is not a durable ACK. Retry the original snapshot.
+        await (await this.open()).saveDraft(active); this.pending = null; return active;
+      }
       const pending = this.observation?.latestPoint;
       const end = Date.parse(at);
       if (!Number.isFinite(end) || end < Date.parse(active.startedAt)) throw Error('終了時刻が不正です');
