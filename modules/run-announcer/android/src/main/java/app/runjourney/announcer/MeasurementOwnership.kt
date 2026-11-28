@@ -1,7 +1,8 @@
 package app.runjourney.announcer
 
 import android.content.Context
-import android.util.AtomicFile
+import android.system.Os
+import android.system.OsConstants
 import org.json.JSONObject
 import java.io.File
 import java.io.RandomAccessFile
@@ -11,30 +12,41 @@ import java.util.UUID
  * A lease never expires by time: uncertain writes block the next START until reconciled.
  * This port does not start GPS or decide whether legacy drafts can be adopted.
  */
-class MeasurementOwnership(context: Context, private val allowWrite: () -> Boolean = { true }) {
+class MeasurementOwnership(context: Context, private val ioCheck: (String) -> Unit = {},
+  private val allowWrite: () -> Boolean = { true }) {
   private val directory = File(context.noBackupFilesDir, "measurement-ownership-v1")
-  private val stateFile get() = AtomicFile(File(directory, "owner.json"))
+  private val stateFile get() = File(directory, "owner.json")
 
-  companion object { private val monitor = Any() }
+  companion object { private val monitor = Any(); private val ensuredDirectories = mutableSetOf<String>() }
 
   private fun fresh() = JSONObject().put("version", 1).put("generation", 0L)
     .put("binding", JSONObject.NULL).put("leases", JSONObject())
 
+  private fun integer(value: Any): Long {
+    check(value is Number) { "OWNERSHIP_INTEGER" }
+    val number = value.toDouble()
+    check(number.isFinite() && number >= 0 && number <= 9007199254740991.0 && number == value.toLong().toDouble()) { "OWNERSHIP_INTEGER" }
+    return value.toLong()
+  }
+
   private fun validateBinding(b: JSONObject) {
+    check(listOf("purpose", "databaseKey", "sessionId", "status").all { b.get(it) is String }) { "OWNERSHIP_STRING" }
     val purpose = b.getString("purpose")
     val expected = when (purpose) { "running" -> "runjourney.sqlite"; "cycling" -> "runjourney-cycling.sqlite"; "generic" -> "none"; else -> error("OWNERSHIP_PURPOSE") }
     check(b.getString("databaseKey") == expected) { "OWNERSHIP_DESTINATION" }
-    check(b.getInt("profileVersion") == 1) { "OWNERSHIP_PROFILE" }
+    check(integer(b.get("profileVersion")) == 1L) { "OWNERSHIP_PROFILE" }
     check(b.getString("sessionId").matches(Regex("[A-Za-z0-9_-]{1,128}"))) { "OWNERSHIP_ID" }
-    check(b.getDouble("startedAt").isFinite() && b.getDouble("startedAt") >= 0) { "OWNERSHIP_CLOCK" }
+    check(b.get("startedAt") is Number && b.getDouble("startedAt").isFinite() && b.getDouble("startedAt") >= 0) { "OWNERSHIP_CLOCK" }
     check(b.getString("status") in listOf("STARTING", "ACTIVE", "STOPPING", "FINISH_FAILED")) { "OWNERSHIP_STATUS" }
-    check(b.getLong("generation") > 0) { "OWNERSHIP_GENERATION" }
+    check(integer(b.get("generation")) > 0) { "OWNERSHIP_GENERATION" }
   }
 
   private fun load(): JSONObject {
     val file = stateFile
-    if (!file.baseFile.exists() && !File(file.baseFile.path + ".bak").exists()) return fresh()
-    val text = file.openRead().use { input ->
+    // Never recover/overwrite an ambiguous backup from an unknown writer.
+    check(!File(file.path + ".bak").exists()) { "OWNERSHIP_RECOVERY_REQUIRED" }
+    if (!file.exists()) return fresh()
+    val text = file.inputStream().use { input ->
       val output = java.io.ByteArrayOutputStream()
       val buffer = ByteArray(4096)
       while (true) {
@@ -45,13 +57,13 @@ class MeasurementOwnership(context: Context, private val allowWrite: () -> Boole
       output.toString("UTF-8")
     }
     val state = JSONObject(text)
-    check(state.has("binding") && state.getInt("version") == 1 && state.getLong("generation") >= 0) { "OWNERSHIP_VERSION" }
+    check(state.has("binding") && integer(state.get("version")) == 1L && integer(state.get("generation")) >= 0) { "OWNERSHIP_VERSION" }
     val leases = state.getJSONObject("leases")
     check(leases.length() <= 128) { "OWNERSHIP_LEASE_LIMIT" }
     if (!state.isNull("binding")) {
       val binding = state.getJSONObject("binding"); validateBinding(binding)
       check(binding.getLong("generation") == state.getLong("generation")) { "OWNERSHIP_GENERATION" }
-      leases.keys().forEach { token -> check(leases.getLong(token) == state.getLong("generation")) { "OWNERSHIP_LEASE" } }
+      leases.keys().forEach { token -> check(integer(leases.get(token)) == state.getLong("generation")) { "OWNERSHIP_LEASE" } }
     } else check(leases.length() == 0) { "OWNERSHIP_ORPHAN_LEASE" }
     return state
   }
@@ -60,14 +72,31 @@ class MeasurementOwnership(context: Context, private val allowWrite: () -> Boole
     check(allowWrite()) { "OWNERSHIP_WRITE_FAILED" }
     val bytes = state.toString().toByteArray(Charsets.UTF_8)
     check(bytes.size <= 32768) { "OWNERSHIP_SIZE" }
-    val file = stateFile; val output = file.startWrite()
-    try { output.write(bytes); file.finishWrite(output) }
-    catch (error: Throwable) { file.failWrite(output); throw error }
+    // AtomicFile.finishWrite silently logs some sync/rename failures. A safety
+    // ownership ACK instead uses checked syscalls: file sync -> rename -> dir sync.
+    val file = stateFile; val pending = File(file.path + ".new")
+    pending.outputStream().use { output ->
+      output.write(bytes); ioCheck("FILE_SYNC"); output.fd.sync()
+    }
+    ioCheck("RENAME"); Os.rename(pending.absolutePath, file.absolutePath)
+    syncDirectory(directory)
+    check(file.readBytes().contentEquals(bytes)) { "OWNERSHIP_READBACK" }
+  }
+
+  private fun syncDirectory(folder: File) {
+    ioCheck("DIRECTORY_SYNC")
+    val descriptor = Os.open(folder.absolutePath, OsConstants.O_RDONLY or OsConstants.O_DIRECTORY, 0)
+    try { Os.fsync(descriptor) } finally { Os.close(descriptor) }
   }
 
   fun command(action: String, payload: String = "{}"): String = synchronized(monitor) {
     check(payload.length <= 4096) { "OWNERSHIP_SIZE" }
-    check(directory.isDirectory || directory.mkdirs()) { "OWNERSHIP_DIRECTORY" }
+    val created = !directory.isDirectory
+    check(!created || directory.mkdirs()) { "OWNERSHIP_DIRECTORY" }
+    // Persist the directory once per process, and retry after a failed creation ACK.
+    if (created || directory.absolutePath !in ensuredDirectories) {
+      syncDirectory(requireNotNull(directory.parentFile)); ensuredDirectories.add(directory.absolutePath)
+    }
     RandomAccessFile(File(directory, "owner.lock"), "rw").use { lockFile ->
       lockFile.channel.lock().use {
         val state = load(); val request = JSONObject(payload)
@@ -76,7 +105,9 @@ class MeasurementOwnership(context: Context, private val allowWrite: () -> Boole
         val leases = state.getJSONObject("leases")
         if (action == "claim") {
           check(binding == null) { "OWNERSHIP_BUSY" }
-          check(state.getLong("generation") < Long.MAX_VALUE) { "OWNERSHIP_GENERATION" }
+          check(state.getLong("generation") < 9007199254740991L) { "OWNERSHIP_GENERATION" }
+          check(listOf("sessionId", "purpose", "databaseKey").all { request.get(it) is String }
+            && request.get("startedAt") is Number && integer(request.get("profileVersion")) == 1L) { "OWNERSHIP_REQUEST" }
           val next = state.getLong("generation") + 1
           binding = JSONObject().put("sessionId", request.getString("sessionId"))
             .put("purpose", request.getString("purpose")).put("databaseKey", request.getString("databaseKey"))
@@ -87,7 +118,7 @@ class MeasurementOwnership(context: Context, private val allowWrite: () -> Boole
           return@synchronized state.toString()
         }
         val current = checkNotNull(binding) { "OWNERSHIP_IDLE" }
-        check(current.getString("sessionId") == request.getString("sessionId") && current.getLong("generation") == request.getLong("generation")) { "OWNERSHIP_STALE" }
+        check(request.get("sessionId") is String && current.getString("sessionId") == request.getString("sessionId") && current.getLong("generation") == integer(request.get("generation"))) { "OWNERSHIP_STALE" }
         when (action) {
           "activate" -> {
             check(current.getString("status") == "STARTING") { "OWNERSHIP_STATUS" }

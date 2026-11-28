@@ -94,4 +94,35 @@ class MeasurementOwnershipTest {
     }.also { it.start() } }
     gate.countDown(); threads.forEach { it.join() }; assertEquals(1, winners.get())
   }
+  @Test fun fractionalAndStringIntegersAreRejectedWithoutChangingRawControl() {
+    owner.command("read")
+    val file = File(context.noBackupFilesDir, "measurement-ownership-v1/owner.json")
+    listOf("1.5" to "0", "1" to "1.5", "\"1\"" to "0", "1" to "9007199254740992").forEach { (version, generation) ->
+      val raw = "{\"version\":$version,\"generation\":$generation,\"binding\":null,\"leases\":{}}"
+      file.writeText(raw); rejected { claim() }; assertEquals(raw, file.readText())
+    }
+  }
+  @Test fun fractionalRequestProfileAndGenerationAreRejected() {
+    rejected { owner.command("claim", request().put("profileVersion", 1.5).toString()) }
+    val b = claim()
+    rejected { owner.command("activate", JSONObject(b.toString()).put("generation", 1.5).toString()) }
+    assertEquals("STARTING", JSONObject(owner.command("read")).getJSONObject("binding").getString("status"))
+  }
+  @Test fun checkedFileSyncOrRenameFailureNeverAcknowledgesClaim() {
+    listOf("FILE_SYNC", "RENAME").forEach { stage ->
+      val failed = MeasurementOwnership(context, ioCheck = { if(it == stage) throw java.io.IOException("injected") })
+      var acknowledged = false
+      try { failed.command("claim", request().toString()); acknowledged = true } catch (_: java.io.IOException) { }
+      assertFalse(acknowledged); assertTrue(JSONObject(owner.command("read")).isNull("binding"))
+    }
+  }
+  @Test fun postRenameDirectorySyncFailureIsUnknownAndFencesAnotherStart() {
+    owner.command("read") // Parent directory sync already confirmed in this synthetic process.
+    val failed = MeasurementOwnership(context, ioCheck = { if(it == "DIRECTORY_SYNC") throw java.io.IOException("injected") })
+    var acknowledged = false
+    try { failed.command("claim", request().toString()); acknowledged = true } catch (_: java.io.IOException) { }
+    assertFalse(acknowledged)
+    assertEquals("cycle1", JSONObject(owner.command("read")).getJSONObject("binding").getString("sessionId"))
+    rejected { claim() }
+  }
 }
