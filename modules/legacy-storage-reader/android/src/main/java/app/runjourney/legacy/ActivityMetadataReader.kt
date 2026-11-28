@@ -26,7 +26,7 @@ internal class ActivityMetadataReader(private val context: Context) {
         db.prepare("PRAGMA user_version").use { cursor ->
           check(cursor.step() && cursor.getLong(0) in 1..2) { "LEGACY_ACTIVITY_VERSION" }
         }
-        val startInstant = instant("started_at"), endInstant = instant("ended_at")
+        val startInstant = instant("started_at"); val endInstant = instant("ended_at")
         val columns = "substr(id,1,257),substr(started_at,1,65),substr(ended_at,1,65),effective_distance,effective_time,typeof(id),typeof(started_at),typeof(ended_at),typeof(effective_distance),typeof(effective_time),$startInstant,$endInstant"
         val sql = if(mode == "draft") "SELECT $columns FROM runs WHERE status='draft' LIMIT 2"
         else "SELECT $columns FROM runs WHERE status='completed' AND trashed_at IS NULL ORDER BY ($startInstant IS NOT NULL) ASC,$startInstant DESC,id ASC LIMIT ? OFFSET ?"
