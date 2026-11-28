@@ -113,3 +113,25 @@ Focused lifecycle/Running/PACE tests: 23 passed; typecheck/Lint passed. Two test
 the real Running SQLite path with a JS ownership/OS double, including goal completion without
 self-drain deadlock. Five controller tests are contract simulations. Neither category is a
 physical-device test. Full integrated regression and independent review are still required.
+
+## Seventh increment: Cycling service/task/voice (#101/#102)
+
+Cycling START requires assistant ON, background permissions, compatible ownership and its
+fixed draft. Its separate TaskManager task enters the shared recorder under a write lease.
+Restore retains the same ID/settings/DB; STOP drains writes, freezes the end timestamp,
+stops OS GPS, saves history and then releases ownership. GPS/voice startup or STOP failures
+retain the draft/ownership for retry. No external sensor, cloud or Wear OS path is enabled.
+
+Cycling voice uses the existing Native queue/chime/focus/dedup and shared state wording.
+Five-minute reports contain active time, distance and average km/h, never PACE savings or
+marathon estimates. Recovery text is also Cycling-specific. Voice IDs include the activity;
+an owner check before Native queue mutation rejects late packets from the previous purpose.
+Cycling ended packets are scoped; the common deferred service shutdown rechecks context so
+it cannot stop a new activity. New RUN-start/end spoken wording was not added.
+
+Synthetic service tests use real separate SQLite stores and OS/ownership/audio doubles:
+normal STOP, voice failure, GPS startup failure/restore, OS STOP failure/retry, competing
+Running owner. A same-ID Running record/settings snapshot remains identical in every case.
+Nine service/voice JS checks passed, plus prior recorder/Running checks. Native voice-policy,
+recovery and binding tests: 43 passed. Typecheck/Lint passed. Physical GPS, background,
+Bluetooth audibility and energy/latency measurements remain unverified. UI is not connected.

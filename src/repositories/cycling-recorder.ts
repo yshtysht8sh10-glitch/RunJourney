@@ -99,4 +99,5 @@ export class CyclingRecorder {
     });
   }
   get currentState() { return this.active ? stateOf(this.active) : null; }
+  get latestPoint() { return this.observation?.latestPoint ? { ...this.observation.latestPoint } : null; }
 }
