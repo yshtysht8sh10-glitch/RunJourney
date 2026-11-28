@@ -25,7 +25,9 @@ export function createMeasurementSessions(client: Client, inspect: () => Promise
       if (!draft && recovery && ['STOPPING', 'FINISH_FAILED'].includes(current.binding.status)) {
         if (Object.keys(current.leases).length) throw Error('終了書込みの成否が未確定です。記録と所有権を保持しています');
         if (!(await recovery.completed(current.binding))) throw Error('保存済みの終了記録を照合できません。削除・初期化せず確認してください');
-        await recovery.stopTracking(current.binding.purpose);
+        // Fence OS stop as well as SQLite: a stale concurrent recovery must not
+        // stop a newer session's registration before discovering its old generation.
+        await client.withWriteLease(current.binding, async fixed => recovery.stopTracking(fixed.purpose), true);
         await client.stop(current.binding); await client.finish(current.binding);
         return null;
       }

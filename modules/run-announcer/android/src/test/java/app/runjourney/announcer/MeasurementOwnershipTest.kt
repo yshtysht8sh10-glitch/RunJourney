@@ -29,6 +29,18 @@ class MeasurementOwnershipTest {
     File(context.noBackupFilesDir, "measurement-ownership-v1").deleteRecursively()
     owner = newOwner()
   }
+  @Test fun recoveryLeaseFencesOsStopAgainstFinishAndNewGeneration() {
+    val b = claim(); owner.command("activate", b.toString())
+    rejected { owner.command("recoveryLease", b.toString()) }
+    owner.command("stop", b.toString())
+    val token = JSONObject(owner.command("recoveryLease", b.toString())).getString("token")
+    rejected { owner.command("recoveryLease", b.toString()) }
+    rejected { owner.command("finish", b.toString()) }
+    rejected { claim() }
+    owner.command("release", JSONObject(b.toString()).put("token", token).toString())
+    owner.command("finish", b.toString()); claim()
+    rejected { owner.command("recoveryLease", b.toString()) }
+  }
   @Test fun durableClaimLocksOtherPurposesAndBindsDestination() {
     val b = claim()
     assertEquals("STARTING", b.getString("status"))

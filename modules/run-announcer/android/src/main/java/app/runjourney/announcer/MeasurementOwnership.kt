@@ -172,8 +172,10 @@ class MeasurementOwnership(private val context: Context, private val ioCheck: (S
             check(current.getString("status") == "STARTING") { "OWNERSHIP_STATUS" }
             current.put("status", "ACTIVE")
           }
-          "lease" -> {
-            check(current.getString("status") == "ACTIVE") { "OWNERSHIP_NOT_ACTIVE" }
+          "lease", "recoveryLease" -> {
+            if(action == "recoveryLease") {
+              check(current.getString("status") in listOf("STOPPING", "FINISH_FAILED") && leases.length() == 0) { "OWNERSHIP_RECOVERY_BUSY" }
+            } else check(current.getString("status") == "ACTIVE") { "OWNERSHIP_NOT_ACTIVE" }
             check(leases.length() < 128) { "OWNERSHIP_LEASE_LIMIT" }
             val token = UUID.randomUUID().toString()
             leases.put(token, current.getLong("generation")); save(state)

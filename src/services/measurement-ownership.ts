@@ -49,8 +49,8 @@ export function createMeasurementOwnership(port: OwnershipPort) {
     async failed(owner: MeasurementBinding) { return state(await command('failed', binding(owner))); },
     /** Invoke only after OS tracking stop AND the bound sink's final durable ACK. */
     async finish(owner: MeasurementBinding) { return state(await command('finish', binding(owner))); },
-    async withWriteLease<T>(owner: MeasurementBinding, write: (fixed: MeasurementBinding) => Promise<T>): Promise<T> {
-      const lease = JSON.parse(await command('lease', binding(owner))) as { token: string; binding: MeasurementBinding };
+    async withWriteLease<T>(owner: MeasurementBinding, write: (fixed: MeasurementBinding) => Promise<T>, recovering = false): Promise<T> {
+      const lease = JSON.parse(await command(recovering ? 'recoveryLease' : 'lease', binding(owner))) as { token: string; binding: MeasurementBinding };
       const fixed = binding(lease.binding);
       if (!lease.token || typeof lease.token !== 'string' || fixed.sessionId !== owner.sessionId
         || fixed.generation !== owner.generation || fixed.purpose !== owner.purpose) throw Error('書込みリースが一致しません');

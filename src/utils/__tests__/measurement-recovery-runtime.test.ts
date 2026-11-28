@@ -14,6 +14,7 @@ beforeEach(() => {
   jest.spyOn(MeasurementOwnership, 'read').mockResolvedValue({ version: 1, generation: 1, binding: owner, leases: {} });
   jest.spyOn(MeasurementOwnership, 'stop').mockResolvedValue({ version: 1, generation: 1, binding: owner, leases: {} });
   jest.spyOn(MeasurementOwnership, 'finish').mockResolvedValue({ version: 1, generation: 1, binding: null, leases: {} });
+  jest.spyOn(MeasurementOwnership, 'withWriteLease').mockImplementation(async (_owner, write) => write(owner));
   jest.mocked(reader.activityMetadata).mockResolvedValue({ exists: true, rows: [] });
   jest.mocked(reader.activityRecordHeader).mockResolvedValue({ exists: true, rows: [{ id: 'saved', startedAt: new Date(1000).toISOString(),
     endedAt: new Date(2000).toISOString(), distanceMeters: 1, activeRunningTime: 1 }] });

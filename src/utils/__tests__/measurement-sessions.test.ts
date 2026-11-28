@@ -13,7 +13,7 @@ function fixture(recovery?: CompletionRecovery) {
     } else if (action === 'activate') state.binding = { ...state.binding!, status: 'ACTIVE' };
     else if (action === 'stop') state.binding = { ...state.binding!, status: 'STOPPING' };
     else if (action === 'finish') { if (Object.keys(state.leases).length) throw Error('pending writes'); state.binding = null; }
-    else if (action === 'lease') { state.leases.ticket = state.generation; return JSON.stringify({ token: 'ticket', binding: state.binding }); }
+    else if (action === 'lease' || action === 'recoveryLease') { state.leases.ticket = state.generation; return JSON.stringify({ token: 'ticket', binding: state.binding }); }
     else if (action === 'release') delete state.leases.ticket;
     return JSON.stringify(state);
   });
