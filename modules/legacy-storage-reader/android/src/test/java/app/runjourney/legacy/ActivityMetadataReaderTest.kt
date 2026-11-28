@@ -77,4 +77,24 @@ class ActivityMetadataReaderTest {
     try { reader.read("running", "history", 129, 0); fail("Must reject page") } catch (_: IllegalStateException) { }
     assertFalse(File(root, "SQLite").exists())
   }
+  @Test fun noncanonicalOrExtraActiveSlotsMustNotBecomeIdle() {
+    fixture().use { it.execSQL("INSERT INTO active_run VALUES(2,'orphan')") }
+    try { reader.read("running", "draft", 1, 0); fail("Must reject noncanonical slot") } catch (_: IllegalStateException) { }
+  }
+  @Test fun pagesSortOffsetTimestampsByInstantWithoutChangingOriginalText() {
+    fixture().use {
+      it.execSQL("INSERT INTO runs VALUES('earlier','completed','2026-11-28T09:00:00+09:00','2026-11-28T09:00:10+09:00',1,10000,NULL)")
+      it.execSQL("INSERT INTO runs VALUES('later','completed','2026-11-28T01:00:00Z','2026-11-28T01:00:10Z',1,10000,NULL)")
+    }
+    val rows = reader.read("running", "history", 1, 0)["rows"] as List<*>
+    assertEquals("later", (rows[0] as Map<*,*>)["id"])
+    val next = reader.read("running", "history", 1, 1)["rows"] as List<*>
+    assertEquals("2026-11-28T09:00:00+09:00", (next[0] as Map<*,*>)["startedAt"])
+  }
+  @Test fun textNumbersAndInvalidDatesAreRejectedAndPreserved() {
+    fixture().use { it.execSQL("INSERT INTO runs VALUES('bad','completed','not-a-date','2026-11-28T01:00:10Z','not-a-number',10000,NULL)") }
+    val file = File(root, "SQLite/runjourney.sqlite"); val before = file.readBytes()
+    try { reader.read("running", "history", 1, 0); fail("Must reject header") } catch (_: IllegalStateException) { }
+    assertArrayEquals(before, file.readBytes())
+  }
 }
