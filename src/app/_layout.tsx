@@ -1,39 +1,12 @@
-import { Tabs } from 'expo-router';
-import { paceEditorDirty, requestPaceLeave } from '@/services/pace-edit-guard';
+import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { ActivityBootstrap, ActivityEnvironment } from '@/components/activity-environment';
 import { StorageCompatibilityGate } from '@/components/storage-compatibility-gate';
-
 import '@/tasks/location-task';
-
-export default function TabLayout() {
-  return (
-    <StorageCompatibilityGate>
-      <StatusBar style="light" />
-      <Tabs
-        screenListeners={({ navigation, route }) => ({ tabPress: event => {
-          if (route.name !== 'settings' && paceEditorDirty()) { event.preventDefault(); requestPaceLeave(() => navigation.navigate(route.name)); }
-        } })}
-        screenOptions={{
-          headerShown: false,
-          tabBarActiveTintColor: '#E85D2A',
-          tabBarInactiveTintColor: '#787C82',
-          tabBarStyle: { backgroundColor: '#111418', borderTopColor: '#272B30' },
-        }}>
-        <Tabs.Screen name="index" options={{ title: 'ラン' }} />
-        <Tabs.Screen name="history" options={{ title: '履歴' }} />
-        <Tabs.Screen name="settings" options={{ title: '設定' }} />
-        <Tabs.Screen name="history-groups" options={{ href: null }} />
-        <Tabs.Screen name="history-group-detail" options={{ href: null }} />
-        <Tabs.Screen name="run-recovery" options={{ href: null }} />
-        <Tabs.Screen name="run-summary" options={{ href: null }} />
-        <Tabs.Screen name="run-detail" options={{ href: null }} />
-        <Tabs.Screen name="run-map" options={{ href: null }} />
-        <Tabs.Screen name="trash" options={{ href: null }} />
-        <Tabs.Screen name="diagnostics" options={{ href: null }} />
-        <Tabs.Screen name="marker-poc" options={{ href: null }} />
-        <Tabs.Screen name="sensor-diagnostics" options={{ href: null }} />
-        <Tabs.Screen name="cloud-sync" options={{ href: null }} />
-      </Tabs>
-    </StorageCompatibilityGate>
-  );
+import '@/tasks/cycling-location-task';
+export default function RootLayout() {
+  return <ActivityBootstrap><StorageCompatibilityGate><ActivityEnvironment>
+    <StatusBar style="light" />
+    <Stack screenOptions={{ headerShown: false }} />
+  </ActivityEnvironment></StorageCompatibilityGate></ActivityBootstrap>;
 }

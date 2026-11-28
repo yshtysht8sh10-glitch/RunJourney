@@ -1,6 +1,7 @@
 import { requireNativeModule } from 'expo-modules-core';
 
 type RunAnnouncer = {
+  measurementOwnership?(action: string, payload: string): Promise<string>;
   pacePeriodicVersion?(): number;
   pacePeriodicState?(runId: string, configKey: string): string;
   markerControl?(action: 'trial' | 'field' | 'protocol' | 'off' | 'testAckFailure'): boolean;

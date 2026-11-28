@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { act, create, ReactTestRenderer } from 'react-test-renderer';
 import { FlatList, Text } from 'react-native';
 import AsyncStorage from '@/test/sqlite-fixture';
-import HistoryScreen from '@/app/history';
+import HistoryScreen from '@/screens/running/history';
 import { RunRecord } from '@/types/run';
 import { effectiveRun } from '@/utils/run-model';
 import { parseBackup, serializeBackup } from '@/utils/run-backup';

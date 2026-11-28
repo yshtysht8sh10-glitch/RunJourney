@@ -1,0 +1,166 @@
+# Activity assistant implementation ledger
+
+PM implementation instruction received 2026-11-28. Parent #97, design PR #105 at 8951f2d,
+base main c2aa35b. The Phase 0 documents remain historical design records.
+
+## First increment: explicit profiles and distance policy (#101 prerequisite)
+
+- Immutable allowlisted Running/Cycling/Generic profiles; generic cannot select an activity DB.
+- Optional distance policy travels through effective edges and SQLite header recalculation.
+- Existing Running callers, SQL schema/version, raw GPS, settings keys and Auto Stop are unchanged.
+- Cycling's proposed 30m/s and 15s gap limits are engineering defaults requiring real-world acceptance.
+- No Cycling START, DB open, settings defaults, new UI or task routing is enabled by this increment.
+- Synthetic native SQLite tests use separate in-memory DBs, including identical IDs, raw GPS,
+  settings, trash and deletion isolation. They do not prove device background continuity.
+
+Focused tests: activity-distance-policy, run-model, pace-quality-baseline, sqlite-lifecycle:
+39 passed. Typecheck and Lint passed (an unused test import was removed afterward).
+An initial test attempted direct removal before trashing; the existing safety guard correctly
+rejected it. The test now uses trash then deletion; no product deletion guard was changed.
+
+## Remaining implementation
+
+1. Native durable ownership/leases and legacy draft reconciliation, independent TOP settings/routes (#99).
+2. Generic non-history measurement (#100), followed by Cycling's fixed DB/settings/service/UI (#101).
+3. Profile-aware detector/voice integration (#102); read-only integrated history (#103).
+4. Full integration, independent reviews and Test APK (#104).
+
+No Issue is complete based on this increment. No device acceptance, installation or Production
+delivery has occurred. Test v38 and Issue #93 remain separate and unchanged.
+
+## Second increment: durable ownership port (#99 prerequisite)
+
+`MeasurementOwnership` is a new Native port within the existing local module. It uses a
+separate no-backup control file, AtomicFile ACK, process-wide monitor and cross-process file
+lock. Purpose/destination/profile/generation are allowlisted. Persisted write leases block
+STOP completion and next START; unknown, corrupt or failed states do not become IDLE.
+No timeout releases uncertain writes. A failed final sink ACK retains ownership.
+
+The TypeScript adapter validates Native replies and passes immutable binding into each
+write callback, releasing its lease in finally. No JS-only lock fallback is available.
+Both ports remain disconnected from GPS/UI/Running until legacy draft reconciliation and
+the shared START/STOP adapters are implemented. A primitive alone is not cross-mode safety.
+Settings snapshots, startup evidence and recovery of orphan leases remain integration work.
+
+Validation: 9 JS tests and 9 Android Robolectric tests, typecheck/Lint/diff checks passed.
+Robolectric covers eight simultaneous claimants, recreation, stop/drain/stale generation,
+double release, corrupt control file and failed write. It is not a device/process-kill test.
+Generated ignored Android files were created by Expo prebuild for unit tests only; no APK
+was installed or distributed. Existing module audio paths are not invoked by this port.
+
+## Third increment: Cycling recorder (#101, #102 prerequisite)
+
+Fixed Cycling DB connection and independent settings plus a recorder built from the existing
+SqliteStore, observation buffer/persistence gate, distance/time model and detector. Cycling
+adds no Running schema columns. Optional detector edge-speed parameter keeps the exact
+12.5m/s default; Cycling explicitly uses 30m/s. Remaining detector thresholds are unchanged.
+No PACE, cloud or Running diagnostic journal is invoked by the Cycling recorder.
+
+Each required checkpoint is awaited, so an eventual surrounding write lease can cover its
+entire I/O lifetime; no untracked delayed checkpoint is introduced. Failed I/O retains a
+cumulative RAM snapshot for retry, and final latest GPS is flushed before completion.
+The recorder alone is not connected to START/task/UI and does not prove mutual exclusion.
+
+Focused Cycling/Running/movement/PACE tests: 48 passed; typecheck/Lint passed. The manual
+resume test initially assumed a permissive distance edge; it now explicitly asserts the
+existing conservative boundary model (25m in that fixture). No production threshold or
+boundary handling was relaxed. All SQLite test data are disposable in-memory synthetic data.
+
+## Fourth increment: read-only activity metadata port (#99 prerequisite)
+
+AndroidX's explicit read-only driver opens only the two fixed app-private Expo SQLite names.
+Missing DBs are not created. Draft inspection checks the runs/active_run relationship and
+rejects orphan/ambiguous drafts rather than treating them as IDLE. History reads are bounded
+to 128 header rows, exclude trash without purging it, and do not read raw GPS tables.
+Native offset pagination is an initial port; integrated history UI/summary is not connected.
+The Running compatibility/migration gate remains unchanged and cannot be bypassed by this port.
+
+Six synthetic Robolectric checks passed: absent files, same-ID isolated DB headers, bounded
+history/trash exclusion, draft inspection without GPS tables, orphan refusal, corrupt-file
+preservation and invalid capability/page refusal. Typecheck/Lint passed. Existing WAL behavior
+is inherited from the previously reviewed read-only driver; new device/WAL acceptance is not
+claimed by these six focused tests.
+
+## Fifth increment: independent TOP settings and bootstrap evidence (#99)
+
+Native TOP settings use the same cross-process ownership lock and checked durable writer.
+They do not use Running's settings table. New installation defaults OFF/time OFF; an existing
+Running/Cycling/RKStorage file selects assistant ON. Evidence is persisted before settings,
+so storage-gate creation of an empty DB after interruption cannot reclassify a new install.
+Assistant ON derives effective time ON without overwriting genericTimeEnabled. Active
+ownership prevents TOP saves. Corrupt/unknown settings are preserved and rejected.
+
+The port is not mounted in the root layout yet. The actual bootstrap-before-gate sequence
+and legacy draft adoption must be connected and tested before enabling another purpose.
+12 related JS tests and 17 synthetic Robolectric tests passed; typecheck/Lint passed.
+The same explicitly documented host syscall doubles apply. No real installation was changed.
+
+## Sixth increment: session routing and Running adapter (#99)
+
+Read-only reconciliation adopts a single old Running draft, blocks dual/orphan/unowned
+tracking conditions, and never switches a bound ID/destination. The input hot path reads
+only Native ownership; it does not open two metadata readers per GPS fix. Running startup
+and restore connect to the Native owner only on compatible new binaries. Old Running-only
+binaries retain their existing path; Cycling will require the new ownership capability.
+
+On new binaries the Running input lease now includes flushCheckpoint before release.
+This preserves sample timestamps/filters while adding a durability wait; device latency/I/O
+comparison remains required. Automatic goal STOP runs after the input lease is released.
+Final ownership release follows fixed-store completion and OS tracking stop. An uncertain
+lease or failed final ACK fences a new purpose; no time-based forced recovery is provided.
+
+Focused lifecycle/Running/PACE tests: 23 passed; typecheck/Lint passed. Two tests execute
+the real Running SQLite path with a JS ownership/OS double, including goal completion without
+self-drain deadlock. Five controller tests are contract simulations. Neither category is a
+physical-device test. Full integrated regression and independent review are still required.
+
+## Seventh increment: Cycling service/task/voice (#101/#102)
+
+Cycling START requires assistant ON, background permissions, compatible ownership and its
+fixed draft. Its separate TaskManager task enters the shared recorder under a write lease.
+Restore retains the same ID/settings/DB; STOP drains writes, freezes the end timestamp,
+stops OS GPS, saves history and then releases ownership. GPS/voice startup or STOP failures
+retain the draft/ownership for retry. No external sensor, cloud or Wear OS path is enabled.
+
+Cycling voice uses the existing Native queue/chime/focus/dedup and shared state wording.
+Five-minute reports contain active time, distance and average km/h, never PACE savings or
+marathon estimates. Recovery text is also Cycling-specific. Voice IDs include the activity;
+an owner check before Native queue mutation rejects late packets from the previous purpose.
+Cycling ended packets are scoped; the common deferred service shutdown rechecks context so
+it cannot stop a new activity. New RUN-start/end spoken wording was not added.
+
+Synthetic service tests use real separate SQLite stores and OS/ownership/audio doubles:
+normal STOP, voice failure, GPS startup failure/restore, OS STOP failure/retry, competing
+Running owner. A same-ID Running record/settings snapshot remains identical in every case.
+Nine service/voice JS checks passed, plus prior recorder/Running checks. Native voice-policy,
+recovery and binding tests: 43 passed. Typecheck/Lint passed. Physical GPS, background,
+Bluetooth audibility and energy/latency measurements remain unverified. UI is not connected.
+
+## Eighth increment: Android navigation and Cycling screens (#99/#101)
+
+PM approved the Cycling vertical slice first: TOP entry, existing Running, Cycling
+measurement/background/save/speed voice/history/map/settings. Generic non-history measurement
+and combined history/summary stay explicit unopened placeholders, not removed requirements.
+
+Native root is a Stack. Running's existing screen implementations move to screens/running
+and are hosted by the (running) tab layout with a small Top return header. Existing native
+deep links forward to that hierarchy with their IDs. Existing Web routes remain unchanged;
+new native routes have Web-only unavailable screens. No duplicated measurement engine is used.
+The map renderer is shared, with separate fixed sources/settings. OFF never reads raw GPS.
+
+Startup awaits TOP evidence before mounting StorageCompatibilityGate, then reconciles drafts
+before mounting navigation. Foreground refresh cannot bypass initial reconciliation or unmount
+an active screen on a later read failure. Mode changes and a new sport claim share the Native
+ownership lock; verified legacy draft adoption remains possible with assistant OFF. Competing
+GPS registrations fail closed. Valid existing opaque record IDs are not narrowed to UUIDs.
+
+Verification: 99 suites/706 JS tests passed before the final two fence regressions were added.
+After those additions, focused ownership/controller tests (16), related UI tests (15),
+typecheck/Lint and Native ownership tests (19) passed. Android Hermes export succeeded;
+this is a JS bundle check, not an APK build or device acceptance. Prior Running UI regression:
+45 tests passed. Full integration's next run is reserved for the final reviewed candidate.
+
+Not complete: remaining fixed-SHA independent reviews, final integration/native/long-run
+verification, Test APK/signature validation, Android GPS/background/audio acceptance and
+data preservation comparison on an authorized device update. No main merge, Issue Close,
+device operation or Production distribution has occurred. v38 remains frozen separately.

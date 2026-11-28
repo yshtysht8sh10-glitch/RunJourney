@@ -1,6 +1,6 @@
 import { createElement } from "react";
 import { act, create, ReactTestRenderer } from "react-test-renderer";
-import CloudSync from "@/app/cloud-sync";
+import CloudSync from "@/screens/running/cloud-sync";
 import { RunRepository } from "@/repositories/run-repository";
 import { nativeQueue } from "@/sync/native-queue";
 import { signInWithEmailAndPassword, signOut } from "firebase/auth";

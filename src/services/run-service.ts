@@ -17,6 +17,8 @@ import { AdaptiveAudio } from '@/services/adaptive-audio';
 import { FinishClock } from '@/services/finish-clock';
 import { completionLog } from '@/services/completion-log';
 import { SensorDiagnostics } from '@/services/sensor-diagnostics';
+import { MeasurementSessions, measurementOwnershipAvailable } from './measurement-sessions';
+import { TopSettingsRepository } from '@/repositories/top-settings';
 
 const trackingOptions: Location.LocationTaskOptions = {
   accuracy: Location.Accuracy.High,
@@ -84,9 +86,14 @@ export const RunService = {
   async startRunOnce(): Promise<ActiveRun> {
     await assertTrackingIsAvailable();
     await requestPermissions();
+    // Evidence/settings precede any ordinary DB open on new activity builds.
+    const guarded = measurementOwnershipAvailable();
+    const top = guarded ? await TopSettingsRepository.get() : null;
     const existing = await RunRepository.getActiveRun();
+    const pendingOwner = guarded ? await MeasurementSessions.forStart('running') : null;
     if (existing) {
       if (existing.endedAt) throw new Error('終了した記録の保存を再試行してください。');
+      if (guarded) await MeasurementSessions.activate(await MeasurementSessions.ensure('running', existing.id, Date.parse(existing.startedAt)));
       await startLocationTask();
       if (existing.finishGoal?.kind === 'time') FinishClock.start(() => RunService.checkGoal());
       await VoiceAnnouncement.restore(existing);
@@ -95,14 +102,16 @@ export const RunService = {
       return existing;
     }
 
-    const now = new Date().toISOString();
+    if (top && !top.assistantEnabled) throw Error('ランニングを開始するには運動アシスタントをONにしてください');
+    if (pendingOwner && pendingOwner.status !== 'STARTING') throw Error('計測所有権に対応する記録がありません。新規開始せず確認してください');
+    const now = new Date(pendingOwner?.startedAt ?? Date.now()).toISOString();
     const finishGoal = await FinishSettings.get();
     // Guidance must never prevent START if its preferences are unavailable.
     let paceWorkout: ActiveRun['paceWorkout'];
     try { paceWorkout = createPaceWorkout(await PaceSettingsRepository.get(), Date.parse(now)); }
     catch (error) { console.warn('Pace settings unavailable', error); }
     const active: ActiveRun = {
-      id: Crypto.randomUUID(),
+      id: pendingOwner?.sessionId ?? Crypto.randomUUID(),
       startedAt: now,
       distanceMeters: 0,
       finishGoal,
@@ -115,7 +124,9 @@ export const RunService = {
       createdAt: now,
       updatedAt: now,
     };
+    const owner = guarded ? await MeasurementSessions.ensure('running', active.id, Date.parse(now)) : null;
     await RunRepository.saveActiveRun(active);
+    if (owner) await MeasurementSessions.activate(owner);
     lastFinished = null;
     if (finishGoal.kind === 'time') FinishClock.start(() => RunService.checkGoal());
     try {
@@ -135,6 +146,7 @@ export const RunService = {
     const active = await RunRepository.getActiveRun();
     if (!active) return null;
     if (active.endedAt) return active;
+    if (measurementOwnershipAvailable()) await MeasurementSessions.activate(await MeasurementSessions.ensure('running', active.id, Date.parse(active.startedAt)));
     if (active.finishGoal?.kind === 'time') FinishClock.start(() => RunService.checkGoal());
     await VoiceAnnouncement.restore(active);
     void AdaptiveAudio.start(active.id, !!active.paceWorkout?.voice);
@@ -201,14 +213,27 @@ export const RunService = {
       completionLog('JOIN_IN_FLIGHT', { automatic, expectedId }); return stopInFlight;
     }
     const endedAt = new Date().toISOString();
+    if (measurementOwnershipAvailable()) MeasurementSessions.requestInputStop('running');
     manualStopAt = automatic ? null : endedAt;
     completionLog('FINISH_STARTED', { automatic, expectedId, requestedAt: endedAt });
     stopInFlight = (async () => {
+      const owner = measurementOwnershipAvailable() ? await MeasurementSessions.reconcile() : null;
+      if (owner && owner.purpose !== 'running') throw Error('別用途の計測中です。ランニングの終了操作はできません');
+      if (owner) await MeasurementSessions.closeInputs(owner);
       let frozen = await RunRepository.prepareFinish(endedAt, automatic, expectedId);
       // A newly confirmed stop can retract a provisional time-goal result.
       // A concurrent, explicit manual STOP must still be honored in that case.
       if (!frozen && manualStopAt) frozen = await RunRepository.prepareFinish(manualStopAt, false, expectedId);
-      if (!frozen) return lastFinished;
+      if (!frozen) {
+        if (owner && !manualStopAt) MeasurementSessions.reopenInputs(owner);
+        if (owner && lastFinished?.id === owner.sessionId) {
+          await MeasurementSessions.freeze(owner);
+          if (await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME)) await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
+          await MeasurementSessions.finish(owner);
+        }
+        return lastFinished;
+      }
+      if (owner) await MeasurementSessions.freeze(owner);
       completionLog('FROZEN', { runId: frozen.id, finishGoal: frozen.finishGoal ?? { kind: 'manual' }, achievement: frozen.achievement,
         state: frozen.events?.at(-1)?.state ?? 'RUNNING', endedAt: frozen.endedAt, distanceMeters: frozen.distanceMeters });
       FinishClock.stop();
@@ -221,6 +246,7 @@ export const RunService = {
       const saved = await RunRepository.finishActiveRun(frozen.endedAt!);
       if (saved) {
         lastFinished = saved;
+        if (owner) await MeasurementSessions.finish(owner);
         completionLog('SAVE_SUCCEEDED', { runId: saved.id, endedAt: saved.endedAt, voiceEventId: saved.achievement ? `${saved.id}:finish` : null });
         // Neither listeners nor speech can turn committed history into a save failure.
         for (const listener of finishListeners) { try { listener(saved); } catch { /* UI isolated */ } }

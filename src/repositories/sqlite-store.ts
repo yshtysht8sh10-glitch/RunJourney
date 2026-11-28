@@ -4,6 +4,7 @@ import { effectiveRun } from '../utils/run-model';
 import { PAGE_SCHEMA, migratePageIndex, stampRow } from './paged-store';
 import { hashText, PAGE_ROWS, StreamKind } from '../domain/pages';
 import { safePaceMetadata } from '../domain/pace-workout';
+import type { DistancePolicy } from '../domain/measurement-profile';
 
 export interface SqlConnection {
   execAsync(sql: string): Promise<void>;
@@ -68,7 +69,7 @@ export class SqliteStore {
   private initialized = false;
   private fatal: Error | undefined;
   diagnosticWarning: string | undefined;
-  constructor(readonly db: SqlConnection) {}
+  constructor(readonly db: SqlConnection, private readonly distancePolicy?: DistancePolicy) {}
   private exclusive<T>(fn: () => Promise<T>): Promise<T> {
     const result = this.queue.then(fn, fn);
     this.queue = result.then(() => undefined, () => undefined); return result;
@@ -161,7 +162,7 @@ export class SqliteStore {
     const pace = safePaceMetadata(paceWorkout);
     const metadata = { ...coreMetadata, ...(pace ? { paceWorkout: pace } : {}) };
     if ('_sqlitePresence' in metadata) throw new Error('予約されたメタデータ名です');
-    const effective = effectiveRun(run);
+    const effective = effectiveRun(run, undefined, this.distancePolicy);
     if (!existing) await this.db.runAsync('INSERT INTO runs(id,status,started_at,ended_at,distance,trashed_at,effective_distance,effective_time,position) VALUES(?,?,?,?,?,?,?,?,(SELECT coalesce(max(position),0)+1 FROM runs))', run.id, 'draft', run.startedAt, run.endedAt ?? null, run.distanceMeters, (run as RunRecord).trashedAt ?? null, effective.distanceMeters, effective.activeRunningTime);
     const [{ total: previousCount }] = await this.db.getAllAsync<{ total: number }>('SELECT count(*) AS total FROM gps_points WHERE run_id=?', run.id);
     const positions = new Map<string, number[]>();

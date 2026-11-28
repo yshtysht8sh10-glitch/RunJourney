@@ -2,6 +2,7 @@ import { ActiveRun, LocationPoint, RunRecord, RunState, StopDiagnostic, StopReas
 import { calculateDistance, distanceBetween } from '@/utils/distance';
 import { inferMovement, usableObservation } from '@/utils/movement-inference';
 import { analyzePace, DEFAULT_LAP_MS, timeLapRanges } from '@/utils/pace-analysis';
+import type { DistancePolicy } from '@/domain/measurement-profile';
 
 export const RUN_CONTROL = {
   holdMs: 1500, stopSpeed: 0.6, resumeSpeed: 1.2,
@@ -93,11 +94,11 @@ export function effectivePoints(run: DistanceRun): LocationPoint[] {
   });
   return selected;
 }
-export function effectiveDistance(run: DistanceRun) { return effectiveEdges(run).reduce((sum, edge) => sum + edge.distanceMeters, 0); }
+export function effectiveDistance(run: DistanceRun, policy?: DistancePolicy) { return effectiveEdges(run, undefined, policy).reduce((sum, edge) => sum + edge.distanceMeters, 0); }
 
 // Filter edges in raw GPS time, then place them on the shared effective clock.
 // Every lap/total uses these same edges, including interpolated lap boundaries.
-export function effectiveEdges(run: DistanceRun, now?: number) {
+export function effectiveEdges(run: DistanceRun, now?: number, policy?: DistancePolicy) {
   const points = effectivePoints(run), start = Date.parse(run.startedAt);
   const end = run.endedAt ? Date.parse(run.endedAt) : now ?? points.at(-1)?.timestamp ?? start;
   if (!Number.isFinite(start) || !Number.isFinite(end)) return [];
@@ -108,12 +109,12 @@ export function effectiveEdges(run: DistanceRun, now?: number) {
     return {
       startMs: paceTime({ ...run, endedAt: undefined }, clippedStart),
       endMs: paceTime({ ...run, endedAt: undefined }, clippedEnd),
-      distanceMeters: calculateDistance([previous, point]) * (clippedEnd - clippedStart) / rawDuration,
+      distanceMeters: calculateDistance([previous, point], policy) * (clippedEnd - clippedStart) / rawDuration,
     };
   }).filter(edge => edge.endMs > edge.startMs && edge.distanceMeters > 0);
 }
-export function effectiveRun(run: ActiveRun, now = Date.now()) {
-  const time = timeModel(run, now), edges = effectiveEdges(run, now);
+export function effectiveRun(run: ActiveRun, now = Date.now(), policy?: DistancePolicy) {
+  const time = timeModel(run, now), edges = effectiveEdges(run, now, policy);
   const distanceBetweenTimes = (startMs: number, endMs: number) => edges.reduce((sum, edge) => sum + edge.distanceMeters *
     Math.max(0, Math.min(endMs, edge.endMs) - Math.max(startMs, edge.startMs)) / (edge.endMs - edge.startMs), 0);
   const distanceMeters = edges.reduce((sum, edge) => sum + edge.distanceMeters, 0);
@@ -141,7 +142,7 @@ export function recordDiagnostic(run: ActiveRun, entry: StopDiagnostic): ActiveR
     processed: run.diagnostics.processed + 1, counts: { ...run.diagnostics.counts, [key]: (run.diagnostics.counts[key] ?? 0) + 1 } } };
 }
 
-export function detectStop(run: ActiveRun, point: LocationPoint, inputSource: StopDiagnostic['inputSource'] = 'live-persisted', observations?: LocationPoint[]): ActiveRun {
+export function detectStop(run: ActiveRun, point: LocationPoint, inputSource: StopDiagnostic['inputSource'] = 'live-persisted', observations?: LocationPoint[], maxSpeed: number = RUN_CONTROL.maxSpeed): ActiveRun {
   const state = stateOf(run), prior = run.detector?.version === 4 ? run.detector : {};
   const last = prior.last;
   const detail: Omit<StopDiagnostic, 'decision'> = { timestamp: point.timestamp, receivedAt: Date.now(), state,
@@ -161,7 +162,7 @@ export function detectStop(run: ActiveRun, point: LocationPoint, inputSource: St
   }
   const gap = last && point.timestamp - last.timestamp > RUN_CONTROL.maxGapMs;
   // Reject a jump without allowing it to replace the last reliable position.
-  if (!gap && last && distanceBetween(last, point) / ((point.timestamp - last.timestamp) / 1000) > RUN_CONTROL.maxSpeed)
+  if (!gap && last && distanceBetween(last, point) / ((point.timestamp - last.timestamp) / 1000) > maxSpeed)
     return report(run, 'HOLD', StopReason.SPEED_SPIKE);
   const rawWindow = observations ?? [...(prior.window ?? []), point];
   const available = rawWindow.filter(p => usableObservation(p) && p.timestamp >= Math.max(boundary, point.timestamp - 15000) && p.timestamp <= point.timestamp);
@@ -171,25 +172,25 @@ export function detectStop(run: ActiveRun, point: LocationPoint, inputSource: St
   let window = gap ? [point] : recent.length >= 3 ? recent : available.slice(-3);
   window = [...new Map(window.map(p => [p.timestamp, p])).values()].sort((a, b) => a.timestamp - b.timestamp).slice(-256);
   // A bad fix in the rolling source must not create an outlier edge later.
-  window = window.filter((p, i, all) => !i || distanceBetween(all[i - 1], p) / ((p.timestamp - all[i - 1].timestamp) / 1000) <= RUN_CONTROL.maxSpeed);
+  window = window.filter((p, i, all) => !i || distanceBetween(all[i - 1], p) / ((p.timestamp - all[i - 1].timestamp) / 1000) <= maxSpeed);
   // Earliest qualifying suffix is the evidence onset, not the confirmation time.
   const target = state === 'AUTO_STOP' ? 'moving' : 'stationary';
   let candidate: LocationPoint[] | undefined;
   for (let i = 0; i < window.length - 1; i++) {
-    const suffix = window.slice(i), inference = inferMovement(suffix);
+    const suffix = window.slice(i), inference = inferMovement(suffix, maxSpeed);
     if (!inference[target]) continue;
     if (target === 'stationary' && !inference.boundedDwell && distanceBetween(suffix[0], suffix[1]) / ((suffix[1].timestamp - suffix[0].timestamp) / 1000) > 0.5) continue;
     if (target === 'moving' && distanceBetween(suffix[0], suffix[1]) / ((suffix[1].timestamp - suffix[0].timestamp) / 1000) < 0.5) continue;
     candidate = suffix; break;
   }
-  const inference = inferMovement(candidate ?? window);
+  const inference = inferMovement(candidate ?? window, maxSpeed);
   detail.window = inference.summary;
   const first = window[0];
-  const provisionalStill = state === 'RUNNING' && first && (inferMovement(window).summary.spread <= 3 || inferMovement(window).stationary) ? first.timestamp : undefined;
+  const provisionalStill = state === 'RUNNING' && first && (inferMovement(window, maxSpeed).summary.spread <= 3 || inferMovement(window, maxSpeed).stationary) ? first.timestamp : undefined;
   const movingStart = state === 'AUTO_STOP' ? window.find((p, i) => {
     const next = window[i + 1];
     return next && distanceBetween(p, next) / ((next.timestamp - p.timestamp) / 1000) >= 0.5
-      && inferMovement(window.slice(i)).summary.coherence >= 0.7;
+      && inferMovement(window.slice(i), maxSpeed).summary.coherence >= 0.7;
   }) : undefined;
   const movement = movingStart ? { startedAt: movingStart.timestamp, origin: movingStart, fixes: window.filter(p => p.timestamp >= movingStart.timestamp).length } : undefined;
   const updated: ActiveRun = { ...run, detector: { version: 4, last: point, window, stillSince: provisionalStill, movement } };

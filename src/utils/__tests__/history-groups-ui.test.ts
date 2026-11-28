@@ -1,8 +1,8 @@
 import { createElement } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { Alert, FlatList, Text } from 'react-native';
-import GroupScreen from '@/app/history-groups';
-import History from '@/app/history';
+import GroupScreen from '@/screens/running/history-groups';
+import History from '@/screens/running/history';
 import { RunRepository } from '@/repositories/run-repository';
 import { HistoryGroupsRepository } from '@/repositories/history-groups';
 import { database } from '@/repositories/database';

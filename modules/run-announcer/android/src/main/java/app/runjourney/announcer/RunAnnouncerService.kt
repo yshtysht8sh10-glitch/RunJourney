@@ -280,9 +280,24 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
 
   private fun receiveBatch(payload: String) {
     val serviceReceivedAt = System.currentTimeMillis()
-    batchMode = true
     val batch = JSONObject(payload)
     val runId = batch.optString("runId")
+    // New activity builds only. No owner file means the existing Running-only
+    // behavior remains unchanged; unknown ownership suppresses audio, not GPS.
+    val ownerFile = java.io.File(noBackupFilesDir, "measurement-ownership-v1/owner.json")
+    if (ownerFile.exists()) {
+      val allowed = try { MeasurementVoiceBinding.accepts(JSONObject(MeasurementOwnership(this).command("read")), runId, batch.optBoolean("ended")) }
+        catch (_: Exception) { false }
+      if (!allowed) {
+        val rejected = batch.optJSONArray("notices") ?: JSONArray()
+        (0 until rejected.length()).forEach { audit(rejected.getJSONObject(it), "CANCELLED_MEASUREMENT_BINDING") }
+        return
+      }
+    }
+    if(batch.optBoolean("cyclingEnd") && batchRunId.isNotBlank() && batchRunId != runId) return
+    batchMode = true
+    if (batch.optString("activity") == "cycling" && (batch.optBoolean("cyclingEnd") && batch.optBoolean("ended") || !batch.optBoolean("cyclingVoiceEnabled",true)))
+      preferences.edit().putBoolean("running", false).apply()
     val staleClockConfig=batchRunId==runId && batch.optInt("latestEventIndex",-1)<latestEventIndex
     if(runId.startsWith("preview-cues-") && batch.optLong("previewLeaseMs")>0 && !preferences.getBoolean("running",false)) {
       val until=System.currentTimeMillis()+batch.optLong("previewLeaseMs").coerceIn(1,30000)
@@ -531,7 +546,7 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
     val notification = Notification.Builder(this, CHANNEL)
       .setSmallIcon(applicationInfo.icon)
       .setContentTitle("RunJourney 音声通知中")
-      .setContentText("走行中の時間・距離・ペースを案内します")
+      .setContentText(if(batchRunId.startsWith("cycling:")) "走行中の時間・距離・平均速度を案内します" else "走行中の時間・距離・ペースを案内します")
       .setOngoing(true).build()
     startForeground(607, notification)
     // Workout-only speech also needs a bounded wake lock while the screen is off.
@@ -926,7 +941,10 @@ class RunAnnouncerService : Service(), TextToSpeech.OnInitListener {
 
   private fun finishTest() {
     if(cuePreviewUntil>System.currentTimeMillis())return
-    if (!preferences.getBoolean("running", false)) handler.post { if (!speaking && messages.isEmpty()) stopSelf() }
+    val finishedContext = batchRunId
+    if (!preferences.getBoolean("running", false)) handler.post {
+      if (!preferences.getBoolean("running",false) && batchRunId == finishedContext && !speaking && messages.isEmpty()) stopSelf()
+    }
   }
 
   override fun onDestroy() {

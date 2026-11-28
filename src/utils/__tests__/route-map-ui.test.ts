@@ -5,7 +5,7 @@ import { router } from 'expo-router';
 import { RouteMapEntry } from '@/components/route-map-entry';
 import { RouteMapSettingsPanel } from '@/components/route-map-settings';
 import { RouteMapSettings,ROUTE_MAP_KEY } from '@/repositories/route-map-settings';
-import RunMap from '@/app/run-map';
+import RunMap from '@/screens/running/run-map';
 import { RunRepository } from '@/repositories/run-repository';
 import { sourceFromRun } from '@/domain/pages';
 import { resetNative } from '@/test/native-driver';

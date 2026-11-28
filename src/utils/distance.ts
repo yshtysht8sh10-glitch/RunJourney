@@ -1,4 +1,5 @@
 import { LocationPoint } from '@/types/run';
+import type { DistancePolicy } from '@/domain/measurement-profile';
 
 const EARTH_RADIUS_METERS = 6_371_000;
 const MAX_USABLE_ACCURACY_METERS = 50;
@@ -25,7 +26,7 @@ export function distanceBetween(a: LocationPoint, b: LocationPoint): number {
   return 2 * EARTH_RADIUS_METERS * Math.asin(Math.sqrt(haversine));
 }
 
-export function calculateDistance(points: LocationPoint[]): number {
+export function calculateDistance(points: LocationPoint[], policy?: DistancePolicy): number {
   let total = 0;
 
   for (let index = 1; index < points.length; index += 1) {
@@ -34,12 +35,13 @@ export function calculateDistance(points: LocationPoint[]): number {
     const elapsedSeconds = (current.timestamp - previous.timestamp) / 1000;
 
     if (!Number.isFinite(elapsedSeconds) || elapsedSeconds <= 0) continue;
+    if (policy?.maxGapMs !== undefined && elapsedSeconds * 1000 > policy.maxGapMs) continue;
     if (![previous, current].every(usableDistancePoint)) continue;
 
     const segment = distanceBetween(previous, current);
     if (!Number.isFinite(segment)) continue;
     if (segment < MIN_MOVEMENT_METERS) continue;
-    if (segment / elapsedSeconds > MAX_RUNNING_SPEED_METERS_PER_SECOND) continue;
+    if (segment / elapsedSeconds > (policy?.maxSpeedMetersPerSecond ?? MAX_RUNNING_SPEED_METERS_PER_SECOND)) continue;
 
     total += segment;
   }

@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { act, create, ReactTestRenderer } from 'react-test-renderer';
 import { Alert } from 'react-native';
 import AsyncStorage from '@/test/sqlite-fixture';
-import RunRecovery from '@/app/run-recovery';
+import RunRecovery from '@/screens/running/run-recovery';
 import { RunRepository } from '@/repositories/run-repository';
 import { RunRecord } from '@/types/run';
 jest.mock('expo-router', () => ({ router: { back: jest.fn() }, useLocalSearchParams: () => ({ id: 'ui-recovery' }),

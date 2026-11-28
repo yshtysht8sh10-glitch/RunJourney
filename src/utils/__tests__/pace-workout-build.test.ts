@@ -19,7 +19,7 @@ test('isolated Pace variant cannot overwrite production or Test; generation is i
   expect(result).toContain("applicationId 'app.runjourney.mobile'");
   expect(result).toMatch(/paceWorkout\s*\{[\s\S]*?applicationIdSuffix '\.pace'/);
   expect(result).toMatch(/standaloneTest\s*\{[\s\S]*?applicationIdSuffix '\.test'/);
-  expect(result).toContain('RunJourney Pace'); expect(result).toContain('output.versionCodeOverride = 34');
+  expect(result).toContain('RunJourney Pace'); expect(result).toContain('output.versionCodeOverride = 39');
   expect(apply(result)).toBe(result);
 });
 test('EAS pace profile selects only the isolated APK build type', () => {
@@ -27,4 +27,20 @@ test('EAS pace profile selects only the isolated APK build type', () => {
   expect(config.build.paceWorkout.android.gradleCommand).toBe(':app:assemblePaceWorkout');
   expect(config.build.paceWorkout.android.applicationArchivePath).toBe('android/app/build/outputs/apk/paceWorkout/*.apk');
   expect(config.build.sqliteTest.android.gradleCommand).toBe(':app:assembleStandaloneTest');
+});
+
+test('Test v39 version is stable with or without sensor diagnostics and remains Test-only', () => {
+  const previous = process.env.RUNJOURNEY_SENSOR_DIAGNOSTICS;
+  try {
+    for (const flag of ['0', '1']) {
+      process.env.RUNJOURNEY_SENSOR_DIAGNOSTICS = flag;
+      const result = apply(gradle);
+      expect(result).toMatch(/if \(variant.buildType.name == 'standaloneTest'\)[\s\S]*output.versionCodeOverride = 39/);
+      expect((result.match(/output.versionCodeOverride/g) ?? [])).toHaveLength(1);
+      expect(apply(result)).toBe(result);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.RUNJOURNEY_SENSOR_DIAGNOSTICS;
+    else process.env.RUNJOURNEY_SENSOR_DIAGNOSTICS = previous;
+  }
 });
