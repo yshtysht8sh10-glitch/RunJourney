@@ -10,7 +10,7 @@ export type OwnershipPort = (action: string, payload: string) => Promise<string>
 function binding(value: MeasurementBinding): MeasurementBinding {
   const profile = measurementProfile(value.purpose);
   if (value.databaseKey !== (profile.databaseName ?? 'none') || value.profileVersion !== 1
-    || !/^[A-Za-z0-9_-]{1,128}$/.test(value.sessionId)
+    || typeof value.sessionId !== 'string' || !value.sessionId.trim() || value.sessionId.length > 256 || value.sessionId.includes('\u0000')
     || !Number.isSafeInteger(value.generation) || value.generation < 1
     || !Number.isFinite(value.startedAt) || value.startedAt < 0
     || !['STARTING', 'ACTIVE', 'STOPPING', 'FINISH_FAILED'].includes(value.status)) throw Error('計測所有権が不正です。新規開始を停止しました');
@@ -36,9 +36,10 @@ export function createMeasurementOwnership(port: OwnershipPort) {
   const command = async (action: string, value: unknown = {}) => port(action, JSON.stringify(value));
   return {
     read: async () => state(await command('read')),
-    async claim(purpose: MeasurementPurpose, sessionId: string, startedAt: number) {
+    async claim(purpose: MeasurementPurpose, sessionId: string, startedAt: number, adoptExisting = false) {
       const profile = measurementProfile(purpose);
-      const result = state(await command('claim', { purpose, sessionId, startedAt,
+      const action = adoptExisting || purpose === 'generic' ? 'claim' : 'claimSport';
+      const result = state(await command(action, { purpose, sessionId, startedAt,
         databaseKey: profile.databaseName ?? 'none', profileVersion: profile.version }));
       if (!result.binding || result.binding.purpose !== purpose || result.binding.sessionId !== sessionId) throw Error('計測開始の保存ACKが一致しません');
       return result.binding;

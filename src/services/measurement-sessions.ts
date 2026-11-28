@@ -2,7 +2,7 @@ import type { MeasurementPurpose } from '@/domain/measurement-profile';
 import { createMeasurementOwnership, MeasurementOwnership, type MeasurementBinding } from './measurement-ownership';
 
 type DraftHeader = { id: string; startedAt: string; endedAt: string | null };
-export type DraftInspection = { running: DraftHeader | null; cycling: DraftHeader | null; unownedTracking: boolean };
+export type DraftInspection = { running: DraftHeader | null; cycling: DraftHeader | null; unownedTracking: boolean; trackingPurposes?: MeasurementPurpose[] };
 type Client = ReturnType<typeof createMeasurementOwnership>;
 
 /** No mutable selected-sport global. A bound ID/destination survives route changes.
@@ -16,6 +16,7 @@ export function createMeasurementSessions(client: Client, inspect: () => Promise
     const kind = drafts.running ? 'running' : drafts.cycling ? 'cycling' : null;
     const draft = drafts.running ?? drafts.cycling;
     if (current.binding) {
+      if (drafts.trackingPurposes?.some(purpose => purpose !== current.binding!.purpose)) throw Error('GPS登録と計測用途が一致しません。新規開始せず確認してください');
       if (draft && (current.binding.purpose !== kind || current.binding.sessionId !== draft.id)) throw Error('計測所有権と未終了記録が一致しません');
       return current.binding;
     }
@@ -23,9 +24,10 @@ export function createMeasurementSessions(client: Client, inspect: () => Promise
       if (drafts.unownedTracking) throw Error('所有者を確認できないGPS計測があります。新規開始を停止しています');
       return null;
     }
+    if (drafts.trackingPurposes?.some(purpose => purpose !== kind)) throw Error('未終了記録とGPS登録が一致しません');
     const startedAt = Date.parse(draft.startedAt);
     if (!Number.isFinite(startedAt)) throw Error('未終了記録の開始日時を確認できません');
-    const adopted = await client.claim(kind, draft.id, startedAt);
+    const adopted = await client.claim(kind, draft.id, startedAt, true);
     const result = draft.endedAt ? await client.stop(adopted) : await client.activate(adopted);
     return result.binding;
   };
@@ -92,5 +94,6 @@ export const MeasurementSessions = createMeasurementSessions(MeasurementOwnershi
   const registrations = await Promise.all(['runjourney-background-location', 'runjourney-cycling-location']
     .map(task => location.hasStartedLocationUpdatesAsync(task)));
   return { running: running.rows[0] ?? null, cycling: cycling.rows[0] ?? null,
+    trackingPurposes: (['running', 'cycling'] as const).filter((_purpose, index) => registrations[index]),
     unownedTracking: !running.rows.length && !cycling.rows.length && registrations.some(Boolean) };
 });

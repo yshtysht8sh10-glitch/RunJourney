@@ -3,9 +3,9 @@ import { act, create, ReactTestRenderer } from 'react-test-renderer';
 import { Alert, Text } from 'react-native';
 import { router } from 'expo-router';
 import AsyncStorage from '@/test/sqlite-fixture';
-import RunDetail from '@/app/run-detail';
-import TrashScreen from '@/app/trash';
-import HistoryScreen from '@/app/history';
+import RunDetail from '@/screens/running/run-detail';
+import TrashScreen from '@/screens/running/trash';
+import HistoryScreen from '@/screens/running/history';
 import { RunRepository } from '@/repositories/run-repository';
 import { TRASH_RETENTION_MS } from '@/utils/run-trash';
 jest.mock('expo-router', () => ({ router: { replace: jest.fn(), push: jest.fn() }, useLocalSearchParams: () => ({ id: 'ui' }),

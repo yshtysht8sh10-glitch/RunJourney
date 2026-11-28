@@ -166,4 +166,19 @@ class MeasurementOwnershipTest {
     val unknown = "{\"version\":2}"
     file.writeText(unknown); rejected { owner.command("topRead") }; assertEquals(unknown, file.readText())
   }
+  @Test fun newSportClaimChecksAssistantUnderTheSameLockAsModeChanges() {
+    val top = JSONObject(owner.command("topRead")).put("assistantEnabled", false)
+    owner.command("topSave", top.toString())
+    rejected { owner.command("claimSport", request().toString()) }
+    assertTrue(JSONObject(owner.command("read")).isNull("binding"))
+    top.put("assistantEnabled", true); owner.command("topSave", top.toString())
+    owner.command("claimSport", request().toString())
+    rejected { owner.command("topSave", top.put("assistantEnabled", false).toString()) }
+  }
+  @Test fun existingOpaqueRunIdsAreNotRewrittenOrUsedAsFilesystemPaths() {
+    val id = "旧RUN:2020 / original"
+    owner.command("claim", request(id=id).toString())
+    assertEquals(id, JSONObject(owner.command("read")).getJSONObject("binding").getString("sessionId"))
+    assertTrue(File(context.noBackupFilesDir, "measurement-ownership-v1/owner.json").isFile)
+  }
 }

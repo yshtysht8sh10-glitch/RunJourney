@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 import { act, create, ReactTestRenderer } from 'react-test-renderer';
 import { Alert } from 'react-native';
-import DataTransfer from '@/app/data-transfer';
+import DataTransfer from '@/screens/running/data-transfer';
 import { RunRepository } from '@/repositories/run-repository';
 import { exportBackup, pickBackup } from '@/services/run-export';
 jest.mock('expo-router', () => ({ router: { back: jest.fn(), push: jest.fn() } }));

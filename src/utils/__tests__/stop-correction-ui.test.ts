@@ -1,6 +1,6 @@
 import { createElement } from 'react';
 import { act, create, ReactTestRenderer } from 'react-test-renderer';
-import RunDetail from '@/app/run-detail';
+import RunDetail from '@/screens/running/run-detail';
 import { RunRepository } from '@/repositories/run-repository';
 import { RunRecord } from '@/types/run';
 import { sourceFromRun } from '@/domain/pages';

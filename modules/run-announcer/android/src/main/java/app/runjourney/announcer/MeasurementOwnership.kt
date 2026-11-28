@@ -41,7 +41,8 @@ class MeasurementOwnership(private val context: Context, private val ioCheck: (S
     val expected = when (purpose) { "running" -> "runjourney.sqlite"; "cycling" -> "runjourney-cycling.sqlite"; "generic" -> "none"; else -> error("OWNERSHIP_PURPOSE") }
     check(b.getString("databaseKey") == expected) { "OWNERSHIP_DESTINATION" }
     check(integer(b.get("profileVersion")) == 1L) { "OWNERSHIP_PROFILE" }
-    check(b.getString("sessionId").matches(Regex("[A-Za-z0-9_-]{1,128}"))) { "OWNERSHIP_ID" }
+    val id = b.getString("sessionId")
+    check(id.length in 1..256 && id.isNotBlank() && !id.contains('\u0000')) { "OWNERSHIP_ID" }
     check(b.get("startedAt") is Number && b.getDouble("startedAt").isFinite() && b.getDouble("startedAt") >= 0) { "OWNERSHIP_CLOCK" }
     check(b.getString("status") in listOf("STARTING", "ACTIVE", "STOPPING", "FINISH_FAILED")) { "OWNERSHIP_STATUS" }
     check(integer(b.get("generation")) > 0) { "OWNERSHIP_GENERATION" }
@@ -144,8 +145,14 @@ class MeasurementOwnership(private val context: Context, private val ioCheck: (S
         if (action == "read") return@synchronized state.toString()
         var binding = if (state.isNull("binding")) null else state.getJSONObject("binding")
         val leases = state.getJSONObject("leases")
-        if (action == "claim") {
+        if (action == "claim" || action == "claimSport") {
           check(binding == null) { "OWNERSHIP_BUSY" }
+          // Same lock as topSave: a permission dialog cannot race an assistant-OFF save.
+          // Plain claim remains the primitive used to adopt a verified existing draft.
+          if(action == "claimSport") {
+            check(request.getString("purpose") in listOf("running", "cycling")) { "OWNERSHIP_PURPOSE" }
+            check(topSettings().getBoolean("assistantEnabled")) { "OWNERSHIP_ASSISTANT_OFF" }
+          }
           check(state.getLong("generation") < 9007199254740991L) { "OWNERSHIP_GENERATION" }
           check(listOf("sessionId", "purpose", "databaseKey").all { request.get(it) is String }
             && request.get("startedAt") is Number && integer(request.get("profileVersion")) == 1L) { "OWNERSHIP_REQUEST" }

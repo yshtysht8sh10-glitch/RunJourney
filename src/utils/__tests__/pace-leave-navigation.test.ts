@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { Alert, BackHandler } from 'react-native';
 import { Tabs, useNavigation } from 'expo-router';
-import TabLayout from '@/app/_layout';
+import TabLayout from '@/app/(running)/_layout';
 import { usePaceLeaveGuard } from '@/hooks/use-pace-leave-guard';
 import { paceEditorDirty } from '@/services/pace-edit-guard';
 
@@ -12,6 +12,7 @@ jest.mock('expo-router', () => ({
   Tabs: Object.assign(() => null, { Screen: () => null }),
 }));
 jest.mock('@/tasks/location-task', () => ({}));
+jest.mock('@/components/activity-environment', () => ({ useActivityEnvironment: () => ({ settings: { assistantEnabled: true }, owner: null }) }));
 jest.mock('@/components/storage-compatibility-gate', () => ({ StorageCompatibilityGate: () => null }));
 let tree: ReactTestRenderer;
 let navigation: { addListener: jest.Mock; canGoBack: jest.Mock; goBack: jest.Mock; dispatch: jest.Mock };

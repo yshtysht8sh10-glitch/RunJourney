@@ -7,7 +7,7 @@ function fixture() {
   // JS lifecycle contract double only. Actual atomic ownership is tested separately in Kotlin.
   const client = createMeasurementOwnership(async (action, payload) => {
     calls.push(action); const value = JSON.parse(payload);
-    if (action === 'claim') {
+    if (action === 'claim' || action === 'claimSport') {
       if (state.binding) throw Error('busy');
       state = { ...state, generation: state.generation + 1, binding: { ...value, generation: state.generation + 1, status: 'STARTING' } };
     } else if (action === 'activate') state.binding = { ...state.binding!, status: 'ACTIVE' };
@@ -51,4 +51,11 @@ test('an ended legacy draft stays STOPPING for save retry instead of restarting 
   const f = fixture(); f.drafts.running = { id: 'ended', startedAt: new Date(1000).toISOString(), endedAt: new Date(2000).toISOString() };
   expect((await f.sessions.reconcile())?.status).toBe('STOPPING');
   await expect(f.sessions.forStart('running')).rejects.toThrow();
+});
+test('a competing OS GPS registration cannot be hidden by an existing owner/draft', async () => {
+  const f = fixture(); await f.sessions.ensure('cycling', 'cycle', 1000);
+  f.drafts.cycling = { id: 'cycle', startedAt: new Date(1000).toISOString(), endedAt: null };
+  f.drafts.trackingPurposes = ['running'];
+  await expect(f.sessions.forStart('cycling')).rejects.toThrow('GPS登録');
+  expect(f.current().binding?.purpose).toBe('cycling');
 });

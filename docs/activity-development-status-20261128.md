@@ -135,3 +135,32 @@ Running owner. A same-ID Running record/settings snapshot remains identical in e
 Nine service/voice JS checks passed, plus prior recorder/Running checks. Native voice-policy,
 recovery and binding tests: 43 passed. Typecheck/Lint passed. Physical GPS, background,
 Bluetooth audibility and energy/latency measurements remain unverified. UI is not connected.
+
+## Eighth increment: Android navigation and Cycling screens (#99/#101)
+
+PM approved the Cycling vertical slice first: TOP entry, existing Running, Cycling
+measurement/background/save/speed voice/history/map/settings. Generic non-history measurement
+and combined history/summary stay explicit unopened placeholders, not removed requirements.
+
+Native root is a Stack. Running's existing screen implementations move to screens/running
+and are hosted by the (running) tab layout with a small Top return header. Existing native
+deep links forward to that hierarchy with their IDs. Existing Web routes remain unchanged;
+new native routes have Web-only unavailable screens. No duplicated measurement engine is used.
+The map renderer is shared, with separate fixed sources/settings. OFF never reads raw GPS.
+
+Startup awaits TOP evidence before mounting StorageCompatibilityGate, then reconciles drafts
+before mounting navigation. Foreground refresh cannot bypass initial reconciliation or unmount
+an active screen on a later read failure. Mode changes and a new sport claim share the Native
+ownership lock; verified legacy draft adoption remains possible with assistant OFF. Competing
+GPS registrations fail closed. Valid existing opaque record IDs are not narrowed to UUIDs.
+
+Verification: 99 suites/706 JS tests passed before the final two fence regressions were added.
+After those additions, focused ownership/controller tests (16), related UI tests (15),
+typecheck/Lint and Native ownership tests (19) passed. Android Hermes export succeeded;
+this is a JS bundle check, not an APK build or device acceptance. Prior Running UI regression:
+45 tests passed. Full integration's next run is reserved for the final reviewed candidate.
+
+Not complete: remaining fixed-SHA independent reviews, final integration/native/long-run
+verification, Test APK/signature validation, Android GPS/background/audio acceptance and
+data preservation comparison on an authorized device update. No main merge, Issue Close,
+device operation or Production distribution has occurred. v38 remains frozen separately.

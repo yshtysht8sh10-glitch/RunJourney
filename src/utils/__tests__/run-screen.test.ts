@@ -1,6 +1,6 @@
 import { createElement } from 'react';
 import { act, create, ReactTestRenderer } from 'react-test-renderer';
-import RunScreen from '@/app/index';
+import RunScreen from '@/screens/running/index';
 import { RunService } from '@/services/run-service';
 import { ActiveRun, RunState } from '@/types/run';
 jest.mock('@/components/start-settings-summary', () => ({ StartSettingsSummary: () => null }));
