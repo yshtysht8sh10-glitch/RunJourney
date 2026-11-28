@@ -65,3 +65,18 @@ Focused Cycling/Running/movement/PACE tests: 48 passed; typecheck/Lint passed. T
 resume test initially assumed a permissive distance edge; it now explicitly asserts the
 existing conservative boundary model (25m in that fixture). No production threshold or
 boundary handling was relaxed. All SQLite test data are disposable in-memory synthetic data.
+
+## Fourth increment: read-only activity metadata port (#99 prerequisite)
+
+AndroidX's explicit read-only driver opens only the two fixed app-private Expo SQLite names.
+Missing DBs are not created. Draft inspection checks the runs/active_run relationship and
+rejects orphan/ambiguous drafts rather than treating them as IDLE. History reads are bounded
+to 128 header rows, exclude trash without purging it, and do not read raw GPS tables.
+Native offset pagination is an initial port; integrated history UI/summary is not connected.
+The Running compatibility/migration gate remains unchanged and cannot be bypassed by this port.
+
+Six synthetic Robolectric checks passed: absent files, same-ID isolated DB headers, bounded
+history/trash exclusion, draft inspection without GPS tables, orphan refusal, corrupt-file
+preservation and invalid capability/page refusal. Typecheck/Lint passed. Existing WAL behavior
+is inherited from the previously reviewed read-only driver; new device/WAL acceptance is not
+claimed by these six focused tests.

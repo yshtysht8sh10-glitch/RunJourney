@@ -36,6 +36,9 @@ class LegacyStorageReaderModule : Module() {
     AsyncFunction("open") { promise: Promise -> dispatch(promise) { it.open() } }
     AsyncFunction("read") { token: String, key: String, offset: Int, promise: Promise -> dispatch(promise) { it.read(token, key, offset) } }
     AsyncFunction("close") { token: String, promise: Promise -> dispatch(promise) { it.close(token); null } }
+    AsyncFunction("activityMetadata") { kind: String, mode: String, limit: Int, offset: Int, promise: Promise ->
+      dispatch(promise) { ActivityMetadataReader(requireNotNull(appContext.reactContext)).read(kind, mode, limit, offset) }
+    }
     OnDestroy {
       worker.execute { try { reader?.closeAll() } finally { worker.shutdown() } }
     }
